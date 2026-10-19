@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #16202c;
+  --color-muted: #5b6676;
+  --color-line: #e3e6eb;
+  --color-panel: #ffffff;
+  --color-canvas: #f5f6f8;
+  --color-brand: #1f4fd6;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html, body { background: var(--color-canvas); color: var(--color-ink); }
+body { -webkit-font-smoothing: antialiased; }
+
+@layer components {
+  .card { @apply rounded-xl border border-line bg-panel p-4; }
+  .btn { @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-sm font-medium text-ink hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-danger { @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50; }
+  .input { @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100; }
+  .label { @apply mb-1 block text-xs font-medium text-muted; }
+  .h1 { @apply text-xl font-semibold tracking-tight; }
+  .h2 { @apply text-base font-semibold; }
+  .muted { @apply text-sm text-muted; }
+  .table { @apply w-full text-left text-sm; }
+  .table th { @apply border-b border-line px-2 py-2 text-xs font-medium text-muted; }
+  .table td { @apply border-b border-line px-2 py-2 align-top; }
+}
+
+/* Izgara öğeleri içerikleri (tablolar, uzun metinler) yüzünden taşmasın */
+.grid > * { min-width: 0; }
+code { overflow-wrap: anywhere; }

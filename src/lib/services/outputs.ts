@@ -195,6 +195,10 @@ export async function decide(
       [brandId, v.output_id, v.id, v.content_hash, decision, scopes, opts.note ?? null],
       c,
     );
+    if (v.kind === "social_package") {
+      await q(`UPDATE calendar_entries SET status = $3, updated_at = now() WHERE brand_id = $1 AND output_id = $2 AND status IN ('draft','awaiting_approval','approved')`,
+        [brandId, v.output_id, decision === "approved" ? "approved" : "draft"], c);
+    }
     if (v.task_id) {
       if (decision === "approved") {
         await q(`UPDATE tasks SET status = 'completed', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'approval_pending'`, [v.task_id], c);

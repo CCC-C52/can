@@ -58,7 +58,7 @@ export async function executeExternalAction(args: {
   outputVersionId: string;
   actionType: ActionType;
   idempotencyKey: string;
-  target?: { postId?: string };
+  target?: { postId?: string; manual?: boolean };
 }): Promise<ExternalAction> {
   const { brandId, outputVersionId, actionType } = args;
   if (!args.idempotencyKey || args.idempotencyKey.length < 8) throw new Error("Geçersiz idempotency anahtarı.");
@@ -137,7 +137,7 @@ async function planAction(
   brandId: string,
   v: OutputVersion & { kind: string },
   actionType: ActionType,
-  target?: { postId?: string },
+  target?: { postId?: string; manual?: boolean },
 ): Promise<{ provider: string; run: () => Promise<{ status?: string; response: unknown; error?: string }> }> {
   if (actionType === "store_update" || actionType === "price_change") {
     if (v.kind !== "shopify_proposal") throw new Error("Bu çıktı mağaza güncellemesi içermiyor.");
@@ -156,7 +156,7 @@ async function planAction(
     const post = (v.content.posts ?? []).find((p: any) => p.id === target?.postId);
     if (!post) throw new Error("Yayınlanacak gönderi bulunamadı.");
     const media = await resolvePostMedia(brandId, v, post);
-    if (post.platform === "instagram") {
+    if (post.platform === "instagram" && !target?.manual) {
       const ready = await capabilityReady("social_publish_instagram", brandId);
       if (!ready.ready) throw new ConnectionMissingError(`Instagram bağlı değil — yayın yapılmadı. Manuel yayın paketi indirebilirsiniz.`);
       if (!media.length) throw new Error("Gönderi için render edilmiş medya yok.");
