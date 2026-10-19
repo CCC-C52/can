@@ -17,6 +17,10 @@ export const config = {
   get appMode(): AppMode {
     return str("APP_MODE") === "production" ? "production" : "local";
   },
+  /** Canlı (production) ortamda DEMO üretici ve örnek veri kapalıdır. */
+  get demoAllowed() {
+    return this.appMode !== "production";
+  },
   get localRequireLogin() {
     return str("LOCAL_REQUIRE_LOGIN") === "true";
   },
@@ -72,7 +76,14 @@ export const config = {
     get appSecret() { return str("META_APP_SECRET"); },
   },
   get publicBaseUrl() {
-    return str("PUBLIC_BASE_URL") ?? "http://127.0.0.1:3000";
+    // Render web servislerine RENDER_EXTERNAL_URL otomatik verilir.
+    return str("PUBLIC_BASE_URL") ?? str("RENDER_EXTERNAL_URL") ?? "http://127.0.0.1:3000";
+  },
+  backup: {
+    get bucket() { return str("BACKUP_S3_BUCKET"); },
+    get hourUtc() { return num("BACKUP_HOUR_UTC", 3); },
+    get retentionDays() { return num("BACKUP_RETENTION_DAYS", 14); },
+    get pgDumpPath() { return str("PG_DUMP_PATH") ?? "pg_dump"; },
   },
   get ffmpegPath() { return str("FFMPEG_PATH") ?? "ffmpeg"; },
   get ffprobePath() { return str("FFPROBE_PATH") ?? "ffprobe"; },
@@ -83,11 +94,14 @@ export const config = {
 };
 
 /** Üretim modunda zorunlu ayarlar eksikse başlatmayı durdurur. */
-export function assertProductionConfig(): string[] {
+export function assertProductionConfig(role: "web" | "worker" = "web"): string[] {
   const problems: string[] = [];
   if (config.appMode !== "production") return problems;
-  if (!config.adminPassword || config.adminPassword.length < 12) problems.push("ADMIN_PASSWORD en az 12 karakter olmalı.");
-  if (!config.sessionSecret || config.sessionSecret.length < 32) problems.push("SESSION_SECRET en az 32 karakter olmalı.");
-  if (!config.encryptionKey) problems.push("ENCRYPTION_KEY tanımlı olmalı.");
+  if (role === "web") {
+    if (!config.adminPassword || config.adminPassword.length < 12) problems.push("ADMIN_PASSWORD en az 12 karakter olmalı.");
+    if (!config.sessionSecret || config.sessionSecret.length < 32) problems.push("SESSION_SECRET en az 32 karakter olmalı.");
+  }
+  if (!config.encryptionKey || config.encryptionKey.length < 32) problems.push("ENCRYPTION_KEY en az 32 karakter olmalı.");
+  if (config.storageDriver !== "s3") problems.push("Canlı ortamda STORAGE_DRIVER=s3 olmalı (kapsayıcı diski kalıcı değildir).");
   return problems;
 }

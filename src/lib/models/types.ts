@@ -27,6 +27,8 @@ export interface TextModelAdapter {
   readonly id: string;
   readonly isDemo: boolean;
   readonly service: string;
+  /** Doluysa model kullanılamaz; nedeni burada yazar. */
+  readonly unavailableReason?: string;
   /** Çağrıdan önce üst sınır maliyet tahmini; null = tahmin edilemiyor. */
   estimateCostUsd(req: { system: string; user: string; maxTokens: number }): number | null;
   generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>>;
@@ -38,6 +40,9 @@ export class TransientError extends Error {
     super(message);
   }
 }
+
+/** Model bağlı değil (canlı ortamda anahtar yok, demo kapalı). Görev "Bağlantı bekliyor" olur. */
+export class ModelUnavailableError extends Error {}
 
 /** Kalıcı hata — tekrar denemek sonucu değiştirmez. */
 export class PermanentError extends Error {}

@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { q, q1, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
@@ -10,7 +10,7 @@ import { getMedia, readMediaFile, recordUsage, type MediaAsset } from "./media";
 import { applyShopifyProposal } from "@/lib/adapters/shopify";
 import { publishInstagram } from "@/lib/adapters/instagram";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
-import { getStorage } from "@/lib/storage";
+import { getStorage, s3Client } from "@/lib/storage";
 import { canonicalJson, sha256 } from "@/lib/security/crypto";
 
 // DIŞ İŞLEM KAPISI — dış platforma yazan TÜM işlemler buradan geçer.
@@ -209,9 +209,7 @@ export async function resolvePostMedia(brandId: string, v: OutputVersion, post: 
 }
 
 async function presign(asset: MediaAsset) {
-  const s = config.s3;
-  const client = new S3Client({ region: s.region, endpoint: s.endpoint, forcePathStyle: s.forcePathStyle, credentials: { accessKeyId: s.accessKeyId!, secretAccessKey: s.secretAccessKey! } });
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: s.bucket!, Key: asset.storage_key }), { expiresIn: 3600 });
+  return getSignedUrl(s3Client(), new GetObjectCommand({ Bucket: config.s3.bucket!, Key: asset.storage_key }), { expiresIn: 3600 });
 }
 
 /** Manuel yayın paketi: medya dosyaları + açıklama + kapak metni + bilgi dosyası (zip). */

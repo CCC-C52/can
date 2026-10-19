@@ -3,13 +3,19 @@ import { config } from "@/lib/config";
 
 // Basit yönetici oturumu: imzalı, süreli çerez. İnternete açık sürümde (APP_MODE=production) zorunludur.
 
-export const SESSION_COOKIE = "aiops_session";
 const MAX_AGE_S = 60 * 60 * 12;
 
+/** Canlıda "__Host-" önekli çerez: yalnızca HTTPS, alt alan adlarına sızamaz. */
+export function sessionCookieName() {
+  return config.appMode === "production" ? "__Host-aiops_session" : "aiops_session";
+}
+
+/** İmza anahtarı parolaya da bağlıdır: ADMIN_PASSWORD değişince tüm eski oturumlar geçersiz olur. */
 function secret() {
-  if (config.sessionSecret) return config.sessionSecret;
+  const pw = crypto.createHash("sha256").update(config.adminPassword ?? "").digest("hex");
+  if (config.sessionSecret) return `${config.sessionSecret}:${pw}`;
   if (config.appMode === "production") throw new Error("SESSION_SECRET tanımlı değil");
-  return crypto.createHash("sha256").update(`local-session:${config.databaseUrl}`).digest("hex");
+  return crypto.createHash("sha256").update(`local-session:${config.databaseUrl}:${pw}`).digest("hex");
 }
 
 export function loginRequired() {
@@ -33,6 +39,34 @@ export function verifySession(value: string | undefined | null): boolean {
   const expected = crypto.createHmac("sha256", secret()).update(`${exp}.${nonce}`).digest("base64url");
   const a = Buffer.from(sig), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// ---------------------------------------------------------------- Kaba kuvvet koruması
+// IP başına 15 dakikada 5, tüm IP'ler için 15 dakikada 50 hatalı denemeden sonra giriş geçici olarak kilitlenir.
+const WINDOW_MS = 15 * 60_000;
+const PER_IP = 5;
+const GLOBAL = 50;
+const g = globalThis as unknown as { __loginFails?: Map<string, number[]> };
+const fails = (g.__loginFails ??= new Map<string, number[]>());
+
+function recent(key: string) {
+  const now = Date.now();
+  const list = (fails.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
+  fails.set(key, list);
+  return list;
+}
+
+export function loginLocked(ip: string): boolean {
+  return recent(`ip:${ip}`).length >= PER_IP || recent("global").length >= GLOBAL;
+}
+
+export function recordLoginFailure(ip: string) {
+  recent(`ip:${ip}`).push(Date.now());
+  recent("global").push(Date.now());
+}
+
+export function clearLoginFailures(ip: string) {
+  fails.delete(`ip:${ip}`);
 }
 
 /** Parola kontrolü (sabit zamanlı). Yanlış denemelerde basit gecikme uygulanır. */

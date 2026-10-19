@@ -5,6 +5,7 @@ import { Badge, Flash, PageHeader } from "@/components/ui";
 import { SubmitButton } from "@/components/client";
 import { BrandFields } from "@/components/brand-form";
 import { langLabel } from "@/lib/labels";
+import { config } from "@/lib/config";
 
 export default async function Brands({ searchParams }: { searchParams: SP }) {
   const { ok, err } = await flash(searchParams);
@@ -25,10 +26,12 @@ export default async function Brands({ searchParams }: { searchParams: SP }) {
             ))}
             {brands.length === 0 && <li className="muted py-2">Marka yok.</li>}
           </ul>
-          <form action={seedSampleAction} className="mt-4">
-            <SubmitButton className="btn w-full">Örnek DEMO markayı yükle</SubmitButton>
-            <p className="mt-1 text-xs text-muted">Kurgusal verilerle, açıkça “ÖRNEK” işaretli test markası. Gerçek marka bilgisi içermez.</p>
-          </form>
+          {config.demoAllowed && (
+            <form action={seedSampleAction} className="mt-4">
+              <SubmitButton className="btn w-full">Örnek DEMO markayı yükle</SubmitButton>
+              <p className="mt-1 text-xs text-muted">Kurgusal verilerle, açıkça “ÖRNEK” işaretli test markası. Gerçek marka bilgisi içermez.</p>
+            </form>
+          )}
         </section>
         <section className="card lg:col-span-2">
           <h2 className="h2 mb-3">Yeni marka</h2>

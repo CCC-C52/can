@@ -8,8 +8,9 @@ import { closePool } from "@/lib/db/pool";
 import { assertProductionConfig, config } from "@/lib/config";
 import { textModelMode } from "@/lib/models";
 import { redact } from "@/lib/security/crypto";
+import { backupConfigured, maybeRunScheduledBackup } from "@/lib/services/backup";
 
-const problems = assertProductionConfig();
+const problems = assertProductionConfig("worker");
 if (problems.length) {
   console.error("[worker] Üretim yapılandırması eksik:\n - " + problems.join("\n - "));
   process.exit(1);
@@ -23,10 +24,23 @@ async function main() {
   const applied = await runMigrations();
   if (applied.length) console.log(`[worker] Geçişler uygulandı: ${applied.join(", ")}`);
   console.log(`[worker] Başladı: ${workerId} · ${textModelMode().label} · yoklama ${config.workerPollMs} ms`);
+  const b = backupConfigured();
+  console.log(b.ok ? `[worker] Günlük yedekleme etkin (UTC ${config.backup.hourUtc}:00 sonrası)` : `[worker] UYARI: yedekleme kapalı — ${b.reason}`);
+  let backupRunning = false;
+  let lastBackupCheck = 0;
   while (!stopping) {
     try {
       const n = await engine.tick();
       if (n) console.log(`[worker] ${n} görev alındı (aktif: ${engine.activeCount})`);
+      // Yedekleme görev döngüsünü bloklamadan, en fazla 30 sn'de bir kontrol edilir
+      if (!backupRunning && Date.now() - lastBackupCheck > 30_000) {
+        lastBackupCheck = Date.now();
+        backupRunning = true;
+        maybeRunScheduledBackup()
+          .then((s) => s && console.log(`[worker] Yedekleme ${s.ok ? "tamamlandı" : `başarısız: ${s.error}`}`))
+          .catch((e) => console.error("[worker] yedekleme hatası:", redact((e as Error).message)))
+          .finally(() => { backupRunning = false; });
+      }
     } catch (err) {
       console.error("[worker] döngü hatası:", redact((err as Error).message));
     }

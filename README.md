@@ -61,6 +61,8 @@ tests/                 Kabul ve güvenlik testleri (vitest, gerçek PostgreSQL)
 
 ## Kurulum ve başlatma
 
+> **Canlı (internete açık) kurulum** için: [`docs/DEPLOY.md`](docs/DEPLOY.md) — Render (web + işleyici + Postgres) ve Cloudflare R2 (dosyalar + yedekler), giriş korumalı, HTTPS, günlük yedekleme. Aşağıdaki adımlar yerel geliştirme içindir.
+
 Gereksinimler: Node.js 22+, PostgreSQL 14+ (16 ile test edildi), ffmpeg/ffprobe (video kurgu için; yoksa yalnızca video render devre dışı kalır).
 
 ```bash
@@ -222,7 +224,7 @@ Entegrasyon kodu yazılırken resmi belge siteleri (shopify.dev, developers.face
 - **Marka ayrımı:** tüm servis fonksiyonları `brandId` ister; dosya sunumu, dışa aktarma ve onaylar marka kontrolü yapar. Testlerle doğrulandı.
 - **Ajan araç izinleri:** `assertTool()` ile sunucu kodunda kontrol edilir.
 - **Dosyalar:** SVG/PSD indirme olarak ve `sandbox` CSP ile sunulur; tür baytlardan tespit edilir.
-- **Kimlik doğrulama:** `APP_MODE=production` iken tüm panel ve API (webhook'lar hariç; onlar imzayla doğrulanır) imzalı, `httpOnly`, `secure` oturum çerezi ister. Yerel mod yalnızca `127.0.0.1`'e bağlanır. **Uygulama hiçbir yere yayınlanmadı.**
+- **Kimlik doğrulama:** `APP_MODE=production` iken tüm panel ve API (webhook'lar hariç; onlar imzayla doğrulanır) imzalı, `httpOnly`, `secure` oturum çerezi ister. Yerel mod yalnızca `127.0.0.1`'e bağlanır. Canlı modda ayrıca `__Host-` önekli çerez, parola değişince oturumların geçersizleşmesi, kaba kuvvet kilidi, HSTS ve DEMO'nun kapalı olması uygulanır (ayrıntılar `docs/DEPLOY.md`).
 - **Gizli bilgiler:** `.env` git'e eklenmez; `.env.example` boş alanlar içerir.
 
 ---
@@ -236,7 +238,9 @@ tests/launch-flow.test.ts       4 test   Örnek ürün lansmanı uçtan uca
 tests/safety.test.ts           15 test   Onay, tekrar, bütçe, sınırlar, bağlantı, marka ayrımı, medya, işleyici yeniden başlatma
 tests/integrations.test.ts      6 test   Shopify (sahte HTTP), belirsiz sonuç, fiyat onayı, webhook imzaları, QA kuralları
 tests/anthropic-adapter.test.ts 3 test   Anthropic istek biçimi, akış, maliyet, hata sınıflandırma (sahte SSE)
-Toplam: 28/28 geçti
+tests/production.test.ts        5 test   Canlı mod: eksik ayar, DEMO kapalı, şifreleme anahtarı, oturum/kilit, yedekleme*
+Toplam: 33/33 geçti
+* Yedekleme testi yalnızca TEST_S3_ENDPOINT (ör. moto/MinIO) tanımlıyken çalışır; aksi halde atlanır.
 ```
 
 Kabul ölçütleri → test:

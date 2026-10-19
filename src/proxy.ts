@@ -1,13 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { loginRequired, SESSION_COOKIE, verifySession } from "@/lib/auth";
+import { loginRequired, sessionCookieName, verifySession } from "@/lib/auth";
+import { config as appConfig } from "@/lib/config";
 
 // Kimlik doğrulama ve temel güvenlik başlıkları. Webhook uçları imza ile doğrulanır, oturum gerektirmez.
-const PUBLIC = ["/login", "/api/webhooks/", "/_next/", "/favicon"];
+// Herkese açık olanlar: giriş sayfası, imza doğrulamalı webhook'lar, bilgi sızdırmayan sağlık kontrolü, statik derleme dosyaları.
+const PUBLIC = ["/login", "/api/webhooks/", "/api/health", "/_next/static/", "/favicon"];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isPublic = PUBLIC.some((p) => pathname.startsWith(p));
-  if (!isPublic && loginRequired() && !verifySession(req.cookies.get(SESSION_COOKIE)?.value)) {
+  if (!isPublic && loginRequired() && !verifySession(req.cookies.get(sessionCookieName())?.value)) {
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "Oturum gerekli" }, { status: 401 });
     const url = req.nextUrl.clone();
     url.pathname = "/login";
@@ -23,7 +25,11 @@ export function proxy(req: NextRequest) {
   res.headers.set("X-Frame-Options", "DENY");
   res.headers.set("X-Content-Type-Options", "nosniff");
   res.headers.set("Referrer-Policy", "same-origin");
+  res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (appConfig.appMode === "production") res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  // Panel sayfaları arama motorlarına ve ara önbelleklere kapalı
+  res.headers.set("X-Robots-Tag", "noindex, nofollow");
   return res;
 }
 
-export const config = { matcher: ["/((?!_next/static|_next/image).*)"] };
+export const config = { matcher: ["/((?!_next/static).*)"] };

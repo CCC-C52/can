@@ -2,7 +2,7 @@ import { q, q1, tx, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { getLimits, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
-import { PermanentError, TransientError, type TextModelAdapter } from "@/lib/models/types";
+import { ModelUnavailableError, PermanentError, TransientError, type TextModelAdapter } from "@/lib/models/types";
 import { buildBrandContext, type BrandContext } from "@/lib/agents/context";
 import { AGENTS, agentName, assertTool, isSpecialist } from "@/lib/agents/registry";
 import { OUTPUT_KIND, OUTPUT_SCHEMAS, PlanSchema, QaReviewSchema, type AgentId, type Plan, type ProjectReport, type QaReview, type SpecialistId } from "@/lib/agents/schemas";
@@ -123,6 +123,9 @@ export class Engine {
         );
       } else if (err instanceof CancelledError) {
         outcome = "cancelled";
+      } else if (err instanceof ModelUnavailableError) {
+        outcome = "waiting_connection";
+        await finish(task, this.workerId, { status: "waiting_connection", error: err.message }).catch(() => {});
       } else if (err instanceof TransientError && task.attempts < task.max_attempts) {
         outcome = "retry";
         const backoff = Math.min(60_000, 2 ** task.attempts * 2000);
@@ -237,6 +240,7 @@ export async function updateProjectStatus(projectId: string) {
 async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, user: string, demoInput: unknown, maxTokens = 16000) {
   const { task, model, limits } = ctx;
   if (ctx.signal.aborted) throw ctx.signal.reason;
+  if (model.unavailableReason) throw new ModelUnavailableError(model.unavailableReason);
   const inc = await q1(`UPDATE projects SET model_calls = model_calls + 1 WHERE id = $1 AND model_calls < $2 RETURNING model_calls`, [task.project_id, limits.maxModelCallsPerProject]);
   if (!inc) throw new ModelCallLimitError(`Proje başına ${limits.maxModelCallsPerProject} model çağrısı sınırına ulaşıldı.`);
   const system = systemPrompt(agent, purpose);

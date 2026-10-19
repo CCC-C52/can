@@ -4,7 +4,9 @@ import { q } from "@/lib/db/pool";
 import { config } from "@/lib/config";
 import { textModelMode } from "@/lib/models";
 import { loginRequired } from "@/lib/auth";
-import { pauseAction, saveLimitsAction } from "@/app/actions";
+import { pauseAction, requestBackupAction, saveLimitsAction } from "@/app/actions";
+import { backupConfigured, type BackupStatus } from "@/lib/services/backup";
+import { getSetting } from "@/lib/settings";
 import { Flash, PageHeader, dt } from "@/components/ui";
 import { SubmitButton } from "@/components/client";
 
@@ -17,6 +19,8 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
     scope === "all" || !brand ? `SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200` : `SELECT * FROM audit_log WHERE brand_id = $1 OR brand_id IS NULL ORDER BY created_at DESC LIMIT 200`,
     scope === "all" || !brand ? [] : [brand.id],
   );
+  const backupCfg = backupConfigured();
+  const [backupLast, backupOk] = await Promise.all([getSetting<BackupStatus | null>("backup_status", null), getSetting<BackupStatus | null>("backup_last_ok", null)]);
   const workers = await q<{ worker_id: string; last_seen: string; info: any }>(`SELECT * FROM worker_heartbeats ORDER BY last_seen DESC`);
   const num = (name: string, label: string, value: number, hint?: string) => (
     <label className="block"><span className="label">{label}</span><input name={name} type="number" defaultValue={value} className="input" />{hint && <span className="text-xs text-muted">{hint}</span>}</label>
@@ -46,9 +50,20 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
           <ul className="space-y-1 text-xs">
             <li>Model modu: <strong>{textModelMode().label}</strong></li>
             <li>Uygulama modu: <strong>{config.appMode}</strong> · giriş {loginRequired() ? "zorunlu" : "kapalı (yerel demo)"}</li>
-            <li>Depolama: {config.storageDriver}</li>
+            <li>Depolama: {config.storageDriver}{config.storageDriver === "s3" ? ` (${config.s3.bucket})` : ""}</li>
+            <li>DEMO üretici: {config.demoAllowed ? "açık (yerel)" : "kapalı (canlı)"}</li>
           </ul>
           <form action={pauseAction}><input type="hidden" name="paused" value={paused ? "false" : "true"} /><input type="hidden" name="back" value="/ayarlar" /><SubmitButton className={paused ? "btn" : "btn-danger"} confirm={paused ? undefined : "Tüm işlemler durdurulsun mu?"}>{paused ? "İşlemleri devam ettir" : "Tüm işlemleri durdur"}</SubmitButton></form>
+          <div><div className="label">Yedekleme</div>
+            {backupCfg.ok ? (
+              <ul className="text-xs">
+                <li>Günlük, UTC {config.backup.hourUtc}:00 sonrası · {config.backup.retentionDays} gün saklama · kova: {config.backup.bucket}</li>
+                <li>Son başarılı: {backupOk ? `${dt(backupOk.at)} (${((backupOk.dbBytes ?? 0) / 1024).toFixed(0)} KB, ${backupOk.mediaCopied ?? 0} dosya)` : "henüz yok"}</li>
+                {backupLast && !backupLast.ok && <li className="text-red-700">Son deneme başarısız ({dt(backupLast.at)}): {backupLast.error}</li>}
+              </ul>
+            ) : <p className="text-xs text-amber-800">Kapalı — {backupCfg.reason}</p>}
+            <form action={requestBackupAction} className="mt-1"><SubmitButton className="btn px-2 py-1 text-xs" disabled={!backupCfg.ok}>Şimdi yedekle</SubmitButton></form>
+          </div>
           <div><div className="label">İşleyiciler</div>
             <ul className="text-xs">{workers.map((w) => <li key={w.worker_id}>{w.worker_id} · son sinyal {dt(w.last_seen)} · aktif {w.info?.active ?? 0}</li>)}{workers.length === 0 && <li className="text-amber-700">Çalışan işleyici yok.</li>}</ul></div>
         </section>

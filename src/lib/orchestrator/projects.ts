@@ -203,7 +203,7 @@ export async function setPaused(paused: boolean) {
 
 export async function retryWaitingConnections(brandId: string) {
   const rows = await q<Task>(
-    `UPDATE tasks SET status = 'planned', error = NULL, updated_at = now() WHERE brand_id = $1 AND status = 'waiting_connection' RETURNING *`,
+    `UPDATE tasks SET status = 'planned', error = NULL, attempts = 0, updated_at = now() WHERE brand_id = $1 AND status = 'waiting_connection' RETURNING *`,
     [brandId],
   );
   if (rows.length) await audit({ brandId, actor: "user", action: "task.retry_waiting", message: `${rows.length} bağlantı bekleyen görev tekrar planlandı` });

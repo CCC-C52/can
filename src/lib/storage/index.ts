@@ -49,6 +49,18 @@ export class LocalStorage implements StorageAdapter {
   }
 }
 
+/** S3 uyumlu istemci (AWS S3, Cloudflare R2, MinIO). */
+export function s3Client(): S3Client {
+  const s = config.s3;
+  if (!s.accessKeyId || !s.secretAccessKey) throw new Error("S3 erişim anahtarları eksik (S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY).");
+  return new S3Client({
+    region: s.region,
+    endpoint: s.endpoint,
+    forcePathStyle: s.forcePathStyle,
+    credentials: { accessKeyId: s.accessKeyId, secretAccessKey: s.secretAccessKey },
+  });
+}
+
 export class S3Storage implements StorageAdapter {
   readonly driver = "s3" as const;
   private client: S3Client;
@@ -57,15 +69,11 @@ export class S3Storage implements StorageAdapter {
     const s = config.s3;
     if (!s.bucket || !s.accessKeyId || !s.secretAccessKey) throw new Error("S3 ayarları eksik (S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY).");
     this.bucket = s.bucket;
-    this.client = new S3Client({
-      region: s.region,
-      endpoint: s.endpoint,
-      forcePathStyle: s.forcePathStyle,
-      credentials: { accessKeyId: s.accessKeyId, secretAccessKey: s.secretAccessKey },
-    });
+    this.client = s3Client();
   }
   async put(key: string, data: Buffer, contentType: string) {
-    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: safeKey(key), Body: data, ContentType: contentType, IfNoneMatch: "*" }));
+    // Anahtarlar içerik özetinden (SHA-256) türetilir; aynı anahtara yazılan veri aynıdır, orijinal değişmez.
+    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: safeKey(key), Body: data, ContentType: contentType }));
   }
   async get(key: string) {
     const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));

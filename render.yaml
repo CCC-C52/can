@@ -1,0 +1,94 @@
+# Render Blueprint — AI Operations Studio
+# Kurulum: Render Dashboard → New → Blueprint → bu depoyu ve çalışma dalını seçin.
+# Gizli değerler (sync: false) Blueprint ilk oluşturulurken Render ekranında sorulur; bu dosyada değer YOKTUR.
+# Ayrıntılı adımlar: docs/DEPLOY.md
+
+envVarGroups:
+  - name: aiops-shared
+    envVars:
+      - key: APP_MODE
+        value: production
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_REGION
+        value: auto
+      # Bağlantı belirteçlerini veritabanında şifrelemek için; Render rastgele üretir, web ve işleyici aynı değeri kullanır.
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: ANTHROPIC_MODEL
+        value: claude-opus-5-5
+      - key: ANTHROPIC_EFFORT
+        value: medium
+      - key: BACKUP_HOUR_UTC
+        value: "2"
+      - key: BACKUP_RETENTION_DAYS
+        value: "14"
+
+databases:
+  - name: aiops-db
+    plan: basic-256mb
+    region: frankfurt
+    postgresMajorVersion: "17"
+    databaseName: aiops
+    user: aiops
+    diskSizeGB: 5
+    # Dış dünyadan doğrudan veritabanı bağlantısı kapalı; yalnızca Render iç ağındaki servisler erişir.
+    ipAllowList: []
+
+services:
+  - type: web
+    name: aiops-web
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    branch: claude/amazing-goodall-qkxupd
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    preDeployCommand: npm run db:migrate
+    envVars:
+      - fromGroup: aiops-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aiops-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: AIOPS_ANTHROPIC_API_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+  - type: worker
+    name: aiops-worker
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    branch: claude/amazing-goodall-qkxupd
+    dockerfilePath: ./Dockerfile
+    dockerCommand: npm run worker
+    envVars:
+      - fromGroup: aiops-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aiops-db
+          property: connectionString
+      - key: AIOPS_ANTHROPIC_API_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false

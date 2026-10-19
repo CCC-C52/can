@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { act, str } from "./util";
 import { BRAND_COOKIE, requireBrand } from "@/lib/current";
-import { SESSION_COOKIE, checkPassword, signSession } from "@/lib/auth";
+import { checkPassword, clearLoginFailures, loginLocked, recordLoginFailure, sessionCookieName, signSession } from "@/lib/auth";
+import { headers } from "next/headers";
 import { config } from "@/lib/config";
 import {
   addBrandFact, addProductFact, addVariant, createBrand, createProduct, deleteBrandFact, deleteProductFact, deleteVariant, getBrand, updateBrand, updateProduct,
@@ -28,16 +29,30 @@ import { audit } from "@/lib/audit";
 
 export async function loginAction(fd: FormData) {
   const next = str(fd, "next") || "/";
+  const h = await headers();
+  // Barındırıcının vekil sunucusu gerçek istemci IP'sini X-Forwarded-For listesinin SONUNA ekler;
+  // istemcinin kendi gönderdiği (sahte olabilecek) değerler solda kalır.
+  const ip = (h.get("x-forwarded-for") ?? "").split(",").map((x) => x.trim()).filter(Boolean).pop() || h.get("x-real-ip") || "local";
+  const back = (msg: string) => redirect(`/login?err=${encodeURIComponent(msg)}&next=${encodeURIComponent(next)}`);
+  if (loginLocked(ip)) {
+    await audit({ actor: "system", action: "auth.locked", message: "Çok fazla hatalı giriş denemesi; giriş geçici olarak kilitli" });
+    back("Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.");
+  }
   const ok = await checkPassword(str(fd, "password"));
-  if (!ok) redirect(`/login?err=${encodeURIComponent("Parola hatalı.")}&next=${encodeURIComponent(next)}`);
+  if (!ok) {
+    recordLoginFailure(ip);
+    await audit({ actor: "system", action: "auth.failed", message: "Hatalı giriş denemesi" });
+    back("Parola hatalı.");
+  }
+  clearLoginFailures(ip);
   const s = signSession();
-  (await cookies()).set(SESSION_COOKIE, s.value, { httpOnly: true, sameSite: "lax", secure: config.appMode === "production", maxAge: s.maxAge, path: "/" });
+  (await cookies()).set(sessionCookieName(), s.value, { httpOnly: true, sameSite: "lax", secure: config.appMode === "production", maxAge: s.maxAge, path: "/" });
   await audit({ actor: "user", action: "auth.login", message: "Panele giriş yapıldı" });
   redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
 }
 
 export async function logoutAction() {
-  (await cookies()).delete(SESSION_COOKIE);
+  (await cookies()).delete(sessionCookieName());
   redirect("/login");
 }
 
@@ -356,6 +371,17 @@ export async function shopifySyncAction() {
 }
 
 // ---------------------------------------------------------------- Ayarlar
+
+export async function requestBackupAction() {
+  await act("/ayarlar", async () => {
+    const { backupConfigured } = await import("@/lib/services/backup");
+    const b = backupConfigured();
+    if (!b.ok) throw new Error(`Yedekleme yapılandırılmadı: ${b.reason}`);
+    await setSetting("backup_requested", true);
+    await audit({ actor: "user", action: "backup.requested", message: "Elle yedekleme istendi" });
+    return "Yedekleme istendi; işleyici en geç 30 saniye içinde başlatır.";
+  });
+}
 
 export async function saveLimitsAction(fd: FormData) {
   await act("/ayarlar", async () => {

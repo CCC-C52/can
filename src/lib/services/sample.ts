@@ -40,6 +40,7 @@ async function placeholderVideo(pattern: string, seconds: number): Promise<Buffe
 }
 
 export async function seedSampleBrand() {
+  if (!config.demoAllowed) throw new Error("Canlı ortamda örnek (DEMO) marka yüklenemez.");
   const existing = await q1<{ id: string }>(`SELECT id FROM brands WHERE slug = $1`, [SAMPLE_SLUG]);
   if (existing) return { brandId: existing.id, created: false };
   const brand = await createBrand({

@@ -21,9 +21,12 @@ export function contentHash(content: unknown): string {
 function encryptionKey(): Buffer {
   const raw = config.encryptionKey;
   if (raw) {
+    // 32 baytlık base64 değer doğrudan kullanılır; başka biçimdeki uzun rastgele değerler (ör. barındırıcının
+    // ürettiği gizli değer) SHA-256 ile 32 bayta indirgenir.
     const key = Buffer.from(raw, "base64");
-    if (key.length !== 32) throw new Error("ENCRYPTION_KEY 32 baytlık base64 değer olmalı.");
-    return key;
+    if (key.length === 32 && /^[A-Za-z0-9+/]+=*$/.test(raw)) return key;
+    if (raw.length < 32) throw new Error("ENCRYPTION_KEY en az 32 karakter olmalı.");
+    return crypto.createHash("sha256").update(raw).digest();
   }
   if (config.appMode === "production") throw new Error("ENCRYPTION_KEY tanımlı değil.");
   // Yerel geliştirme: makineye özel olmayan sabit anahtar yerine veritabanı adresinden türetilir.

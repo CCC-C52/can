@@ -3,6 +3,7 @@ import { getCurrentBrand } from "@/lib/current";
 import { textModelMode } from "@/lib/models";
 import { isPaused } from "@/lib/settings";
 import { loginRequired } from "@/lib/auth";
+import { config } from "@/lib/config";
 import { selectBrandAction, logoutAction, pauseAction } from "@/app/actions";
 import { MobileNavToggle } from "@/components/client";
 import { NavLinks } from "@/components/nav";
@@ -19,6 +20,8 @@ export default async function PanelLayout({ children }: { children: React.ReactN
           <Link href="/" className="mr-2 whitespace-nowrap font-semibold tracking-tight">AI Ops Studio</Link>
           {mode.mode === "demo" ? (
             <span className="hidden rounded-full bg-fuchsia-50 px-2 py-0.5 text-xs font-medium text-fuchsia-700 ring-1 ring-fuchsia-200 sm:inline" title={mode.label}>DEMO modu</span>
+          ) : mode.mode === "off" ? (
+            <span className="hidden rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200 sm:inline">AI bağlı değil</span>
           ) : (
             <span className="hidden rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200 sm:inline">Gerçek AI</span>
           )}
@@ -50,6 +53,13 @@ export default async function PanelLayout({ children }: { children: React.ReactN
           </form>
         </div>
       )}
+      {mode.mode === "off" && (
+        <div className="border-b border-amber-200 bg-amber-50">
+          <div className="mx-auto max-w-7xl px-4 py-1.5 text-xs text-amber-900">
+            AI modeli bağlı değil. Canlı ortamda DEMO kapalıdır; görevler “Bağlantı bekliyor” durumunda kalır. Barındırma panelinde <strong>AIOPS_ANTHROPIC_API_KEY</strong> ekleyip servisleri yeniden başlatın, ardından Entegrasyonlar → “Bağlantı bekleyenleri tekrar dene”.
+          </div>
+        </div>
+      )}
       {mode.mode === "demo" && (
         <div className="border-b border-fuchsia-100 bg-fuchsia-50/60">
           <div className="mx-auto max-w-7xl px-4 py-1.5 text-xs text-fuchsia-800">
@@ -65,7 +75,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
           {!brand ? (
             <div className="card">
               <h1 className="h1">Hoş geldiniz</h1>
-              <p className="muted mt-2">Henüz marka yok. Başlamak için bir marka oluşturun veya açıkça işaretlenmiş örnek demo markayı yükleyin.</p>
+              <p className="muted mt-2">Henüz marka yok. Başlamak için bir marka oluşturun{config.demoAllowed ? " veya açıkça işaretlenmiş örnek demo markayı yükleyin" : ""}.</p>
               <div className="mt-4"><Link className="btn-primary" href="/markalar">Marka yönetimine git</Link></div>
               <div className="mt-6">{children}</div>
             </div>

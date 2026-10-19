@@ -29,7 +29,7 @@ export default async function ChatPage({ searchParams }: { searchParams: SP }) {
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
       <div className="min-w-0 flex-1">
-        <PageHeader title="Ana yönetici" subtitle={<>Talimatınızı yazın; yönetici görevlere ayırıp uzmanlara dağıtır. Marka: <strong>{brand.name}</strong> · {mode.mode === "demo" ? <DemoBadge /> : <Badge tone="ok">Gerçek AI</Badge>}</>} actions={<AutoRefresh active={running} />} />
+        <PageHeader title="Ana yönetici" subtitle={<>Talimatınızı yazın; yönetici görevlere ayırıp uzmanlara dağıtır. Marka: <strong>{brand.name}</strong> · {mode.mode === "demo" ? <DemoBadge /> : mode.mode === "off" ? <Badge tone="warn">AI bağlı değil</Badge> : <Badge tone="ok">Gerçek AI</Badge>}</>} actions={<AutoRefresh active={running} />} />
         <Flash ok={ok} err={err} />
         <div className="card mb-4 max-h-[60vh] space-y-3 overflow-y-auto">
           {messages.length === 0 && <p className="muted">Henüz konuşma yok. Aşağıdan ilk talimatınızı verin.</p>}
