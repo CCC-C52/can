@@ -387,9 +387,10 @@ async function runReview(ctx: RunCtx, workerId: string) {
   await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:quality", action: "qa.result", message: `Kalite kontrolü (${task.title}, sürüm ${v.version}): ${merged.verdict} — puan ${merged.score}` });
 
   if (merged.verdict === "pass") {
-    await finish(task, workerId, { status: task.requires_approval ? "approval_pending" : "completed" });
+    // Takip görevleri, görev "tamamlandı" olmadan ÖNCE oluşturulur; böylece rapor görevi render'ı beklemeden başlayamaz.
     await spawnFollowUps(task, v, brandCtx);
     if (task.agent === "social") await createCalendarEntries(task, v);
+    await finish(task, workerId, { status: task.requires_approval ? "approval_pending" : "completed" });
     return;
   }
   if (task.regen_count < limits.maxRegenerations) {

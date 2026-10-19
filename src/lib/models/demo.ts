@@ -364,6 +364,14 @@ export class DemoAdapter implements TextModelAdapter {
   async generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>> {
     const gen = GENERATORS[`${req.agent as AgentId}:${req.purpose}`];
     if (!gen) throw new Error(`Demo üretici yok: ${req.agent}:${req.purpose}`);
+    // İsteğe bağlı yapay gecikme (canlı ilerlemeyi göstermek / yeniden başlatma testleri için)
+    const delay = Number(process.env.DEMO_DELAY_MS ?? 0);
+    if (delay > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, delay);
+        req.signal?.addEventListener("abort", () => { clearTimeout(t); reject(req.signal!.reason); }, { once: true });
+      });
+    }
     const data = req.schema.parse(gen(req.demoInput as DemoInput));
     return { data, generator: "demo", isDemo: true, model: "demo-rules", usage: null, actualCostUsd: 0 };
   }
