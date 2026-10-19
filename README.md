@@ -95,14 +95,14 @@ Tamamı açıklamalı olarak `.env.example` içindedir. Özet:
 | `LOCAL_REQUIRE_LOGIN` | — | Yerel modda da giriş istensin mi |
 | `DATABASE_URL`, `TEST_DATABASE_URL` | evet | Test veritabanı adı `test` içermeli (testler onu sıfırlar) |
 | `STORAGE_DRIVER`, `LOCAL_STORAGE_DIR`, `S3_*` | — | Depolama |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | gerçek AI için | Boşsa DEMO modu. Varsayılan model `claude-opus-5-5` |
+| `AIOPS_ANTHROPIC_API_KEY` (veya `ANTHROPIC_API_KEY`), `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | gerçek AI için | Boşsa DEMO modu. Uygulamaya özel ad önceliklidir (Claude Code'un kendi anahtar kullanımıyla çakışmaz). Varsayılan model `claude-opus-5-5` |
 | `OPENAI_API_KEY`, `OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_COST_USD` | AI görsel için | Birim fiyat girilmezse maliyet "bilinmiyor" sayılır ve bütçe sınırı varken üretim engellenir |
 | `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `SHOPIFY_API_VERSION` | Shopify için | Dev Dashboard uygulaması |
 | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_GRAPH_VERSION` | Instagram için | Meta uygulaması |
 | `PUBLIC_BASE_URL` | OAuth için | Geri dönüş adresi kökü |
 | `FFMPEG_PATH`, `FFPROBE_PATH`, `WORKER_POLL_MS`, `MAX_UPLOAD_MB` | — | |
 
-**Önemli:** Claude Code aboneliği bu uygulamanın model kullanımını karşılamaz. Gerçek AI modu için https://console.anthropic.com üzerinden ayrı bir API anahtarı oluşturup `ANTHROPIC_API_KEY` olarak sunucu ortamına eklemeniz gerekir.
+**Önemli:** Claude Code aboneliği bu uygulamanın model kullanımını karşılamaz. Gerçek AI modu için https://console.anthropic.com üzerinden ayrı bir API anahtarı oluşturup `AIOPS_ANTHROPIC_API_KEY` olarak sunucu ortamına eklemeniz gerekir. Claude Code bulut ortamında çalıştırıyorsanız anahtarı ortam ayarlarına (bulut ortam menüsü → Edit → ortam değişkeni) ekleyin; yeni oturumda geçerli olur.
 
 API anahtarları kaynak koda, tarayıcıya veya günlüklere yazılmaz. OAuth/erişim belirteçleri veritabanında AES-256-GCM ile şifreli saklanır; günlük mesajları gizli değer kalıplarına karşı maskelenir.
 
@@ -169,7 +169,7 @@ Dışarıdan okunan içerik (ürün açıklamaları, medya etiketleri, önceki �
 
 Tüm bağlantılar **Entegrasyonlar** ekranından yönetilir; durumlar açıkça gösterilir: *Bağlı değil · Test ediliyor · Bağlı · Yetki yenilemesi gerekiyor · Hata · Desteklenmiyor*. Hesap şifresi hiçbir yerde istenmez.
 
-- **Anthropic (gerçek AI):** `.env` içine `ANTHROPIC_API_KEY` ekleyin, web ve işleyiciyi yeniden başlatın, Entegrasyonlar → *Test et* (ücretsiz model bilgisi okuma). İstekler: structured outputs (JSON şeması), adaptive thinking, `effort`, akış (streaming), reddetmeye karşı sunucu tarafı `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`). Maliyet, yanıttaki token kullanımı × fiyat tablosuyla hesaplanır (`src/lib/models/anthropic.ts`).
+- **Anthropic (gerçek AI):** `.env` içine (veya bulut ortam ayarlarına) `AIOPS_ANTHROPIC_API_KEY` ekleyin, web ve işleyiciyi yeniden başlatın, Entegrasyonlar → *Test et* (ücretsiz model bilgisi okuma). İstekler: structured outputs (JSON şeması), adaptive thinking, `effort`, akış (streaming), reddetmeye karşı sunucu tarafı `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`). Maliyet, yanıttaki token kullanımı × fiyat tablosuyla hesaplanır (`src/lib/models/anthropic.ts`).
 - **Shopify:** Shopify Dev Dashboard'da kendi organizasyonunuzda bir uygulama oluşturup mağazanıza kurun (gerekli kapsamlar: en az `read_products`, `write_products`). `SHOPIFY_CLIENT_ID/SECRET` tanımlayın, Entegrasyonlar'da mağaza alanını (`magaza.myshopify.com`) girip *Bağlan ve test et*. Belirteç **client credentials grant** ile alınır (24 saat geçerli, otomatik yenilenir). Ardından Ürünler → *Shopify'dan aktar*. Canlıya yazma: `productUpdate`, fiyatlar için `productVariantsBulkUpdate`, koleksiyonlar için `collectionCreate` + `collectionAddProducts`. Webhook adresi: `/api/webhooks/shopify` (HMAC doğrulamalı).
   - Not: client credentials yalnızca uygulama ile mağaza aynı Shopify organizasyonundaysa çalışır. Başka mağazalar için yetkilendirme kodu (OAuth) akışı eklenmelidir.
 - **Instagram:** Meta'da uygulama oluşturun, *Instagram API with Instagram Login* ürününü ekleyin, geri dönüş adresi olarak `PUBLIC_BASE_URL/api/integrations/instagram/callback` girin, `INSTAGRAM_APP_ID/SECRET` tanımlayın, *Instagram ile bağlan*. Gerekli izinler `instagram_business_basic`, `instagram_business_content_publish`; hesap Business/Creator olmalı ve canlı kullanım için uygulama incelemesi gerekebilir. Instagram medyayı herkese açık URL'den çektiği için `STORAGE_DRIVER=s3` gerekir (imzalı URL üretilir). Yayın: konteyner → `status_code` FINISHED → `media_publish`.
@@ -285,7 +285,7 @@ FriBee için bu depoda hiçbir bilgi uydurulmadı. Adımlar:
 2. **Kararlar ve yasaklı ifadeler:** marka sayfasında onayladığınız kararları (ör. "İndirimler yalnızca onayla") ve asla kullanılmayacak ifadeleri ekleyin.
 3. **Ürünler:** Shopify bağlıysa *Shopify'dan aktar*; değilse manuel ekleyin. Her ürün için kumaş, kalıp, baskı tekniği gibi özellikleri kaynağıyla **Doğrulandı** olarak girin; emin olmadıklarınızı **Doğrulanmadı** işaretleyin (müşteri metninde kullanılmaz).
 4. **Medya arşivi:** gerçek ürün fotoğraflarını "Gerçek ürün fotoğrafı", çekimleri "Gerçek çekim", logoyu tür "Logo" olarak yükleyin; ürün, tema, çekim tipi ve kullanım hakkını işaretleyin. Ardından marka sayfasında logoyu seçin.
-5. **Entegrasyonlar:** sunucu ortamına `ANTHROPIC_API_KEY` (gerçek AI), `SHOPIFY_CLIENT_ID/SECRET` (FriBee mağazası ile aynı Shopify organizasyonunda oluşturulmuş uygulama), isteğe bağlı Instagram ve S3 ayarlarını ekleyin; panelden test edin.
+5. **Entegrasyonlar:** sunucu ortamına `AIOPS_ANTHROPIC_API_KEY` (gerçek AI), `SHOPIFY_CLIENT_ID/SECRET` (FriBee mağazası ile aynı Shopify organizasyonunda oluşturulmuş uygulama), isteğe bağlı Instagram ve S3 ayarlarını ekleyin; panelden test edin.
 6. **Ayarlar:** görev başına ve günlük bütçeyi belirleyin.
 7. İnternete açacaksanız `APP_MODE=production`, güçlü `ADMIN_PASSWORD`, `SESSION_SECRET`, `ENCRYPTION_KEY` ve HTTPS arkasında çalıştırın. (Bu depo uygulamayı hiçbir yerde yayınlamaz.)
 8. **Ana yöneticiye** ilk talimatı verin ve çıktıları onay merkezinden inceleyin.

@@ -42,7 +42,7 @@ export class AnthropicAdapter implements TextModelAdapter {
   private client: Anthropic;
 
   constructor(private model = config.anthropic.model, apiKey = config.anthropic.apiKey) {
-    if (!apiKey) throw new PermanentError("ANTHROPIC_API_KEY tanımlı değil");
+    if (!apiKey) throw new PermanentError("AIOPS_ANTHROPIC_API_KEY tanımlı değil");
     this.client = new Anthropic({ apiKey, maxRetries: 0 }); // tekrar denemeyi görev işleyicisi yönetir
   }
 

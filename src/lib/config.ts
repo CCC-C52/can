@@ -41,7 +41,8 @@ export const config = {
     get forcePathStyle() { return str("S3_FORCE_PATH_STYLE") === "true"; },
   },
   anthropic: {
-    get apiKey() { return str("ANTHROPIC_API_KEY"); },
+    // Uygulamaya özel ad önceliklidir; böylece Claude Code oturumunun kendi ANTHROPIC_API_KEY kullanımıyla çakışmaz.
+    get apiKey() { return str("AIOPS_ANTHROPIC_API_KEY") ?? str("ANTHROPIC_API_KEY"); },
     get model() { return str("ANTHROPIC_MODEL") ?? "claude-opus-5-5"; },
     get effort() { return (str("ANTHROPIC_EFFORT") ?? "medium") as "low" | "medium" | "high" | "xhigh" | "max"; },
   },

@@ -4,7 +4,7 @@ import { upsertConnection } from "@/lib/services/connections";
 
 /** Anthropic bağlantı testi: model bilgisini okur (ücretli üretim çağrısı yapmaz). */
 export async function testAnthropic() {
-  if (!config.anthropic.apiKey) return { ok: false, detail: "ANTHROPIC_API_KEY tanımlı değil. Uygulama DEMO modunda çalışıyor." };
+  if (!config.anthropic.apiKey) return { ok: false, detail: "AIOPS_ANTHROPIC_API_KEY (veya ANTHROPIC_API_KEY) tanımlı değil. Uygulama DEMO modunda çalışıyor." };
   await upsertConnection("anthropic", null, { status: "testing" });
   try {
     const client = new Anthropic({ apiKey: config.anthropic.apiKey, maxRetries: 0 });

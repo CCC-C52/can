@@ -11,7 +11,7 @@ process.env.DATABASE_URL_OVERRIDE = url;
 process.env.LOCAL_STORAGE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "aiops-test-storage-"));
 process.env.APP_MODE = "local";
 // Testler gerçek servis anahtarı kullanmaz
-for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET"]) delete process.env[k];
+for (const k of ["AIOPS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET"]) delete process.env[k];
 
 beforeAll(async () => {
   const c = new pg.Client({ connectionString: url });

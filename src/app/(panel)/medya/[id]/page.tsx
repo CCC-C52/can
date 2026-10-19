@@ -71,7 +71,7 @@ export default async function MediaDetail({ params, searchParams }: { params: Pr
               <input type="hidden" name="id" value={m.id} />
               {config.anthropic.apiKey ? <SubmitButton className="btn w-full" pendingText="Etiketleniyor…">AI ile etiketle</SubmitButton> : <>
                 <button type="button" disabled className="btn w-full">AI ile etiketle (bağlantı bekliyor)</button>
-                <p className="mt-1 text-xs text-muted">ANTHROPIC_API_KEY yok: AI etiketleme kullanılamaz; sahte etiket üretilmez.</p></>}
+                <p className="mt-1 text-xs text-muted">Anthropic API anahtarı (AIOPS_ANTHROPIC_API_KEY) yok: AI etiketleme kullanılamaz; sahte etiket üretilmez.</p></>}
             </form>
           ) : null}
           {m.source_task_id && <Link href={`/gorevler/${m.source_task_id}`} className="mt-3 block text-xs text-brand">Üreten görev</Link>}

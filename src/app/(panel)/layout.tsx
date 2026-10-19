@@ -53,7 +53,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
       {mode.mode === "demo" && (
         <div className="border-b border-fuchsia-100 bg-fuchsia-50/60">
           <div className="mx-auto max-w-7xl px-4 py-1.5 text-xs text-fuchsia-800">
-            DEMO modu: model anahtarı yok. Ajan çıktıları kural tabanlı şablonlardır ve <strong>gerçek AI üretimi değildir</strong>. Gerçek mod için ANTHROPIC_API_KEY tanımlayın.
+            DEMO modu: model anahtarı yok. Ajan çıktıları kural tabanlı şablonlardır ve <strong>gerçek AI üretimi değildir</strong>. Gerçek mod için sunucu ortamına AIOPS_ANTHROPIC_API_KEY tanımlayın.
           </div>
         </div>
       )}

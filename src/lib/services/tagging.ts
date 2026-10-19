@@ -16,7 +16,7 @@ const TagSchema = z.object({
 
 /** Görseli Claude ile etiketler. Etiketler "ai" kaynağıyla eklenir; kullanıcı düzeltebilir. Demo modunda çalışmaz. */
 export async function tagWithAI(brandId: string, assetId: string): Promise<number> {
-  if (!config.anthropic.apiKey) throw new Error("AI etiketleme için ANTHROPIC_API_KEY gerekli. Demo modunda sahte etiket üretilmez.");
+  if (!config.anthropic.apiKey) throw new Error("AI etiketleme için AIOPS_ANTHROPIC_API_KEY gerekli. Demo modunda sahte etiket üretilmez.");
   const asset = await getMedia(brandId, assetId);
   if (!asset) throw new Error("Dosya bulunamadı.");
   if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(asset.mime_type)) throw new Error("Yalnızca görseller etiketlenebilir.");
