@@ -2,7 +2,8 @@
 
 Markadan bağımsız bir **dijital AI ekibi**. Ana yöneticiyle konuşursunuz; yönetici talimatınızı hedeflere ve görevlere ayırır, uzman ajanlara dağıtır, işleri takip eder, çıktıları kalite kontrolüne gönderir ve sonuçları dosyalar, önizlemeler ve kısa bir raporla sunar. Dış platformlara dokunan her işlem (yayın, canlı mağaza, fiyat, reklam) **sunucu kodunda zorunlu onaya** bağlıdır.
 
-> Durum (ilk sürüm): Uygulama yerel ortamda **DEMO modunda** baştan sona çalışır ve test edilmiştir. Gerçek AI (Anthropic), Shopify, Instagram ve görsel üretim adaptörleri yazılmıştır ancak bu geliştirme ortamında **gerçek hesap/anahtar olmadığı için gerçek servislerle test edilmemiştir** (yalnızca sahte HTTP yanıtlarıyla test edildi). Ayrıntılar aşağıda.
+> **Durum (Ekim 2026):** Ayrıntılı ve etiketli durum için [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md). İşletim, test, dağıtım ve geri alma: [`docs/OPERATIONS.md`](docs/OPERATIONS.md). Canlı kurulum: [`docs/DEPLOY.md`](docs/DEPLOY.md).
+> Yerel/yalıtılmış ortamda uçtan uca doğrulandı (85 otomatik test, 34 HTTP güvenlik kontrolü, 24 adımlık kabul akışı, erişilebilirlik taraması). Anthropic, OpenAI Images, Google Veo, Shopify ve Instagram adaptörleri bu ortamda **gerçek anahtar olmadığı için yalnızca sahte yanıtlarla** test edildi; canlı test paketi hazırdır ancak çalıştırılmadı.
 
 ---
 
@@ -32,8 +33,10 @@ Markadan bağımsız bir **dijital AI ekibi**. Ana yöneticiyle konuşursunuz; y
 | Görev işleyicisi | Ayrı Node süreci (`worker/index.ts`) | Kiralama (lease) + kalp atışı ile kalıcı kuyruk, `FOR UPDATE SKIP LOCKED` |
 | Dosya depolama | Yerel klasör veya S3 uyumlu (AWS S3, R2, MinIO) | `src/lib/storage` |
 | Metin/planlama modeli | Anthropic Claude API adaptörü + DEMO adaptörü | `src/lib/models` |
-| Görsel | Yerel `sharp` derleyici (AI değil) + OpenAI Images adaptörü | `src/lib/adapters/compose.ts`, `images.ts` |
-| Video | Yerel `ffmpeg` kurgu/render (AI değil) + AI video arayüzü | `video-edit.ts`, `video-generation.ts` |
+| Medya anlama | Piksel analizi (sharp), video kare/sahne/hareket/ses (ffmpeg), isteğe bağlı görsel model analizi | `src/lib/media-analysis` |
+| Görsel | Yerel `sharp` derleyici (gönderi, carousel, story, banner, reel kapağı, tipografi, logo; AI değil) + OpenAI Images (referans fotoğraflı) | `src/lib/adapters/compose.ts`, `images.ts` |
+| Video | Yerel `ffmpeg` kurgu (geçiş, giriş/kapanış, altyazı, kapak; AI değil) + Google Veo (uzun süren iş, kalıcı iş kaydı) | `video-edit.ts`, `video-generation.ts`, `src/lib/orchestrator/render.ts` |
+| Yükleme | 8 MiB parçalı, sürdürülebilir, 2 GB'a kadar; S3/R2 multipart | `src/lib/uploads` |
 | Mağaza / sosyal | Shopify Admin GraphQL, Instagram Graph API, TikTok manuel paket | `src/lib/adapters` |
 
 Mikroservis yok: web uygulaması ve işleyici aynı kod tabanını (`src/lib`) paylaşan iki süreçtir.
@@ -135,15 +138,15 @@ API anahtarları kaynak koda, tarayıcıya veya günlüklere yazılmaz. OAuth/er
 
 | Ajan | Görev | Çıktı şeması | Araç izinleri (sunucuda zorunlu) |
 |---|---|---|---|
-| Ana Yönetici | Talimatı hedef/görevlere ayırır, uzman seçer, bağımlılık/sıra belirler, rapor yazar | `PlanSchema`, proje raporu | brand.read, products.read, tasks.manage, outputs.read, costs.read |
-| Pazarlama | Hedef kitle, konumlandırma, kampanya, içerik temaları, reklam önerileri | `StrategySchema` | brand.read, products.read, performance.read |
-| Shopify | Ürün açıklaması, koleksiyon, sayfa, bundle; **mevcut ↔ önerilen** karşılaştırma | `ShopifyProposalSchema` | brand.read, products.read, outputs.read, shopify.propose |
-| Tasarım | Görsel brief, gönderi/kapak/reklam görseli; bağlı araçla üretim | `DesignBriefSchema` | brand.read, products.read, media.read, outputs.read, image.generate |
+| Ana Yönetici | Talimatı hedef/görevlere ayırır, uzman seçer, bağımlılık/sıra belirler, rapor yazar | `PlanSchema`, proje raporu | brand.read, products.read, media.read, tasks.manage, outputs.read, costs.read |
+| Pazarlama | Marka analizi, hedef kitle, konumlandırma, kampanya, rakip çerçevesi, organik strateji, reklam ve performans önerileri | `StrategySchema` | brand.read, products.read, media.read, outputs.read, performance.read |
+| Shopify | Ürün açıklaması, ürün sayfası taslakları, koleksiyon, sayfa, bundle; **mevcut ↔ önerilen** karşılaştırma | `ShopifyProposalSchema` | brand.read, products.read, media.read, outputs.read, shopify.propose |
+| Tasarım | Görsel brief; gönderi, carousel, story, banner, reel kapağı; yerel derleme veya bağlı AI görsel servisi | `DesignBriefSchema` | brand.read, products.read, media.read, outputs.read, image.generate |
 | Video | Senaryo, çekim seçimi, kurgu, altyazı; mevcut çekim kurgusu ≠ AI video | `VideoPlanSchema` | brand.read, products.read, media.read, outputs.read, video.edit, video.generate |
-| Sosyal medya | Platform açıklamaları, içerik takvimi, yayın paketi, yayın durumu | `SocialPackageSchema` | brand.read, products.read, outputs.read, calendar.write, social.propose |
+| Sosyal medya | Platform açıklamaları, Reels ve TikTok konseptleri, 7 günlük plan, yayın paketi | `SocialPackageSchema` | brand.read, products.read, media.read, outputs.read, calendar.write, social.propose |
 | Analiz ve kalite | Marka tutarlılığı, ürün bilgisi doğruluğu, kalite, maliyet, performans | `QaReviewSchema` | brand.read, products.read, outputs.read, costs.read, media.read |
 
-Her ajanın görev tanımı, gerekli girdileri, şeması, araç izinleri ve teslim ölçütleri panelde **Ajanlar** ekranında görünür. Hiçbir ajan doğrudan yayın yapamaz veya canlı mağazayı değiştiremez; yalnızca öneri üretir.
+Uzmanlar ürün/medya bağlamını yalnızca izinleri ölçüsünde görür (en az yetki; `src/lib/agents/context.ts`). Her ajanın görev tanımı, gerekli girdileri, şeması, araç izinleri ve teslim ölçütleri panelde **Ajanlar** ekranında görünür. Hiçbir ajan doğrudan yayın yapamaz veya canlı mağazayı değiştiremez; yalnızca öneri üretir.
 
 **Akış:** talimat → yönetici planı → bağımsız görevler paralel (sınır dahilinde) → her çıktı yeni sürüm olarak kaydedilir → kalite kontrol (her zaman kural tabanlı kontroller + gerçek modda model incelemesi; en kötü sonuç geçerli) → geçemezse geri bildirimle sınırlı yeniden üretim → tasarım/video için render görevleri → Shopify/sosyal çıktılar "Onay bekliyor" → yönetici raporu sohbete yazılır.
 
@@ -177,7 +180,8 @@ Tüm bağlantılar **Entegrasyonlar** ekranından yönetilir; durumlar açıkça
 - **Instagram:** Meta'da uygulama oluşturun, *Instagram API with Instagram Login* ürününü ekleyin, geri dönüş adresi olarak `PUBLIC_BASE_URL/api/integrations/instagram/callback` girin, `INSTAGRAM_APP_ID/SECRET` tanımlayın, *Instagram ile bağlan*. Gerekli izinler `instagram_business_basic`, `instagram_business_content_publish`; hesap Business/Creator olmalı ve canlı kullanım için uygulama incelemesi gerekebilir. Instagram medyayı herkese açık URL'den çektiği için `STORAGE_DRIVER=s3` gerekir (imzalı URL üretilir). Yayın: konteyner → `status_code` FINISHED → `media_publish`.
 - **TikTok:** Doğrudan yayın, TikTok uygulama denetimi gerektirir (denetimsiz istemciler yalnızca gizli yayın yapabilir). Bu sürümde "Desteklenmiyor"; bunun yerine **manuel yayın paketi** (video + açıklama + kapak metni, zip) üretilir.
 - **AI görsel (OpenAI Images):** `OPENAI_API_KEY` ve görsel başına birim fiyat `OPENAI_IMAGE_COST_USD`; *Test et* → Bağlı. Ardından "Bağlantı bekleyen görevleri tekrar dene".
-- **AI video üretimi / Meta reklam ve performans:** Adaptör arayüzü var, somut sağlayıcı yok → "Desteklenmiyor".
+- **AI video (Google Veo, Gemini API):** `GEMINI_API_KEY`, `VEO_MODEL`, saniye fiyatı `VEO_COST_PER_SECOND_USD`; *Test et*. Ücretli AI medya üretimi ayrıca **Ayarlar**'da sahip izniyle açılır (varsayılan kapalı). OpenAI Sora/Videos API kapatıldığı için kullanılmadı.
+- **Meta reklam ve performans verisi:** somut sağlayıcı yok → "Desteklenmiyor".
 - **S3:** `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION`, gerekirse `S3_ENDPOINT` (R2/MinIO), erişim anahtarları.
 
 Entegrasyon kodu yazılırken resmi belge siteleri (shopify.dev, developers.facebook.com, developers.tiktok.com) bu geliştirme ortamının ağ politikası nedeniyle doğrudan açılamadı; uç noktalar resmi sayfalara yönlendiren web aramasıyla kontrol edildi. Canlıya almadan önce güncel resmi belgelerle bir kez daha doğrulayın (özellikle `SHOPIFY_API_VERSION` ve `INSTAGRAM_GRAPH_VERSION`).
@@ -186,33 +190,12 @@ Entegrasyon kodu yazılırken resmi belge siteleri (shopify.dev, developers.face
 
 ## Özellik durumu
 
-### Gerçekten çalışan (bu ortamda test edildi)
-- PostgreSQL şeması/geçişleri, çoklu marka, marka/ürün/varyant/doğrulanmış özellik/karar kayıtları, bilinmeyen alanların "Bilinmiyor" gösterimi
-- Ayrı süreçte kalıcı görev işleyicisi: bağımlılıklar, paralellik sınırı, kiralama kurtarma (gerçek `kill -9` ile denendi), duraklatma, iptal, tekrar deneme, sınırlı yeniden üretim, model çağrısı/süre/bütçe sınırları
-- Çıktı sürümleri, yapılandırılmış düzenleyici, sürüm + içerik hash'ine bağlı onay, onay geri alma, ret, yeniden üretim isteği
-- Sunucu tarafı dış işlem kapısı: onay/kapsam/sürüm kontrolü, DEMO içerik engeli, idempotency anahtarı + aynı sürüm/hedef tekilleştirme, bağlantı yoksa hata, belirsiz sonuçta tekrar göndermeme ve kullanıcı ile mutabakat
-- Medya arşivi: içerik baytından tür tespiti, boyut sınırı, SHA-256 ile tekrar algılama, meta veriler, kullanım hakkı, kullanım geçmişi, kullanıcı etiket düzeltme, gerçek/AI/düzenlenmiş köken ayrımı, kaynak→türev ilişkisi, orijinallerin korunması
-- Yerel görsel derleme (sharp): gerçek ürün fotoğrafı kırpılmadan ve rengi değiştirilmeden marka zeminine yerleştirilir
-- Yerel video kurgu (ffmpeg): arşiv çekimlerinden kırpma, birleştirme, 9:16'ya ölçekleme, SRT altyazı yakma
-- Kural tabanlı kalite kontrolleri, maliyet kayıtları (tahmini ve gerçekleşen ayrı; bilinmeyen ≠ 0; AI ↔ reklam ayrımı), raporlar, işlem geçmişi
-- Manuel yayın paketi (zip), yayın takvimi
-- Türkçe mobil uyumlu panel; production modunda zorunlu giriş, eksik güvenlik ayarlarında başlamama, CSRF köken kontrolü, güvenlik başlıkları
+Etiketli tam liste (PASS / PASS WITH LIMITATION / BLOCKED / NOT IMPLEMENTED / NOT TESTED): [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md). Özet:
 
-### Demo olan
-- Model anahtarı yokken **tüm ajan metin çıktıları** kural tabanlı şablonlardır (`src/lib/models/demo.ts`). `DEMO` etiketiyle gösterilir, `is_demo=true` kaydedilir ve **dış platforma gönderilemez**. Demo planlayıcı talimattaki anahtar kelimelere göre görev seçer; demo kalite incelemesi model incelemesi yapmaz (kural tabanlı kontroller yine çalışır).
-- Örnek marka, ürünler ve medya kurgusaldır.
-
-### Bağlantı bekleyen (kod hazır, gerçek servisle test edilmedi)
-- Anthropic gerçek AI modu ve AI medya etiketleme (sahte SSE yanıtlarıyla test edildi)
-- Shopify okuma/yazma (sahte HTTP ile test edildi), Shopify webhook
-- Instagram OAuth ve yayın, Meta webhook
-- OpenAI Images ile AI kampanya görseli
-- S3 depolama
-
-### Desteklenmiyor (bu sürümde)
-- TikTok otomatik yayını (manuel paket var), AI video üretimi sağlayıcısı, Meta reklam başlatma/bütçe ve performans verisi okuma, Shopify sayfa ve bundle oluşturma (öneri olarak sunulur), zamanlanmış otomatik yayın
-
----
+- **Gerçekten çalışan ve test edilen:** çoklu marka ve yalıtım, yönetici→uzman görev akışı ve izinler, kalıcı kuyruk ve kurtarma, gerçek görsel/video analizi, parçalı sürdürülebilir yükleme, yerel görsel derlemeleri ve ffmpeg kurgusu (gerçek dosyalar), sürüme bağlı onay/ret/revizyon, maliyet ve bütçe denetimi, sistem durumu ekranı, üretim modu güvenliği.
+- **DEMO:** model anahtarı yokken ajan metinleri şablondur, `DEMO` etiketlidir ve dış platforma gönderilemez (yalnızca yerel mod; canlıda kapalı).
+- **Kod hazır, yalnızca sahte yanıtla test edildi (anahtar bekliyor):** Anthropic, OpenAI Images, Google Veo, Shopify, Instagram.
+- **Desteklenmiyor:** TikTok otomatik yayını (manuel paket var), Meta reklam/performans, zamanlanmış otomatik yayın.
 
 ## Güvenlik ve güvenilirlik
 
@@ -231,53 +214,19 @@ Entegrasyon kodu yazılırken resmi belge siteleri (shopify.dev, developers.face
 
 ## Test sonuçları
 
-`npm test` (vitest, gerçek PostgreSQL `aiops_test` veritabanı, gerçek ffmpeg/sharp, harici servis yok):
-
-```
-tests/launch-flow.test.ts       4 test   Örnek ürün lansmanı uçtan uca
-tests/safety.test.ts           15 test   Onay, tekrar, bütçe, sınırlar, bağlantı, marka ayrımı, medya, işleyici yeniden başlatma
-tests/integrations.test.ts      6 test   Shopify (sahte HTTP), belirsiz sonuç, fiyat onayı, webhook imzaları, QA kuralları
-tests/anthropic-adapter.test.ts 3 test   Anthropic istek biçimi, akış, maliyet, hata sınıflandırma (sahte SSE)
-tests/production.test.ts        5 test   Canlı mod: eksik ayar, DEMO kapalı, şifreleme anahtarı, oturum/kilit, yedekleme*
-Toplam: 33/33 geçti
-* Yedekleme testi yalnızca TEST_S3_ENDPOINT (ör. moto/MinIO) tanımlıyken çalışır; aksi halde atlanır.
-```
-
-Kabul ölçütleri → test:
-
-| Ölçüt | Sonuç |
+| Komut | Sonuç (Ekim 2026, bu geliştirme ortamı) |
 |---|---|
-| Kullanıcı talimat verir, yönetici görev oluşturur | ✅ `launch-flow` |
-| Uzmanlar doğru sırada çalışır (strateji → içerik → sosyal) | ✅ zaman damgalarıyla doğrulandı |
-| Çıktılar kaydedilir, kalite kontrolü yapılır | ✅ |
-| Kullanıcı düzenleyip onaylar, onay doğru sürümle eşleşir | ✅ |
-| Uygulama yeniden açıldığında kayıtlar korunur | ✅ yeni bağlantı havuzuyla okundu |
-| Onaysız dış işlemler engelleniyor mu | ✅ engelleniyor, denetim kaydına yazılıyor |
-| Değiştirilen içerik eski onayla yayınlanabiliyor mu | ✅ hayır |
-| Tekrarlanan istek çift işlem oluşturuyor mu | ✅ hayır (aynı anahtar eşzamanlı dahil) |
-| Bütçe sınırı uygulanıyor mu | ✅ görev başına, günlük ve bilinmeyen maliyet |
-| Bağlantısı olmayan servis sahte başarı veriyor mu | ✅ hayır |
-| Marka verileri ayrılmış mı | ✅ |
-| İşleyici yeniden başladığında görevler devam ediyor mu | ✅ test + gerçek `kill -9` denemesi |
+| `npm test` (`TEST_S3_ENDPOINT` ile) | 15 dosya, **85/85 geçti** (S3 olmadan 83 geçti, 2 atlandı) |
+| `npm run test:http` (üretim derlemesi) | **34/34 geçti** |
+| `npm run test:a11y` (WCAG 2.1 A/AA, masaüstü + telefon) | **0 ihlal** |
+| Kabul akışı (24 adım, yalıtılmış fikstür markası) | **24/24 geçti** — gerçek FriBee verisiyle çalıştırılmadı |
+| `npm run test:live` | **Çalıştırılmadı** (anahtar ve ücretli test izni yok) |
 
-Ek olarak tarayıcıda (Playwright, masaüstü ve 390 px mobil) tüm ekranlar açıldı, demo akışı panelden yürütüldü ve mobil yatay taşma kontrol edildi. Üretim modu: eksik `ADMIN_PASSWORD` ile sunucu başlamadı; oturumsuz panel `/login`'e yönlendi, API 401, imzasız webhook 401 döndü; giriş sonrası çerez `httpOnly` + `secure`.
-
-**Gerçek servis testi yapılmadı:** Anthropic, Shopify, Instagram, OpenAI Images ve S3 bu ortamda gerçek anahtar/hesap olmadan yalnızca sahte yanıtlarla test edildi.
-
----
+Ayrıntılar ve kapsam: `docs/ENGINEERING_REPORT.md` §18–21.
 
 ## Bilinen sınırlamalar
 
-- DEMO çıktıları şablondur; içerik kalitesi gerçek AI modunu temsil etmez.
-- İçerik dili otomatik kontrolü yalnızca İngilizce ve Türkçe için yapılır; diğer dillerde "belirlenemedi" uyarısı verilir.
-- Kural tabanlı iddia taraması kalıp tabanlıdır; yanlış pozitif/negatif olabilir. Gerçek modda model incelemesiyle birleştirilir; son karar kullanıcı onayıdır.
-- AI görsellerinde ürünün baskı/renk/kalıp değişimi otomatik görsel karşılaştırmayla tespit edilmez; risk işaretlenir ve insan kontrolü istenir.
-- Instagram yayını S3 depolama gerektirir; carousel ve hikâye dışı formatlar sınırlıdır. TikTok için yalnızca manuel paket vardır.
-- Shopify için yalnızca client credentials (aynı organizasyon) desteklenir; sayfa/bundle canlıya yazılmaz.
-- Takvim bir plandır; gönderiler otomatik zamanlanmaz.
-- Panelde tek yönetici hesabı vardır (çok kullanıcılı rol sistemi yok).
-- Render görevi ortasında kesilirse yeniden çalıştırılır; yerel derleme/ffmpeg çıktıları SHA-256 ile tekilleşir, ancak AI görsel üretimi yeniden ücret doğurabilir.
-- Görsel önizlemede küçük resim (thumbnail) üretilmez; orijinal dosya sunulur.
+Güncel liste: `docs/ENGINEERING_REPORT.md` §22–23. Başlıcaları: gerçek sağlayıcılarla canlı test yapılmadı; FriBee kabul akışı gerçek veriyle çalıştırılmadı; 512 MB işleyici video kurgusu için yetersiz (2 GB önerilir); DEMO çıktıları şablondur; içerik dili kontrolü yalnızca en/tr; tek sahip hesabı.
 
 ---
 
@@ -288,7 +237,7 @@ FriBee için bu depoda hiçbir bilgi uydurulmadı. Adımlar:
 1. **Marka yönetimi → Yeni marka:** adı "FriBee" girin. Yalnızca **doğruladığınız** bilgileri doldurun (hikâye, hedef kitle, ton, renkler `Ad, #hex`, yazı tipleri, gönderim, iade, kampanya kuralları). Boş bırakılan her alan ajanlara "BİLİNMİYOR" olarak gider ve uydurulmaz. Müşteriye yönelik içerik dilini seçin (varsayılan İngilizce).
 2. **Kararlar ve yasaklı ifadeler:** marka sayfasında onayladığınız kararları (ör. "İndirimler yalnızca onayla") ve asla kullanılmayacak ifadeleri ekleyin.
 3. **Ürünler:** Shopify bağlıysa *Shopify'dan aktar*; değilse manuel ekleyin. Her ürün için kumaş, kalıp, baskı tekniği gibi özellikleri kaynağıyla **Doğrulandı** olarak girin; emin olmadıklarınızı **Doğrulanmadı** işaretleyin (müşteri metninde kullanılmaz).
-4. **Medya arşivi:** gerçek ürün fotoğraflarını "Gerçek ürün fotoğrafı", çekimleri "Gerçek çekim", logoyu tür "Logo" olarak yükleyin; ürün, tema, çekim tipi ve kullanım hakkını işaretleyin. Ardından marka sayfasında logoyu seçin.
+4. **Medya arşivi:** gerçek ürün fotoğraflarını "Gerçek ürün fotoğrafı", çekimleri "Gerçek çekim", logoyu tür "Logo" (PNG/JPEG/WebP) olarak yükleyin; ürün, tema, çekim tipi ve kullanım hakkını işaretleyin. Büyük videolar parçalı yüklenir; kesilirse aynı dosyayı tekrar seçin. Yüklenen her dosya otomatik analiz edilir (renkler, netlik, sahneler, hareket; görsel model bağlıysa içerik açıklaması).
 5. **Entegrasyonlar:** sunucu ortamına `AIOPS_ANTHROPIC_API_KEY` (gerçek AI), `SHOPIFY_CLIENT_ID/SECRET` (FriBee mağazası ile aynı Shopify organizasyonunda oluşturulmuş uygulama), isteğe bağlı Instagram ve S3 ayarlarını ekleyin; panelden test edin.
 6. **Ayarlar:** görev başına ve günlük bütçeyi belirleyin.
 7. İnternete açacaksanız `APP_MODE=production`, güçlü `ADMIN_PASSWORD`, `SESSION_SECRET`, `ENCRYPTION_KEY` ve HTTPS arkasında çalıştırın. (Bu depo uygulamayı hiçbir yerde yayınlamaz.)

@@ -8,3 +8,4 @@ next-env.d.ts
 data/
 coverage/
 test-results/
+scripts/.tmp/

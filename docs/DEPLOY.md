@@ -4,6 +4,8 @@ Bu belge, AI Operations Studio'yu **yalnızca sizin giriş yapabileceğiniz**, H
 
 > Bu belgedeki fiyatlar Ekim 2026'da kontrol edildi (kaynaklar en altta). Ücretli kaynak oluşturmadan önce Render'ın Blueprint önizleme ekranındaki toplamı mutlaka kontrol edin.
 
+> **Önemli — dağıtım denetimi:** Servisler `claude/amazing-goodall-qkxupd` dalını izler ve geliştirme commit'leri bu dala gönderilir. `render.yaml`'da otomatik dağıtım kapalıdır (`autoDeployTrigger: off`) ancak bu ayar Blueprint'e ancak bir sonraki eşitlemede yansır ve Render'ın bilinen bir sorunu nedeniyle Blueprint değişikliği yine dağıtım tetikleyebilir. Bu nedenle Render panelinde **`aiops-web` ve `aiops-worker` → Settings → Auto-Deploy = Off** ve **Blueprint → Auto Sync = Off** ayarlarını yapın. Canlıya alma yalnızca sizin **Manual Deploy** kararınızla olur. Güncelleme kontrol listesi ve geri alma: [`OPERATIONS.md` §11–12](OPERATIONS.md#11-dağıtım).
+
 ---
 
 ## 1. Seçilen kurulum ve neden
@@ -43,7 +45,7 @@ Neden bu seçenek:
 
 Bu tabloya **dahil olmayanlar:** Anthropic API kullanımı (uygulamadaki görev ve günlük bütçe sınırlarıyla kontrol edilir), isteğe bağlı OpenAI görsel üretimi, kendi alan adınız. Render web servislerinde trafik kotası aşılırsa GB başına ek ücret alınır; tek kullanıcılı bir panel için beklenmez.
 
-**Bilinen riskler:** 512 MB bellek web paneli için yeterlidir. İşleyici kısa dikey video kurgusunda sınıra yakın çalışabilir; Render günlüğünde "out of memory" görürseniz işleyiciyi Standard'a yükseltin.
+**Bilinen riskler (ölçüldü):** 512 MB bellek web paneli için yeterlidir. 1080x1920, 5 bölüm + geçişli bir video kurgusunda ffmpeg tepe belleği ~440 MB, işleyicinin Node süreci ~150 MB ölçüldü; toplam Starter'ın 512 MB'ını aşar. **Video kurgusu kullanılacaksa işleyiciyi Standard'a (2 GB, $25/ay) yükseltmeniz önerilir → toplam ≈ $39,50/ay** (hedef $40 içinde). Yalnızca metin ve görsel işleri için Starter yeterlidir. Bu bir maliyet kararıdır; `render.yaml` planı kendiliğinden değiştirmez — Render → `aiops-worker` → Settings → Instance Type.
 
 ---
 
@@ -114,7 +116,17 @@ Toplam süre yaklaşık 30–45 dakika. Hiçbir adımda bana anahtar veya parola
 
 ## 5. Güncelleme
 
-`render.yaml` içindeki dal (`claude/amazing-goodall-qkxupd`) her yeni commit'te otomatik dağıtılır. Veritabanı geçişleri dağıtım öncesinde (`preDeployCommand`) otomatik uygulanır. Dağıtım başarısız olursa Render önceki sürümü çalıştırmaya devam eder.
+Otomatik dağıtım kapalıdır (yukarıdaki uyarı). Güncelleme: Render → `aiops-web` → **Manual Deploy → Deploy latest commit**, ardından `aiops-worker` için aynısı. Veritabanı geçişleri web dağıtımından önce (`preDeployCommand`) uygulanır. Dağıtım başarısız olursa Render önceki sürümü çalıştırmaya devam eder. Adım adım kontrol listesi, dağıtım sonrası 14 doğrulama maddesi ve geri alma: [`OPERATIONS.md`](OPERATIONS.md#11-dağıtım).
+
+**İsteğe bağlı sağlayıcı anahtarları** (Blueprint'te sorulmaz; ihtiyaç olunca `aiops-shared` ortam grubuna veya her iki servise eklenir):
+
+| Değişken | Ne için |
+|---|---|
+| `OPENAI_API_KEY`, `OPENAI_IMAGE_COST_USD` | AI kampanya görseli (OpenAI Images) |
+| `GEMINI_API_KEY`, `VEO_MODEL`, `VEO_COST_PER_SECOND_USD` | AI video (Google Veo) |
+| `FFMPEG_THREADS` | ffmpeg iş parçacığı sınırı (vars. 2) |
+
+Anahtarı ekledikten sonra panelde **Entegrasyonlar → Test et** ve **Ayarlar → Ücretli AI medya üretimi** iznini (varsayılan kapalı) bilinçli olarak açın.
 
 ## 6. Yedekleme ve geri yükleme
 
@@ -143,7 +155,9 @@ Toplam süre yaklaşık 30–45 dakika. Hiçbir adımda bana anahtar veya parola
 | Görevler "Bağlantı bekliyor" | `AIOPS_ANTHROPIC_API_KEY` eksik veya geçersiz. Entegrasyonlar → Anthropic → Test et. |
 | Panelde "Görev işleyicisi çalışmıyor" uyarısı | Render → `aiops-worker` günlüklerine bakın; gerekirse **Restart**. |
 | Yedekleme başarısız | Ayarlar'daki hata mesajı; genellikle R2 belirtecinin `aiops-backup` kovasına yetkisi eksiktir. |
-| Video render'ında bellek hatası | `aiops-worker` planını Standard'a yükseltin. |
+| Video render'ında bellek hatası | `aiops-worker` planını Standard'a yükseltin veya `FFMPEG_THREADS=1`. |
+| Hata mesajında "istek kimliği" | Render günlüğünde bu kimlikle arayın (günlükler JSON satırlarıdır). |
+| Ayrıntılı durum | Panel → **Sistem durumu** (veritabanı, geçişler, işleyici, depolama, sağlayıcılar, kuyruklar, yedek). |
 
 ## Kaynaklar (fiyat ve özellik doğrulaması, Ekim 2026)
 
