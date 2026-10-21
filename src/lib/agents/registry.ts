@@ -48,7 +48,8 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     ],
     requiredInputs: ["Kullanıcı talimatı", "Seçili marka", "Marka profili"],
     outputDescription: "Görev planı (hedefler + bağımlılıklı görev listesi) ve proje raporu",
-    tools: ["brand.read", "products.read", "tasks.manage", "outputs.read", "costs.read"],
+    // media.read: hangi gerçek medyanın (ve analizlerinin) mevcut olduğunu bilerek plan yapmak için
+    tools: ["brand.read", "products.read", "media.read", "tasks.manage", "outputs.read", "costs.read"],
     acceptanceCriteria: [
       "Her görev mevcut bir uzmana atanmış olmalı",
       "Bağımlılıklar döngüsüz olmalı",
@@ -63,7 +64,9 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Hedef kitle segmentleri", "Konumlandırma ve ana mesajlar", "Kampanya aşamaları", "İçerik temaları", "Reklam önerileri"],
     requiredInputs: ["Marka profili", "Ürünler ve doğrulanmış özellikler", "Kampanya kuralları"],
     outputDescription: "Kampanya stratejisi (StrategySchema)",
-    tools: ["brand.read", "products.read", "performance.read"],
+    // outputs.read: yöneticinin bağımlılık olarak verdiği diğer uzman çıktılarını (ör. analiz) okumak için.
+    // media.read: kampanya fikirlerini arşivdeki gerçek görsel/video analizlerine dayandırmak için.
+    tools: ["brand.read", "products.read", "media.read", "outputs.read", "performance.read"],
     acceptanceCriteria: [
       "Varsayımlar 'assumption' olarak işaretlenmeli",
       "Doğrulanmamış ürün özelliği, satış rakamı, yorum veya bağış oranı içermemeli",
@@ -78,7 +81,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Ürün açıklamaları", "Koleksiyon önerileri", "Mağaza sayfaları", "Bundle önerileri", "Mevcut ve önerilen değer karşılaştırması"],
     requiredInputs: ["Ürün kayıtları (mevcut değerler)", "Doğrulanmış ürün özellikleri", "Gönderim/iade bilgileri"],
     outputDescription: "Shopify değişiklik önerisi (ShopifyProposalSchema)",
-    tools: ["brand.read", "products.read", "outputs.read", "shopify.propose"],
+    tools: ["brand.read", "products.read", "media.read", "outputs.read", "shopify.propose"],
     acceptanceCriteria: [
       "Her değişiklikte mevcut değer kayıttaki değerle aynı olmalı",
       "Fiyat değişikliği ayrıca işaretlenir ve ayrı onay gerektirir",
@@ -123,7 +126,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Platforma özel açıklamalar", "İçerik takvimi", "Yayın paketi", "Yayın durumu takibi"],
     requiredInputs: ["Strateji", "Tasarım briefleri / videolar", "Marka içerik dili"],
     outputDescription: "Sosyal medya yayın paketi (SocialPackageSchema)",
-    tools: ["brand.read", "products.read", "outputs.read", "calendar.write", "social.propose"],
+    tools: ["brand.read", "products.read", "media.read", "outputs.read", "calendar.write", "social.propose"],
     acceptanceCriteria: [
       "Instagram açıklaması 2.200 karakteri, en fazla 30 hashtag'i aşmamalı",
       "TikTok için otomatik yayın yoksa manuel paket hazırlanmalı",

@@ -296,7 +296,7 @@ async function runPlan(ctx: RunCtx, workerId: string) {
   const { task, limits } = ctx;
   assertTool("manager", "brand.read");
   assertTool("manager", "tasks.manage");
-  const brandCtx = await buildBrandContext(task.brand_id);
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "manager" });
   const user = userPrompt({ instruction: task.instruction, ctx: brandCtx, extra: `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>` });
   const res = await callModel(ctx, "manager", "plan", PlanSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [] }, 8000);
   const { tasks, dropped } = sanitizePlan(res.data, limits.maxTasksPerProject - 1);
@@ -349,7 +349,7 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   if (!isSpecialist(task.agent)) throw new PermanentError(`Bilinmeyen uzman: ${task.agent}`);
   const agent = task.agent;
   assertTool(agent, "brand.read");
-  const brandCtx = await buildBrandContext(task.brand_id);
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent });
   const upstream = await upstreamOutputs(task);
   if (upstream.length) assertTool(agent, "outputs.read");
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
@@ -381,7 +381,7 @@ async function runReview(ctx: RunCtx, workerId: string) {
   assertTool("quality", "outputs.read");
   const v = await getCurrentVersion(task.brand_id, task.output_id);
   if (!v) throw new PermanentError("Çıktı sürümü bulunamadı.");
-  const brandCtx = await buildBrandContext(task.brand_id);
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality" });
   const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo });
 
   const user = userPrompt({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });

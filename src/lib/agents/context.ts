@@ -1,6 +1,8 @@
 import { q, type Queryable, getPool } from "@/lib/db/pool";
 import { getBrand, listBrandFacts, listProductFacts, listProducts, listVariants } from "@/lib/services/brands";
 import { langLabel } from "@/lib/labels";
+import { AGENTS } from "./registry";
+import type { AgentId } from "./schemas";
 
 export const UNKNOWN = "UNKNOWN";
 
@@ -60,8 +62,12 @@ export type BrandContext = {
 
 const u = (v: unknown) => (v === null || v === undefined || v === "" ? UNKNOWN : String(v));
 
-/** Bir markanın ajanlara verilecek bağlamı. Yalnızca o markanın verileri okunur. */
-export async function buildBrandContext(brandId: string, db: Queryable = getPool()): Promise<BrandContext> {
+/**
+ * Bir markanın ajanlara verilecek bağlamı. Yalnızca o markanın verileri okunur.
+ * `agent` verilirse bağlam o ajanın izinlerine göre daraltılır (en az yetki): products.read yoksa ürünler,
+ * media.read yoksa medya listesi bağlama girmez.
+ */
+export async function buildBrandContext(brandId: string, db: Queryable = getPool(), opts: { agent?: AgentId } = {}): Promise<BrandContext> {
   const brand = await getBrand(brandId, db);
   if (!brand) throw new Error("Marka bulunamadı");
   const [facts, products, variants, pfacts, media] = await Promise.all([
@@ -76,6 +82,7 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
       db,
     ),
   ]);
+  const can = (tool: "products.read" | "media.read") => !opts.agent || AGENTS[opts.agent].tools.includes(tool);
   return {
     brand: {
       id: brand.id,
@@ -97,7 +104,7 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
       verified_facts: facts.filter((f) => f.kind === "fact" && f.status === "verified").map((f) => f.statement),
       forbidden_claims: facts.filter((f) => f.kind === "forbidden_claim").map((f) => f.statement),
     },
-    products: products.map((p) => ({
+    products: (can("products.read") ? products : []).map((p) => ({
       id: p.id,
       title: p.title,
       description: u(p.description),
@@ -112,6 +119,6 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
       verified_facts: pfacts.filter((f) => f.product_id === p.id && f.status === "verified").map((f) => ({ attribute: f.attribute, value: f.value })),
       unverified_facts: pfacts.filter((f) => f.product_id === p.id && f.status !== "verified").map((f) => ({ attribute: f.attribute, value: f.value })),
     })),
-    media,
+    media: can("media.read") ? media : [],
   };
 }
