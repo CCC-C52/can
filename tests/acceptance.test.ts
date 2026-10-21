@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { createBrand, createProduct, addProductFact } from "@/lib/services/brands";
 import { uploadMedia } from "@/lib/services/media";
-import { runAcceptance, type StepResult } from "./acceptance/workflow";
+import { runAcceptance, type StepResult } from "../scripts/acceptance/workflow";
 import { productPhoto, colorScenesVideo } from "./fixtures";
 
 // FriBee kabul iş akışı (24 adım) — YALITILMIŞ FİKSTÜR markası üzerinde. Gerçek FriBee verisi kullanılmaz ve uydurulmaz;

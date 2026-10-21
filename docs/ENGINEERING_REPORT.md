@@ -88,7 +88,7 @@ Full audit (Turkish): [`AUDIT.md`](AUDIT.md). Summary of the baseline `a6b009d`:
 - `src/lib/services/diagnostics.ts`, `src/app/(panel)/tanilama`, `src/app/api/diagnostics`.
 - `src/lib/log.ts`, `src/lib/ids.ts`, `src/lib/security/rate-limit.ts`, `src/lib/db/check.ts`.
 - `migrations/002_media_jobs_integrity.sql`.
-- Tests: `tests/*.test.ts` (15 files), `tests/http/security.ts`, `tests/http/a11y.ts`, `tests/acceptance/workflow.ts`, `tests/live/live.ts`.
+- Tests: `tests/*.test.ts` (15 files), `tests/http/security.ts`, `tests/http/a11y.ts`, `scripts/acceptance/workflow.ts`, `tests/live/live.ts`.
 - Docs: `docs/AUDIT.md`, `docs/OPERATIONS.md`, `docs/ENGINEERING_REPORT.md`, updated `README.md`, `docs/DEPLOY.md`.
 
 ## 5. Features repaired

@@ -1,7 +1,7 @@
 import "./load-env";
 import { config } from "@/lib/config";
 import { q1, closePool } from "@/lib/db/pool";
-import { runAcceptance } from "../tests/acceptance/workflow";
+import { runAcceptance } from "./acceptance/workflow";
 
 // Kabul iş akışını (24 adım) GERÇEK bir markaya karşı çalıştırır — yalnızca sahibin yetkilendirdiği KOPYA ortamda.
 //   ACCEPTANCE_CONFIRM_COPY=yes npm run acceptance -- --brand fribee
