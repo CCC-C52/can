@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:http": "tsx --tsconfig tsconfig.json tests/http/security.ts",
+    "test:a11y": "tsx --tsconfig tsconfig.json tests/http/a11y.ts",
     "db:restore": "tsx --tsconfig tsconfig.json scripts/restore.ts",
     "db:check": "tsx --tsconfig tsconfig.json scripts/db-check.ts"
   },
@@ -35,6 +36,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "axe-core": "^4.10.3",
     "playwright": "^1.64.1",
     "tailwindcss": "^4.3.3",
     "typescript": "5.9",

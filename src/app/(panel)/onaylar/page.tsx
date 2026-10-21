@@ -27,7 +27,7 @@ export default async function Approvals({ searchParams }: { searchParams: SP }) 
           <ul className="divide-y divide-line">
             {pending.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-                <div><Link href={`/taslaklar/${p.id}`} className="font-medium text-brand">{p.title}</Link> <span className="text-xs text-muted">v{p.version} · {agentName(p.agent)}</span></div>
+                <div><Link href={`/taslaklar/${p.id}`} className="font-medium text-brand underline">{p.title}</Link> <span className="text-xs text-muted">v{p.version} · {agentName(p.agent)}</span></div>
                 <span className="flex gap-1">{p.is_demo && <DemoBadge />}{p.task_status === "approval_pending" && <Badge tone="warn">Dış işlem önerisi</Badge>}{p.verdict && <Badge tone={p.verdict === "pass" ? "ok" : "bad"}>QA {p.verdict}</Badge>}<Link href={`/taslaklar/${p.id}`} className="btn px-2 py-1 text-xs">İncele</Link></span>
               </li>
             ))}
@@ -58,7 +58,7 @@ export default async function Approvals({ searchParams }: { searchParams: SP }) 
           <h2 className="h2 mb-2">Karar geçmişi</h2>
           <ul className="space-y-1 text-sm">
             {decisions.map((d) => (
-              <li key={d.id}><Badge tone={d.revoked_at ? "neutral" : d.decision === "approved" ? "ok" : "bad"}>{d.revoked_at ? "Geri alındı" : d.decision === "approved" ? "Onay" : "Ret"}</Badge> <Link href={`/taslaklar/${d.output_id}?v=${d.version}`} className="text-brand">{d.title} v{d.version}</Link> <span className="text-xs text-muted">{dt(d.created_at)} · {d.scopes.map((s) => APPROVAL_SCOPE_LABEL[s] ?? s).join(", ")}</span></li>
+              <li key={d.id}><Badge tone={d.revoked_at ? "neutral" : d.decision === "approved" ? "ok" : "bad"}>{d.revoked_at ? "Geri alındı" : d.decision === "approved" ? "Onay" : "Ret"}</Badge> <Link href={`/taslaklar/${d.output_id}?v=${d.version}`} className="text-brand underline">{d.title} v{d.version}</Link> <span className="text-xs text-muted">{dt(d.created_at)} · {d.scopes.map((s) => APPROVAL_SCOPE_LABEL[s] ?? s).join(", ")}</span></li>
             ))}
             {decisions.length === 0 && <li className="muted">Henüz karar yok.</li>}
           </ul>

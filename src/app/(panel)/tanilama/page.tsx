@@ -56,7 +56,7 @@ export default async function Diagnostics() {
         <section className="card lg:col-span-2" aria-labelledby="dur-h">
           <h2 id="dur-h" className="h2 mb-2">Son 24 saat görev süreleri</h2>
           {d.durations.length ? (
-            <div className="overflow-x-auto">
+            <div tabIndex={0} className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead><tr className="text-muted"><th className="py-1">Tür</th><th>Ajan</th><th>Deneme</th><th>Medyan</th><th>p95</th><th>Başarısız</th></tr></thead>
                 <tbody>{d.durations.map((r) => <tr key={`${r.kind}-${r.agent}`} className="border-t border-line"><td className="py-1">{r.kind}</td><td>{agentName(r.agent)}</td><td>{r.n}</td><td>{r.p50_s} sn</td><td>{r.p95_s} sn</td><td>{r.failed}</td></tr>)}</tbody>

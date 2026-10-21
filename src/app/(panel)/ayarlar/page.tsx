@@ -82,7 +82,7 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
         <section className="card lg:col-span-3">
           <div className="mb-2 flex items-center justify-between"><h2 className="h2">İşlem geçmişi</h2>
             <div className="flex gap-2 text-xs"><a href="/ayarlar" className={scope === "brand" ? "font-semibold" : "text-brand"}>Bu marka</a><a href="/ayarlar?scope=all" className={scope === "all" ? "font-semibold" : "text-brand"}>Tümü</a></div></div>
-          <ul className="max-h-[60vh] space-y-1 overflow-y-auto text-sm">
+          <ul tabIndex={0} className="max-h-[60vh] space-y-1 overflow-y-auto text-sm">
             {logs.map((l) => <li key={l.id}><span className="text-xs text-muted">{dt(l.created_at)} · {l.actor} · {l.action}</span> — {l.message}</li>)}
           </ul>
         </section>

@@ -45,13 +45,13 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
           <form action={addProductFactAction} className="mt-3 space-y-2">
             <input type="hidden" name="productId" value={p.id} />
             <div className="grid grid-cols-2 gap-2"><input name="attribute" required className="input" placeholder="Özellik (ör. Kumaş)" /><input name="value" required className="input" placeholder="Değer (ör. %100 pamuk)" /></div>
-            <div className="grid grid-cols-2 gap-2"><select name="status" className="input"><option value="verified">Doğrulandı</option><option value="unverified">Doğrulanmadı</option></select><input name="source" className="input" placeholder="Kaynak (ör. tedarikçi belgesi)" /></div>
+            <div className="grid grid-cols-2 gap-2"><select name="status" className="input" aria-label="Doğrulama durumu"><option value="verified">Doğrulandı</option><option value="unverified">Doğrulanmadı</option></select><input name="source" className="input" placeholder="Kaynak (ör. tedarikçi belgesi)" /></div>
             <SubmitButton className="btn">Özellik ekle</SubmitButton>
           </form>
         </section>
         <section className="card xl:col-span-2">
           <h2 className="h2 mb-2">Varyantlar</h2>
-          <div className="overflow-x-auto"><table className="table"><thead><tr><th>Ad</th><th>SKU</th><th>Renk</th><th>Beden</th><th>Fiyat</th><th>Stok</th><th></th></tr></thead>
+          <div tabIndex={0} className="overflow-x-auto"><table className="table"><thead><tr><th>Ad</th><th>SKU</th><th>Renk</th><th>Beden</th><th>Fiyat</th><th>Stok</th><th></th></tr></thead>
             <tbody>{variants.map((v) => (
               <tr key={v.id}><td>{v.title}</td><td><Val v={v.sku} /></td><td><Val v={v.color} /></td><td><Val v={v.size} /></td><td><Val v={v.price} /></td><td><Val v={v.inventory_quantity} /></td>
                 <td><form action={deleteVariantAction}><input type="hidden" name="id" value={v.id} /><input type="hidden" name="productId" value={p.id} /><button className="text-xs text-red-700">Sil</button></form></td></tr>

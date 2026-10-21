@@ -18,7 +18,7 @@ export default async function Products({ searchParams }: { searchParams: SP }) {
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="lg:col-span-2">
           {products.length === 0 ? <Empty>Ürün yok.</Empty> : (
-            <div className="card overflow-x-auto p-0">
+            <div tabIndex={0} className="card overflow-x-auto p-0">
               <table className="table">
                 <thead><tr><th className="pl-4">Ürün</th><th>Fiyat</th><th>Varyant</th><th>Doğrulanmış özellik</th><th>Durum</th></tr></thead>
                 <tbody>{products.map((p) => (
@@ -45,7 +45,7 @@ export default async function Products({ searchParams }: { searchParams: SP }) {
               <input name="compare_at_price" inputMode="decimal" className="input" placeholder="Eski fiyat" />
               <input name="currency" className="input" placeholder="USD" />
             </div>
-            <select name="status" className="input"><option value="draft">Taslak</option><option value="active">Aktif</option><option value="archived">Arşiv</option></select>
+            <select name="status" className="input" aria-label="Ürün durumu"><option value="draft">Taslak</option><option value="active">Aktif</option><option value="archived">Arşiv</option></select>
             <SubmitButton>Ekle</SubmitButton>
           </form>
         </section>

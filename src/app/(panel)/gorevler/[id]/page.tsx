@@ -63,7 +63,7 @@ export default async function TaskDetail({ params, searchParams }: { params: Pro
           </dl>
           <div className="label mt-4">Bağımlılıklar</div>
           {deps.length ? <ul className="text-sm">{deps.map((d) => <li key={d.id}><Link className="text-brand" href={`/gorevler/${d.id}`}>{d.title}</Link> — {TASK_STATUS_LABEL[d.status as keyof typeof TASK_STATUS_LABEL]}</li>)}</ul> : <p className="muted">Yok</p>}
-          {t.input_refs && Object.keys(t.input_refs).length > 0 && (<><div className="label mt-4">Girdi/çıktı referansları</div><pre className="overflow-x-auto rounded bg-gray-50 p-2 text-xs">{JSON.stringify(t.input_refs, null, 2)}</pre></>)}
+          {t.input_refs && Object.keys(t.input_refs).length > 0 && (<><div className="label mt-4">Girdi/çıktı referansları</div><pre tabIndex={0} className="overflow-x-auto rounded bg-gray-50 p-2 text-xs">{JSON.stringify(t.input_refs, null, 2)}</pre></>)}
         </section>
         <section className="card">
           <h2 className="h2">{def?.name ?? t.agent}</h2>

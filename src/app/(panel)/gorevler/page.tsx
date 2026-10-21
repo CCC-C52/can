@@ -36,7 +36,7 @@ export default async function TaskBoard({ searchParams }: { searchParams: SP }) 
         ))}
       </div>
       {tasks.length === 0 ? <Empty>Görev yok. <Link className="text-brand" href="/sohbet">Ana yöneticiye talimat verin.</Link></Empty> : (
-        <div className="flex gap-3 overflow-x-auto pb-3">
+        <div tabIndex={0} className="flex gap-3 overflow-x-auto pb-3">
           {cols.map((c) => {
             const list = tasks.filter((t) => t.status === c);
             if (!status && list.length === 0) return null;

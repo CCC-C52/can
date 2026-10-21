@@ -260,7 +260,17 @@ export async function decideAction(fd: FormData) {
   await act(str(fd, "back") || `/taslaklar/${id}`, async () => {
     const decision = str(fd, "decision") === "approved" ? "approved" : "rejected";
     const scopes = fd.getAll("scopes").map(String);
-    await decide(brand.id, str(fd, "versionId"), decision, { note: str(fd, "note"), scopes });
+    const note = str(fd, "note");
+    await decide(brand.id, str(fd, "versionId"), decision, { note, scopes });
+    // Ret + revizyon: ret notu, uzmana geri bildirim olarak verilir ve yeni sürüm üretilir (eski sürüm ve ret kaydı korunur)
+    if (decision === "rejected" && str(fd, "revise") === "on") {
+      try {
+        await requestRegeneration(brand.id, id, note || "Sahip bu sürümü reddetti; daha iyi bir sürüm hazırlayın.");
+      } catch (err) {
+        return `Sürüm reddedildi. Yeni sürüm başlatılamadı: ${(err as Error).message}`;
+      }
+      return "Sürüm reddedildi; geri bildirimle yeni sürüm kuyruğa alındı.";
+    }
     return decision === "approved" ? "Sürüm onaylandı." : "Sürüm reddedildi.";
   });
 }

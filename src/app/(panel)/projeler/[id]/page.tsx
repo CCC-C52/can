@@ -57,7 +57,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
 
       <section className="card mb-4">
         <h2 className="h2 mb-2">Görevler ve bağımlılıklar</h2>
-        <div className="overflow-x-auto">
+        <div tabIndex={0} className="overflow-x-auto">
           <table className="table">
             <thead><tr><th>Görev</th><th>Uzman</th><th>Durum</th><th>Önce</th><th>Maliyet (gerçekleşen)</th></tr></thead>
             <tbody>

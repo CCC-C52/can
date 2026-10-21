@@ -98,7 +98,8 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
                     ))}
                     {scopes.includes("price_change") && <p className="text-xs text-amber-800">Bu öneri fiyat değişikliği içeriyor; canlıya uygulamak için “Fiyat / indirim değişikliği” kapsamı da gerekir.</p>}
                   </fieldset>
-                  <input name="note" className="input" placeholder="Not (isteğe bağlı)" />
+                  <input name="note" className="input" placeholder="Not / ret gerekçesi (isteğe bağlı)" aria-label="Not" />
+                  {task && <label className="flex items-center gap-2 text-xs"><input type="checkbox" name="revise" defaultChecked /> Reddedersem bu notla yeni sürüm üretilsin (yeniden üretim hakkı: {task.regen_count}/{limits.maxRegenerations})</label>}
                   <div className="flex gap-2">
                     <button name="decision" value="approved" className="btn-primary">Bu sürümü onayla</button>
                     <button name="decision" value="rejected" className="btn-danger">Reddet</button>

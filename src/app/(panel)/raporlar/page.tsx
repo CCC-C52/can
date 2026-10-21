@@ -11,7 +11,7 @@ function CostTable({ title, rows }: { title: string; rows: { key: string; estima
     <section className="card">
       <h2 className="h2 mb-2">{title}</h2>
       {rows.length === 0 ? <p className="muted">Kayıt yok.</p> : (
-        <div className="overflow-x-auto"><table className="table">
+        <div tabIndex={0} className="overflow-x-auto"><table className="table">
           <thead><tr><th>Kalem</th><th>Tahmini (üst sınır)</th><th>Gerçekleşen</th><th>Bilinmeyen</th><th>Kayıt</th></tr></thead>
           <tbody>{rows.map((r) => <tr key={r.key}><td className="max-w-xs truncate">{r.key}</td><td>{usd(r.estimated)}</td><td>{r.actual === null && r.unknown_count ? "Bilinmiyor" : usd(r.actual)}</td><td>{r.unknown_count || "—"}</td><td>{r.entries}</td></tr>)}</tbody>
         </table></div>

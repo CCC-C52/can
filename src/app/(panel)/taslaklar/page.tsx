@@ -21,7 +21,7 @@ export default async function Drafts({ searchParams }: { searchParams: SP }) {
         {Object.entries(KIND).map(([k, l]) => <Link key={k} href={`/taslaklar?kind=${k}`} className={`rounded-full px-3 py-1 ${kind === k ? "bg-ink text-white" : "bg-white ring-1 ring-line"}`}>{l} ({all.filter((o) => o.kind === k).length})</Link>)}
       </div>
       {outputs.length === 0 ? <Empty>Henüz çıktı yok.</Empty> : (
-        <div className="card overflow-x-auto p-0">
+        <div tabIndex={0} className="card overflow-x-auto p-0">
           <table className="table">
             <thead><tr><th className="pl-4">Başlık</th><th>Tür</th><th>Uzman</th><th>Sürüm</th><th>Durum</th><th>Güncelleme</th></tr></thead>
             <tbody>

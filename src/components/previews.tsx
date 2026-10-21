@@ -75,7 +75,7 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
         <div className="space-y-4 text-sm">
           <p>{content.summary}</p>
           <div className="label">Mevcut ve önerilen değerler</div>
-          <div className="overflow-x-auto">
+          <div tabIndex={0} className="overflow-x-auto">
             <table className="table">
               <thead><tr><th>Ürün</th><th>Alan</th><th>Mevcut</th><th>Önerilen</th><th>Gerekçe</th></tr></thead>
               <tbody>{content.product_changes?.map((c: any, i: number) => (
@@ -177,7 +177,7 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
           )}
           {content.calendar_7d?.length > 0 && (
             <div><div className="label">7 günlük organik plan</div>
-              <div className="overflow-x-auto"><table className="table"><thead><tr><th>Gün</th><th>Tarih</th><th>Platform</th><th>Biçim</th><th>Tema</th><th>Gönderi</th></tr></thead>
+              <div tabIndex={0} className="overflow-x-auto"><table className="table"><thead><tr><th>Gün</th><th>Tarih</th><th>Platform</th><th>Biçim</th><th>Tema</th><th>Gönderi</th></tr></thead>
                 <tbody>{content.calendar_7d.map((d: any) => <tr key={d.day}><td>{d.day}</td><td className="whitespace-nowrap">{d.date}</td><td>{d.platform}</td><td>{d.format}</td><td>{d.theme}</td><td>{d.post_ref || "—"}</td></tr>)}</tbody></table></div></div>
           )}
           <List title="Bilinmeyenler" items={content.unknowns} />
@@ -191,7 +191,7 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
         </div>
       );
     default:
-      return <pre className="overflow-x-auto rounded bg-gray-50 p-3 text-xs">{JSON.stringify(content, null, 2)}</pre>;
+      return <pre tabIndex={0} className="overflow-x-auto rounded bg-gray-50 p-3 text-xs">{JSON.stringify(content, null, 2)}</pre>;
   }
 }
 

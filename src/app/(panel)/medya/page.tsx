@@ -30,9 +30,9 @@ export default async function MediaPage({ searchParams }: { searchParams: SP }) 
         <div className="lg:col-span-2">
           <form className="card mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
             <input name="q" defaultValue={filters.search} placeholder="Ara (ad, etiket, tema)" className="input md:col-span-2" />
-            <select name="kind" defaultValue={filters.kind ?? ""} className="input"><option value="">Tüm türler</option><option value="photo">Fotoğraf</option><option value="video">Video</option><option value="logo">Logo</option><option value="design">Tasarım</option><option value="document">Belge</option></select>
-            <select name="origin" defaultValue={filters.origin ?? ""} className="input"><option value="">Tüm kökenler</option>{Object.entries(MEDIA_ORIGIN_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
-            <select name="productId" defaultValue={filters.productId ?? ""} className="input"><option value="">Tüm ürünler</option>{products.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select>
+            <select name="kind" defaultValue={filters.kind ?? ""} className="input" aria-label="Tür filtresi"><option value="">Tüm türler</option><option value="photo">Fotoğraf</option><option value="video">Video</option><option value="logo">Logo</option><option value="design">Tasarım</option><option value="document">Belge</option></select>
+            <select name="origin" defaultValue={filters.origin ?? ""} className="input" aria-label="Köken filtresi"><option value="">Tüm kökenler</option>{Object.entries(MEDIA_ORIGIN_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+            <select name="productId" defaultValue={filters.productId ?? ""} className="input" aria-label="Ürün filtresi"><option value="">Tüm ürünler</option>{products.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select>
             <div className="col-span-2 flex gap-2 md:col-span-5"><button className="btn">Filtrele</button><Link href="/medya" className="btn">Temizle</Link></div>
           </form>
           {media.length === 0 ? <Empty>Dosya yok.</Empty> : <div className="grid grid-cols-2 gap-3 md:grid-cols-3">{media.map((m) => <MediaThumb key={m.id} m={m} />)}</div>}

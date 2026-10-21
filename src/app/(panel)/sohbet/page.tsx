@@ -31,12 +31,12 @@ export default async function ChatPage({ searchParams }: { searchParams: SP }) {
       <div className="min-w-0 flex-1">
         <PageHeader title="Ana yönetici" subtitle={<>Talimatınızı yazın; yönetici görevlere ayırıp uzmanlara dağıtır. Marka: <strong>{brand.name}</strong> · {mode.mode === "demo" ? <DemoBadge /> : mode.mode === "off" ? <Badge tone="warn">AI bağlı değil</Badge> : <Badge tone="ok">Gerçek AI</Badge>}</>} actions={<AutoRefresh active={running} />} />
         <Flash ok={ok} err={err} />
-        <div className="card mb-4 max-h-[60vh] space-y-3 overflow-y-auto">
+        <div tabIndex={0} className="card mb-4 max-h-[60vh] space-y-3 overflow-y-auto">
           {messages.length === 0 && <p className="muted">Henüz konuşma yok. Aşağıdan ilk talimatınızı verin.</p>}
           {messages.map((m) => (
             <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[90%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-brand text-white" : "bg-gray-100 text-ink"}`}>
-                <div className="mb-1 flex items-center gap-2 text-[11px] opacity-75">
+                <div className="mb-1 flex items-center gap-2 text-[11px] opacity-95">
                   {m.role === "user" ? "Siz" : "Ana yönetici"} · {dt(m.created_at)}
                   {m.data?.isDemo && <span className="rounded bg-fuchsia-100 px-1 text-fuchsia-700">DEMO plan</span>}
                 </div>

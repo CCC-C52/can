@@ -117,3 +117,27 @@ describe("Görev yeniden deneme ve kurtarma", () => {
     expect(versions!.n).toBe(1);
   });
 });
+
+describe("Ret ve revizyon", () => {
+  it("reddedilen sürüm notla yeniden üretilir; ret kaydı ve eski sürüm korunur; eski sürüm onaylanamaz", async () => {
+    const { decide, listApprovals, listVersions, listOutputs } = await import("@/lib/services/outputs");
+    const { requestRegeneration } = await import("@/lib/orchestrator/projects");
+    const feedbacks: (string | null | undefined)[] = [];
+    const model = new Behaviour(async (req) => { feedbacks.push((req as any).demoInput?.feedback); });
+    const projectId = await start(model);
+    await runUntilIdle(new Engine("rev-1"));
+    const out = (await listOutputs(brandId, { projectId })).find((o) => o.kind === "strategy")!;
+    const [v1] = await listVersions(brandId, out.id);
+    await decide(brandId, v1.id, "rejected", { note: "Daha net hedef kitle", scopes: [] });
+    await requestRegeneration(brandId, out.id, "Daha net hedef kitle");
+    await runUntilIdle(new Engine("rev-2"));
+    const versions = await listVersions(brandId, out.id);
+    expect(versions.map((v) => v.version)).toEqual([2, 1]);
+    expect(feedbacks.at(-1)).toBe("Daha net hedef kitle");
+    const approvals = await listApprovals(brandId, out.id);
+    expect(approvals.some((a) => a.output_version_id === v1.id && a.decision === "rejected" && a.note === "Daha net hedef kitle")).toBe(true);
+    await expect(decide(brandId, v1.id, "approved")).rejects.toThrow(/en güncel/);
+    const t = await strategyOf(projectId);
+    expect(t.regen_count).toBe(1);
+  });
+});
