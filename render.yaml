@@ -2,6 +2,11 @@
 # Kurulum: Render Dashboard → New → Blueprint → bu depoyu ve çalışma dalını seçin.
 # Gizli değerler (sync: false) Blueprint ilk oluşturulurken Render ekranında sorulur; bu dosyada değer YOKTUR.
 # Ayrıntılı adımlar: docs/DEPLOY.md
+#
+# DAĞITIM DENETİMİ: servisler bu dalı izler. Geliştirme commit'lerinin canlıya kendiliğinden gitmemesi için
+# otomatik dağıtım kapalıdır (autoDeployTrigger: off); canlıya alma sahibin Render'da "Manual Deploy" ile verdiği
+# karardır. Render'ın bilinen bir sorunu nedeniyle Blueprint ayarı değişen commit'ler yine dağıtım tetikleyebilir:
+# Dashboard'da servis → Settings → Auto-Deploy = Off ve Blueprint → Auto Sync = Off ayarlarını da kapatın.
 
 envVarGroups:
   - name: aiops-shared
@@ -42,6 +47,7 @@ services:
     plan: starter
     region: frankfurt
     branch: claude/amazing-goodall-qkxupd
+    autoDeployTrigger: "off"
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     preDeployCommand: npm run db:migrate
@@ -69,9 +75,12 @@ services:
   - type: worker
     name: aiops-worker
     runtime: docker
+    # Ölçüm (Ekim 2026): 1080x1920, 5 bölüm + geçişli kurguda ffmpeg ~440 MB + Node ~150 MB → Starter (512 MB) yetersiz.
+    # Video kurgusu kullanılacaksa sahibin kararıyla Standard (2 GB, $25/ay) önerilir; bu dosya maliyeti kendiliğinden değiştirmez.
     plan: starter
     region: frankfurt
     branch: claude/amazing-goodall-qkxupd
+    autoDeployTrigger: "off"
     dockerfilePath: ./Dockerfile
     dockerCommand: npm run worker
     envVars:

@@ -14,10 +14,12 @@ const execFileAsync = promisify(execFile);
 // Ses kaldırılır (müzik/ses lisansı manuel karardır). Çıktı ffprobe ile doğrulanmadan başarılı sayılmaz.
 
 export const EDIT_SIZES: Record<string, [number, number]> = { "9:16": [1080, 1920], "1:1": [1080, 1080], "4:5": [1080, 1350], "16:9": [1920, 1080] };
-const SAFE_INPUT = ["-protocol_whitelist", "file,pipe"];
+// Her girdi için: yalnızca yerel dosya protokolü ve tek iş parçacıklı çözücü (çok girdili kurguda bellek tasarrufu)
+const SAFE_INPUT = ["-protocol_whitelist", "file,pipe", "-threads", "1"];
 const FPS = 30;
 export const TRANSITION_S = 0.5;
 export const CARD_S = 2;
+const FFMPEG_THREADS = Math.max(1, Math.min(8, Number(process.env.FFMPEG_THREADS ?? 2) || 2));
 
 export type Cue = { start: number; end: number; text: string };
 export type EditClip = { file: string; start: number; duration: number; sourceDuration: number | null };
@@ -142,8 +144,10 @@ export async function renderEdit(args: EditArgs): Promise<EditResult> {
     const out = path.join(dir, "out.mp4");
     await execFileAsync(
       config.ffmpegPath,
-      ["-hide_banner", "-loglevel", "error", "-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[out]", "-an",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-r", String(FPS), "-movflags", "+faststart", out],
+      ["-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "1", ...inputs, "-filter_complex", filters.join(";"), "-map", "[out]", "-an",
+        // Bellek sınırı: küçük sunucularda (512 MB) çalışabilmesi için iş parçacığı ve ileri bakış sınırlandırılır
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", String(FFMPEG_THREADS), "-x264-params", "rc-lookahead=10:sync-lookahead=0",
+        "-pix_fmt", "yuv420p", "-r", String(FPS), "-movflags", "+faststart", out],
       { timeout: args.timeoutMs ?? 300_000, signal: args.signal, maxBuffer: 10 * 1024 * 1024 },
     );
     const probe = await validateRender(out, { width: W, height: H, duration: total });
