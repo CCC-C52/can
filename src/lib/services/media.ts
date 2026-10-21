@@ -39,6 +39,9 @@ export type MediaAsset = {
   version: number;
   source_task_id: string | null;
   source_output_version_id: string | null;
+  project_id?: string | null;
+  generation_method?: string;
+  alt_text?: string | null;
   created_at: string;
 };
 
@@ -168,6 +171,9 @@ export async function uploadMedia(
     db,
   );
   await audit({ brandId, actor: "user", action: "media.upload", message: `Medya yüklendi: ${asset!.filename} (${kind}, ${origin})`, data: { assetId: asset!.id } }, db);
+  // Gerçek içerik analizi arka planda (işleyici) yapılır
+  const { enqueueAnalysis } = await import("@/lib/media-analysis");
+  await enqueueAnalysis(asset!, {}, db);
   return { asset: asset!, duplicate: false };
 }
 

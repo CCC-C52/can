@@ -2,6 +2,7 @@ import { q, type Queryable, getPool } from "@/lib/db/pool";
 import { getBrand, listBrandFacts, listProductFacts, listProducts, listVariants } from "@/lib/services/brands";
 import { langLabel } from "@/lib/labels";
 import { AGENTS } from "./registry";
+import { compactAnalysis, type MediaAnalysis } from "@/lib/media-analysis";
 import type { AgentId } from "./schemas";
 
 export const UNKNOWN = "UNKNOWN";
@@ -21,6 +22,9 @@ export type MediaSummary = {
   themes: string[];
   rights_status: string;
   tags: { tag: string; source: string }[];
+  alt_text?: string | null;
+  /** Tamamlanmış gerçek içerik analizi (piksel/kare ölçümleri ve varsa vision özeti). Yoksa null. */
+  analysis?: ReturnType<typeof compactAnalysis>;
 };
 
 export type BrandContext = {
@@ -75,9 +79,13 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
     listProducts(brandId, db),
     listVariants(brandId, undefined, db),
     listProductFacts(brandId, undefined, db),
-    q<MediaSummary>(
-      `SELECT id, kind, origin, filename, product_id, duration_s, width, height, format, shot_type, colors, themes, rights_status, tags
-       FROM media_assets WHERE brand_id = $1 ORDER BY created_at DESC LIMIT 200`,
+    q<MediaSummary & { a: MediaAnalysis | null }>(
+      `SELECT m.id, m.kind, m.origin, m.filename, m.product_id, m.duration_s, m.width, m.height, m.format, m.shot_type, m.colors, m.themes,
+              m.rights_status, m.tags, m.alt_text, row_to_json(a.*) AS a
+       FROM media_assets m
+       LEFT JOIN LATERAL (SELECT * FROM media_analyses x WHERE x.asset_id = m.id AND x.brand_id = m.brand_id AND x.status = 'completed'
+                          ORDER BY (x.level = 'vision') DESC, x.created_at DESC LIMIT 1) a ON true
+       WHERE m.brand_id = $1 ORDER BY m.created_at DESC LIMIT 80`,
       [brandId],
       db,
     ),
@@ -119,6 +127,6 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
       verified_facts: pfacts.filter((f) => f.product_id === p.id && f.status === "verified").map((f) => ({ attribute: f.attribute, value: f.value })),
       unverified_facts: pfacts.filter((f) => f.product_id === p.id && f.status !== "verified").map((f) => ({ attribute: f.attribute, value: f.value })),
     })),
-    media: can("media.read") ? media : [],
+    media: can("media.read") ? media.map(({ a, ...m }) => ({ ...m, analysis: compactAnalysis(a) })) : [],
   };
 }

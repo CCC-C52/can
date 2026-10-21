@@ -13,7 +13,7 @@ export function MediaThumb({ m, big = false }: { m: MediaAsset; big?: boolean })
         <video src={src} controls preload="metadata" className={`w-full bg-black ${big ? "max-h-[70vh]" : "max-h-72"}`} />
       ) : m.mime_type.startsWith("image/") && m.mime_type !== "image/vnd.adobe.photoshop" ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={m.filename} className={`w-full object-contain ${big ? "max-h-[70vh]" : "max-h-72"} bg-gray-50`} loading="lazy" />
+        <img src={src} alt={m.alt_text ?? m.filename} className={`w-full object-contain ${big ? "max-h-[70vh]" : "max-h-72"} bg-gray-50`} loading="lazy" />
       ) : (
         <div className="flex h-40 items-center justify-center bg-gray-50 text-xs text-muted">{m.mime_type}</div>
       )}

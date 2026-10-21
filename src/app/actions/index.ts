@@ -22,7 +22,6 @@ import { testShopify, syncShopifyProducts } from "@/lib/adapters/shopify";
 import { testInstagram } from "@/lib/adapters/instagram";
 import { testOpenAIImages } from "@/lib/adapters/images";
 import { testAnthropic } from "@/lib/models/test";
-import { tagWithAI } from "@/lib/services/tagging";
 import { audit } from "@/lib/audit";
 
 // ---------------------------------------------------------------- Oturum
@@ -327,12 +326,22 @@ export async function updateMediaAction(fd: FormData) {
   });
 }
 
-export async function aiTagAction(fd: FormData) {
+export async function analyzeMediaAction(fd: FormData) {
   const brand = await requireBrand();
   const id = str(fd, "id");
   await act(`/medya/${id}`, async () => {
-    const n = await tagWithAI(brand.id, id);
-    return `${n} AI etiketi eklendi. Etiketleri düzeltebilirsiniz.`;
+    const { requestAnalysis } = await import("@/lib/media-analysis");
+    const a = await requestAnalysis(brand.id, id);
+    return a.status === "completed" ? "Bu dosya bu analiz sürümüyle zaten analiz edilmiş (önbellekten)." : "Analiz kuyruğa alındı; işleyici birkaç saniye içinde başlatır.";
+  });
+}
+
+export async function backfillAnalysesAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/medya", async () => {
+    const { backfillAnalyses } = await import("@/lib/media-analysis");
+    const n = await backfillAnalyses(brand.id, { vision: str(fd, "vision") === "1" ? true : undefined });
+    return `${n} dosya analiz kuyruğuna alındı.`;
   });
 }
 

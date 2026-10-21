@@ -43,6 +43,18 @@ describe("AnthropicAdapter (sahte HTTP)", () => {
     expect(captured.body.stream).toBe(true);
   });
 
+  it("görüntü girdileri base64 görüntü blokları olarak etiketleriyle birlikte gönderilir", async () => {
+    let body: any;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => { body = JSON.parse(init.body); return sse(JSON.stringify(sample)); }) as any;
+    const a = new AnthropicAdapter("claude-opus-5-5", "sk-ant-test");
+    await a.generate({ agent: "quality", purpose: "vision", system: "s", user: "analiz et", schema: StrategySchema, maxTokens: 100, demoInput: null,
+      images: [{ mediaType: "image/jpeg", base64: "QUJD", label: "Kare 1 · 0.5 sn" }] });
+    const content = body.messages[0].content;
+    expect(content[0]).toEqual({ type: "text", text: "Kare 1 · 0.5 sn" });
+    expect(content[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QUJD" } });
+    expect(content.at(-1)).toEqual({ type: "text", text: "analiz et" });
+  });
+
   it("şemaya uymayan çıktı geçici hata; reddetme kalıcı hata olur", async () => {
     globalThis.fetch = vi.fn(async () => sse(JSON.stringify({ wrong: true }))) as any;
     const a = new AnthropicAdapter("claude-opus-5-5", "sk-ant-test");

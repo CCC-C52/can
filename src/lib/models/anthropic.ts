@@ -50,10 +50,11 @@ export class AnthropicAdapter implements TextModelAdapter {
     return `anthropic:${this.model}`;
   }
 
-  estimateCostUsd(req: { system: string; user: string; maxTokens: number }): number | null {
+  estimateCostUsd(req: { system: string; user: string; maxTokens: number; imageCount?: number }): number | null {
     const price = anthropicPrice(this.model);
     if (!price) return null;
-    const input = approxTokens(req.system) + approxTokens(req.user);
+    // Görsel başına üst sınır ~1.600 token (uzun kenar ≤ 1568 px)
+    const input = approxTokens(req.system) + approxTokens(req.user) + (req.imageCount ?? 0) * 1600;
     return (input * price.input + req.maxTokens * price.output) / 1_000_000;
   }
 
@@ -70,7 +71,20 @@ export class AnthropicAdapter implements TextModelAdapter {
           thinking: { type: "adaptive" },
           output_config: { effort: config.anthropic.effort, format: { type: "json_schema", schema: jsonSchema } },
           system: req.system,
-          messages: [{ role: "user", content: req.user }],
+          messages: [
+            {
+              role: "user",
+              content: req.images?.length
+                ? [
+                    ...req.images.flatMap((img) => [
+                      ...(img.label ? [{ type: "text" as const, text: img.label }] : []),
+                      { type: "image" as const, source: { type: "base64" as const, media_type: img.mediaType, data: img.base64 } },
+                    ]),
+                    { type: "text" as const, text: req.user },
+                  ]
+                : req.user,
+            },
+          ],
         },
         { signal: req.signal },
       );

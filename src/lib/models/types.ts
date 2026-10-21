@@ -11,6 +11,8 @@ export type GenerateRequest<T> = {
   signal?: AbortSignal;
   /** Demo üretici için yapılandırılmış girdi (gerçek modelde kullanılmaz). */
   demoInput: unknown;
+  /** Görüntü girdileri (gerçek pikseller). Her biri isteğe bağlı bir etiketle (ör. "kare 2 · 3,5 sn") gönderilir. */
+  images?: { mediaType: "image/jpeg" | "image/png" | "image/webp"; base64: string; label?: string }[];
 };
 
 export type GenerateResult<T> = {
@@ -30,7 +32,7 @@ export interface TextModelAdapter {
   /** Doluysa model kullanılamaz; nedeni burada yazar. */
   readonly unavailableReason?: string;
   /** Çağrıdan önce üst sınır maliyet tahmini; null = tahmin edilemiyor. */
-  estimateCostUsd(req: { system: string; user: string; maxTokens: number }): number | null;
+  estimateCostUsd(req: { system: string; user: string; maxTokens: number; imageCount?: number }): number | null;
   generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>>;
 }
 

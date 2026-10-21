@@ -6,12 +6,22 @@ import { Empty, Flash, PageHeader } from "@/components/ui";
 import { MediaThumb } from "@/components/previews";
 import { Uploader } from "@/components/uploader";
 import { MEDIA_ORIGIN_LABEL } from "@/lib/labels";
+import { backfillAnalysesAction } from "@/app/actions";
+import { SubmitButton } from "@/components/client";
+import { visionModel, ANALYSIS_VERSION } from "@/lib/media-analysis";
+import { q1 } from "@/lib/db/pool";
 
 export default async function MediaPage({ searchParams }: { searchParams: SP }) {
   const { ok, err, one } = await flash(searchParams);
   const brand = await requireBrand();
   const filters = { kind: one("kind"), origin: one("origin"), productId: one("productId"), search: one("q") };
-  const [media, products] = await Promise.all([listMedia(brand.id, filters), listProducts(brand.id)]);
+  const [media, products, miss] = await Promise.all([
+    listMedia(brand.id, filters), listProducts(brand.id),
+    q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM media_assets m WHERE m.brand_id = $1 AND m.origin IN ('real_photo','real_video','design_file','ai_generated')
+      AND NOT EXISTS (SELECT 1 FROM media_analyses a WHERE a.asset_id = m.id AND a.analysis_version = $2 AND a.status IN ('pending','processing','completed'))`, [brand.id, ANALYSIS_VERSION]),
+  ]);
+  const missing = miss?.n ?? 0;
+  const vision = !!visionModel();
   return (
     <div>
       <PageHeader title="Medya arşivi" subtitle={`${media.length} dosya · yalnızca ${brand.name} markasına ait`} />
@@ -30,6 +40,11 @@ export default async function MediaPage({ searchParams }: { searchParams: SP }) 
         <section className="card h-fit">
           <h2 className="h2 mb-2">Dosya yükle</h2>
           <Uploader products={products.map((p) => ({ id: p.id, title: p.title }))} />
+        </section>
+        <section className="card h-fit lg:col-start-3">
+          <h2 className="h2 mb-1">Arşiv analizi</h2>
+          <p className="text-xs text-muted">Analizi olmayan dosya: <strong>{missing}</strong>. Yerel piksel analizi ücretsizdir. Görsel model bağlıysa ({vision ? "bağlı" : "bağlı değil"}) her dosya için ücretli bir model çağrısı yapılır (görsel başına yaklaşık {vision ? "0,01–0,05 $" : "—"}) ve bütçe sınırları uygulanır.</p>
+          <form action={backfillAnalysesAction} className="mt-2"><SubmitButton className="btn w-full" disabled={missing === 0} confirm={vision ? `${missing} dosya görsel modelle analiz edilecek ve ücretlendirilecek. Devam edilsin mi?` : undefined}>Eksik analizleri başlat</SubmitButton></form>
         </section>
       </div>
     </div>

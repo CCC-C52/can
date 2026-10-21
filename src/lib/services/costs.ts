@@ -51,12 +51,12 @@ export async function assertBudget(args: { taskId: string | null; estimateUsd: n
 }
 
 export async function recordCost(
-  e: { brandId: string | null; projectId?: string | null; taskId?: string | null; service: string; category?: "ai_generation" | "ad_spend"; kind: "estimated" | "actual"; amountUsd: number | null; units?: unknown; note?: string },
+  e: { brandId: string | null; projectId?: string | null; taskId?: string | null; service: string; category?: "ai_generation" | "ad_spend"; kind: "estimated" | "actual"; amountUsd: number | null; units?: unknown; note?: string; analysisId?: string | null; providerJobId?: string | null },
   db: Queryable = getPool(),
 ) {
   await q(
-    `INSERT INTO cost_entries (brand_id, project_id, task_id, service, category, kind, amount_usd, units, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [e.brandId, e.projectId ?? null, e.taskId ?? null, e.service, e.category ?? "ai_generation", e.kind, e.amountUsd, JSON.stringify(e.units ?? {}), e.note ?? null],
+    `INSERT INTO cost_entries (brand_id, project_id, task_id, service, category, kind, amount_usd, units, note, analysis_id, provider_job_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [e.brandId, e.projectId ?? null, e.taskId ?? null, e.service, e.category ?? "ai_generation", e.kind, e.amountUsd, JSON.stringify(e.units ?? {}), e.note ?? null, e.analysisId ?? null, e.providerJobId ?? null],
     db,
   );
   if (e.taskId) {

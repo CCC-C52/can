@@ -9,6 +9,8 @@ export interface StorageAdapter {
   readonly driver: "local" | "s3";
   put(key: string, data: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
+  /** Büyük dosyaları belleğe almadan yerel dosyaya akıtır. */
+  downloadToFile(key: string, file: string): Promise<number>;
   delete(key: string): Promise<void>;
   check(): Promise<{ ok: boolean; detail: string }>;
 }
@@ -39,6 +41,10 @@ export class LocalStorage implements StorageAdapter {
   }
   async get(key: string) {
     return fs.readFile(this.file(key));
+  }
+  async downloadToFile(key: string, file: string) {
+    await fs.copyFile(this.file(key), file);
+    return (await fs.stat(file)).size;
   }
   async delete(key: string) {
     await fs.rm(this.file(key), { force: true });
@@ -79,6 +85,13 @@ export class S3Storage implements StorageAdapter {
     const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));
     const bytes = await res.Body!.transformToByteArray();
     return Buffer.from(bytes);
+  }
+  async downloadToFile(key: string, file: string) {
+    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));
+    const { createWriteStream } = await import("node:fs");
+    const { pipeline } = await import("node:stream/promises");
+    await pipeline(res.Body as NodeJS.ReadableStream, createWriteStream(file));
+    return (await fs.stat(file)).size;
   }
   async delete(key: string) {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));

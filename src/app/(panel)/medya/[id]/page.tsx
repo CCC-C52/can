@@ -3,7 +3,10 @@ import { notFound } from "next/navigation";
 import { requireBrand, flash, type SP } from "@/lib/current";
 import { getMedia, mediaLineage } from "@/lib/services/media";
 import { listProducts } from "@/lib/services/brands";
-import { aiTagAction, updateMediaAction } from "@/app/actions";
+import { analyzeMediaAction, updateMediaAction } from "@/app/actions";
+import { AnalysisPanel } from "@/components/analysis";
+import { latestAnalysis } from "@/lib/media-analysis";
+import { AutoRefresh } from "@/components/client";
 import { Badge, Flash, PageHeader, dt } from "@/components/ui";
 import { SubmitButton } from "@/components/client";
 import { MediaThumb } from "@/components/previews";
@@ -16,7 +19,7 @@ export default async function MediaDetail({ params, searchParams }: { params: Pr
   const brand = await requireBrand();
   const m = await getMedia(brand.id, id);
   if (!m) notFound();
-  const [lineage, products] = await Promise.all([mediaLineage(brand.id, id), listProducts(brand.id)]);
+  const [lineage, products, analysis] = await Promise.all([mediaLineage(brand.id, id), listProducts(brand.id), latestAnalysis(brand.id, id)]);
   const systemTags = m.tags.filter((t) => t.source === "system" || t.source === "auto" || t.source === "ai");
   const userTags = m.tags.filter((t) => t.source === "user").map((t) => t.tag).join(", ");
   return (
@@ -38,6 +41,16 @@ export default async function MediaDetail({ params, searchParams }: { params: Pr
             </dl>
             <div className="label mt-3">Önceki kullanım</div>
             {m.usage_history.length ? <ul className="text-xs">{m.usage_history.map((u, i) => <li key={i}>{dt(u.date)} · {u.channel} {u.note ?? ""}</li>)}</ul> : <p className="text-xs text-muted">Kayıt yok</p>}
+          </section>
+          <section className="card">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="h2">İçerik analizi</h2>
+              <span className="flex items-center gap-2">
+                <AutoRefresh active={!!analysis && ["pending", "processing"].includes(analysis.status)} />
+                <form action={analyzeMediaAction}><input type="hidden" name="id" value={m.id} /><SubmitButton className="btn px-2 py-1 text-xs">{analysis ? "Yeniden analiz et" : "Analiz et"}</SubmitButton></form>
+              </span>
+            </div>
+            <AnalysisPanel a={analysis} assetId={m.id} />
           </section>
           {(lineage.sources.length > 0 || lineage.derived.length > 0) && (
             <section className="card">
@@ -66,14 +79,6 @@ export default async function MediaDetail({ params, searchParams }: { params: Pr
             <label className="block"><span className="label">Kullanıcı etiketleri (virgülle)</span><input name="userTags" defaultValue={userTags} className="input" /></label>
             <SubmitButton>Kaydet</SubmitButton>
           </form>
-          {m.kind === "photo" || m.kind === "logo" ? (
-            <form action={aiTagAction} className="mt-3">
-              <input type="hidden" name="id" value={m.id} />
-              {config.anthropic.apiKey ? <SubmitButton className="btn w-full" pendingText="Etiketleniyor…">AI ile etiketle</SubmitButton> : <>
-                <button type="button" disabled className="btn w-full">AI ile etiketle (bağlantı bekliyor)</button>
-                <p className="mt-1 text-xs text-muted">Anthropic API anahtarı (AIOPS_ANTHROPIC_API_KEY) yok: AI etiketleme kullanılamaz; sahte etiket üretilmez.</p></>}
-            </form>
-          ) : null}
           {m.source_task_id && <Link href={`/gorevler/${m.source_task_id}`} className="mt-3 block text-xs text-brand">Üreten görev</Link>}
         </section>
       </div>
