@@ -12,8 +12,10 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "Marka seçili değil" }, { status: 400 });
   }
+  // Eski tek istekli yükleme: dosyanın tamamı belleğe alındığı için küçük dosyalarla sınırlı.
+  // Büyük dosyalar parçalı yükleme API'sini (/api/uploads) kullanır.
   const len = Number(req.headers.get("content-length") ?? 0);
-  if (len > config.maxUploadBytes * 1.1) return NextResponse.json({ error: "Dosya çok büyük" }, { status: 413 });
+  if (!len || len > Math.min(config.maxUploadBytes, 20 * 1024 * 1024)) return NextResponse.json({ error: "Bu uç yalnızca 20 MB'a kadar dosyalar içindir; parçalı yüklemeyi kullanın." }, { status: 413 });
   const form = await req.formData();
   const list = (k: string) => String(form.get(k) ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   const meta = {

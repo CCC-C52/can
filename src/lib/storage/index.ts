@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import { createReadStream } from "node:fs";
+import {
+  S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CopyObjectCommand, HeadObjectCommand,
+  CreateMultipartUploadCommand, UploadPartCommand, ListPartsCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "@/lib/config";
 
 // Dosya depolama adaptörü. Yerelde ./data/storage, üretimde S3 uyumlu servis.
@@ -11,6 +16,18 @@ export interface StorageAdapter {
   get(key: string): Promise<Buffer>;
   /** Büyük dosyaları belleğe almadan yerel dosyaya akıtır. */
   downloadToFile(key: string, file: string): Promise<number>;
+  /** Yerel dosyayı belleğe almadan yükler. */
+  putFile(key: string, file: string, contentType: string): Promise<void>;
+  copy(src: string, dst: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
+  // Parçalı yükleme
+  multipartStart(key: string, contentType: string): Promise<string>;
+  multipartPut(key: string, uploadId: string, part: number, data: Buffer): Promise<void>;
+  multipartList(key: string, uploadId: string): Promise<{ part: number; size: number; etag: string }[]>;
+  multipartComplete(key: string, uploadId: string): Promise<void>;
+  multipartAbort(key: string, uploadId: string): Promise<void>;
+  /** Doğrudan tarayıcı yüklemesi için imzalı parça adresi (yalnızca S3). */
+  multipartPartUrl?(key: string, uploadId: string, part: number, expiresIn: number): Promise<string>;
   delete(key: string): Promise<void>;
   check(): Promise<{ ok: boolean; detail: string }>;
 }
@@ -47,6 +64,60 @@ export class LocalStorage implements StorageAdapter {
     return (await fs.stat(file)).size;
   }
   async delete(key: string) {
+    await fs.rm(this.file(key), { force: true });
+  }
+  async putFile(key: string, file: string) {
+    const f = this.file(key);
+    await fs.mkdir(path.dirname(f), { recursive: true });
+    await fs.copyFile(file, f);
+  }
+  async copy(src: string, dst: string) {
+    const d = this.file(dst);
+    await fs.mkdir(path.dirname(d), { recursive: true });
+    await fs.copyFile(this.file(src), d);
+  }
+  async exists(key: string) {
+    return fs.stat(this.file(key)).then(() => true, () => false);
+  }
+  private partsDir(key: string, uploadId: string) {
+    return this.file(`${key}.parts/${safeKey(uploadId)}`);
+  }
+  async multipartStart(key: string) {
+    const id = `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    await fs.mkdir(this.partsDir(key, id), { recursive: true });
+    return id;
+  }
+  async multipartPut(key: string, uploadId: string, part: number, data: Buffer) {
+    const dir = this.partsDir(key, uploadId);
+    const tmp = path.join(dir, `.p${part}.${process.pid}.tmp`);
+    await fs.writeFile(tmp, data);
+    await fs.rename(tmp, path.join(dir, `p${String(part).padStart(5, "0")}`)); // atomik: yarım parça görünmez
+  }
+  async multipartList(key: string, uploadId: string) {
+    const dir = this.partsDir(key, uploadId);
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    const out = [];
+    for (const n of names.filter((x) => /^p\d{5}$/.test(x))) {
+      const st = await fs.stat(path.join(dir, n));
+      out.push({ part: Number(n.slice(1)), size: st.size, etag: `${st.size}-${st.mtimeMs}` });
+    }
+    return out.sort((a, b) => a.part - b.part);
+  }
+  async multipartComplete(key: string, uploadId: string) {
+    const dir = this.partsDir(key, uploadId);
+    const parts = await this.multipartList(key, uploadId);
+    const f = this.file(key);
+    await fs.mkdir(path.dirname(f), { recursive: true });
+    const handle = await fs.open(f, "w");
+    try {
+      for (const p of parts) await handle.write(await fs.readFile(path.join(dir, `p${String(p.part).padStart(5, "0")}`)));
+    } finally {
+      await handle.close();
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+  async multipartAbort(key: string, uploadId: string) {
+    await fs.rm(this.partsDir(key, uploadId), { recursive: true, force: true });
     await fs.rm(this.file(key), { force: true });
   }
   async check() {
@@ -96,6 +167,51 @@ export class S3Storage implements StorageAdapter {
   async delete(key: string) {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));
   }
+  async putFile(key: string, file: string, contentType: string) {
+    const st = await fs.stat(file);
+    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: safeKey(key), Body: createReadStream(file), ContentLength: st.size, ContentType: contentType }));
+  }
+  async copy(src: string, dst: string) {
+    await this.client.send(new CopyObjectCommand({ Bucket: this.bucket, Key: safeKey(dst), CopySource: `${this.bucket}/${encodeURI(safeKey(src))}` }));
+  }
+  async exists(key: string) {
+    try {
+      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));
+      return true;
+    } catch (err) {
+      if ((err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404 || (err as Error).name === "NotFound") return false;
+      throw err;
+    }
+  }
+  async multipartStart(key: string, contentType: string) {
+    const r = await this.client.send(new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: safeKey(key), ContentType: contentType }));
+    if (!r.UploadId) throw new Error("Depolama parçalı yükleme kimliği döndürmedi.");
+    return r.UploadId;
+  }
+  async multipartPut(key: string, uploadId: string, part: number, data: Buffer) {
+    await this.client.send(new UploadPartCommand({ Bucket: this.bucket, Key: safeKey(key), UploadId: uploadId, PartNumber: part, Body: data, ContentLength: data.length }));
+  }
+  async multipartList(key: string, uploadId: string) {
+    const out: { part: number; size: number; etag: string }[] = [];
+    let marker: string | undefined;
+    do {
+      const r = await this.client.send(new ListPartsCommand({ Bucket: this.bucket, Key: safeKey(key), UploadId: uploadId, PartNumberMarker: marker }));
+      for (const p of r.Parts ?? []) out.push({ part: p.PartNumber!, size: p.Size ?? 0, etag: p.ETag! });
+      marker = r.IsTruncated ? r.NextPartNumberMarker : undefined;
+    } while (marker);
+    return out.sort((a, b) => a.part - b.part);
+  }
+  async multipartComplete(key: string, uploadId: string) {
+    // ETag'ler istemciden değil, depolamanın kendi listesinden alınır
+    const parts = await this.multipartList(key, uploadId);
+    await this.client.send(new CompleteMultipartUploadCommand({ Bucket: this.bucket, Key: safeKey(key), UploadId: uploadId, MultipartUpload: { Parts: parts.map((p) => ({ PartNumber: p.part, ETag: p.etag })) } }));
+  }
+  async multipartAbort(key: string, uploadId: string) {
+    await this.client.send(new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: safeKey(key), UploadId: uploadId })).catch(() => {});
+  }
+  async multipartPartUrl(key: string, uploadId: string, part: number, expiresIn: number) {
+    return getSignedUrl(this.client, new UploadPartCommand({ Bucket: this.bucket, Key: safeKey(key), UploadId: uploadId, PartNumber: part }), { expiresIn });
+  }
   async check() {
     try {
       await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
@@ -107,6 +223,10 @@ export class S3Storage implements StorageAdapter {
 }
 
 let cached: StorageAdapter | null = null;
+/** Yalnızca testler: depolama sürücüsünü değiştirmek için. */
+export function __setStorageForTests(s: StorageAdapter | null) {
+  cached = s;
+}
 export function getStorage(): StorageAdapter {
   if (!cached) cached = config.storageDriver === "s3" ? new S3Storage() : new LocalStorage();
   return cached;

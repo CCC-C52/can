@@ -10,6 +10,7 @@ import { textModelMode } from "@/lib/models";
 import { redact } from "@/lib/security/crypto";
 import { backupConfigured, maybeRunScheduledBackup } from "@/lib/services/backup";
 import { runAnalysisQueueOnce } from "@/lib/media-analysis";
+import { runUploadQueueOnce } from "@/lib/uploads";
 
 const problems = assertProductionConfig("worker");
 if (problems.length) {
@@ -38,6 +39,12 @@ async function main() {
       if (!analysisRunning) {
         analysisRunning = true;
         (async () => {
+          // Önce yükleme doğrulamaları (kullanıcı bekliyor), sonra analizler
+          for (let i = 0; i < 5; i++) {
+            const u = await runUploadQueueOnce(workerId);
+            if (!u) break;
+            console.log(`[worker] yükleme ${u.id.slice(0, 8)} (${u.filename}): ${u.status}${u.error ? ` — ${u.error}` : ""}`);
+          }
           for (let i = 0; i < 5; i++) {
             const a = await runAnalysisQueueOnce(workerId);
             if (!a) break;

@@ -34,7 +34,7 @@ export const config = {
     return str("LOCAL_STORAGE_DIR") ?? "./data/storage";
   },
   get maxUploadBytes() {
-    return num("MAX_UPLOAD_MB", 200) * 1024 * 1024;
+    return num("MAX_UPLOAD_MB", 2048) * 1024 * 1024;
   },
   s3: {
     get bucket() { return str("S3_BUCKET"); },

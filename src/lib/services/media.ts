@@ -47,7 +47,7 @@ export type MediaAsset = {
 
 export class MediaValidationError extends Error {}
 
-type Sniffed = { mime: string; ext: string; kind: "photo" | "video" | "design" | "document" };
+export type Sniffed = { mime: string; ext: string; kind: "photo" | "video" | "design" | "document" };
 
 /** Dosya türünü uzantıya değil içeriğin ilk baytlarına bakarak belirler. */
 export function sniff(buf: Buffer): Sniffed | null {
@@ -74,7 +74,15 @@ async function probeVideo(buf: Buffer, ext: string) {
   const tmp = path.join(os.tmpdir(), `probe-${crypto.randomUUID()}.${ext}`);
   await fs.writeFile(tmp, buf);
   try {
-    const { stdout } = await execFileAsync(config.ffprobePath, ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", tmp], { timeout: 30_000 });
+    return await probeVideoFile(tmp);
+  } finally {
+    await fs.rm(tmp, { force: true });
+  }
+}
+
+async function probeVideoFile(file: string) {
+  try {
+    const { stdout } = await execFileAsync(config.ffprobePath, ["-protocol_whitelist", "file,pipe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", file], { timeout: 60_000 });
     const info = JSON.parse(stdout);
     const v = (info.streams ?? []).find((s: any) => s.codec_type === "video");
     if (!v) throw new MediaValidationError("Dosyada video akışı bulunamadı.");
@@ -83,9 +91,27 @@ async function probeVideo(buf: Buffer, ext: string) {
     if (err instanceof MediaValidationError) throw err;
     if ((err as any).code === "ENOENT") return { width: null, height: null, duration: null }; // ffprobe yok
     throw new MediaValidationError("Video dosyası okunamadı (bozuk veya desteklenmeyen kodek).");
-  } finally {
-    await fs.rm(tmp, { force: true });
   }
+}
+
+/** Dosyanın ilk baytlarını okur (tür tespiti için; tüm dosya belleğe alınmaz). */
+export async function readHead(file: string, bytes = 4096) {
+  const h = await fs.open(file, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    const { bytesRead } = await h.read(buf, 0, bytes, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await h.close();
+  }
+}
+
+/** Dosyanın SHA-256 özeti (akışla; büyük videolar belleğe alınmaz). */
+export async function sha256File(file: string): Promise<string> {
+  const { createReadStream } = await import("node:fs");
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
 }
 
 function aspect(w: number | null, h: number | null): string | null {
@@ -130,13 +156,34 @@ export async function uploadMedia(
   if (file.buffer.length === 0) throw new MediaValidationError("Boş dosya.");
   if (file.buffer.length > config.maxUploadBytes) throw new MediaValidationError(`Dosya çok büyük (${(file.buffer.length / 1e6).toFixed(1)} MB). Sınır: ${config.maxUploadBytes / 1024 / 1024} MB.`);
   const s = sniff(file.buffer);
-  if (!s) throw new MediaValidationError("Desteklenmeyen dosya türü. İzin verilenler: JPEG, PNG, WebP, GIF, MP4, MOV, WebM, PDF, PSD, SVG.");
+  if (!s) throw new MediaValidationError(UNSUPPORTED);
+  const tmp = path.join(os.tmpdir(), `upload-${crypto.randomUUID()}.${s.ext}`);
+  await fs.writeFile(tmp, file.buffer);
+  try {
+    return await registerFile(brandId, { file: tmp, filename: file.filename, sizeBytes: file.buffer.length, sha256: sha256(file.buffer), sniffed: s }, meta, db);
+  } finally {
+    await fs.rm(tmp, { force: true });
+  }
+}
+
+export const UNSUPPORTED = "Desteklenmeyen dosya türü. İzin verilenler: JPEG, PNG, WebP, GIF, MP4, MOV, WebM, PDF, PSD, SVG.";
+
+/**
+ * Doğrulanmış (türü baytlardan tespit edilmiş, özeti hesaplanmış) yerel dosyayı arşive kaydeder.
+ * `sourceKey` verilirse dosya depolamada zaten oradadır (parçalı yükleme) ve kalıcı anahtara kopyalanır.
+ */
+export async function registerFile(
+  brandId: string,
+  f: { file: string; filename: string; sizeBytes: number; sha256: string; sniffed: Sniffed; sourceKey?: string },
+  meta: UploadMeta = {},
+  db: Queryable = getPool(),
+): Promise<{ asset: MediaAsset; duplicate: boolean }> {
+  const s = f.sniffed;
   if (meta.productId) {
     const p = await q1(`SELECT 1 FROM products WHERE id = $1 AND brand_id = $2`, [meta.productId, brandId], db);
     if (!p) throw new MediaValidationError("Ürün bu markaya ait değil.");
   }
-  const hash = sha256(file.buffer);
-  const existing = await q1<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND sha256 = $2`, [brandId, hash], db);
+  const existing = await q1<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND sha256 = $2`, [brandId, f.sha256], db);
   if (existing) return { asset: existing, duplicate: true };
 
   let width: number | null = null, height: number | null = null, duration: number | null = null;
@@ -144,37 +191,44 @@ export async function uploadMedia(
   const tags: { tag: string; source: string }[] = (meta.tags ?? []).filter(Boolean).map((t) => ({ tag: t, source: "user" }));
   if (s.kind === "photo") {
     try {
-      const m = await sharp(file.buffer).metadata();
+      const m = await sharp(f.file).metadata();
       width = m.width ?? null;
       height = m.height ?? null;
     } catch {
       throw new MediaValidationError("Görsel dosyası okunamadı (bozuk olabilir).");
     }
-    const dom = await dominantColor(file.buffer);
+    const dom = await dominantColor(await fs.readFile(f.file));
     if (dom) tags.push({ tag: `baskın renk ${dom}`, source: "auto" });
   } else if (s.kind === "video") {
-    const p = await probeVideo(file.buffer, s.ext);
+    const p = await probeVideoFile(f.file);
     width = p.width; height = p.height; duration = p.duration;
   }
   let kind: string = s.kind;
   if (meta.kind === "logo" && (s.kind === "photo" || s.kind === "design")) kind = "logo";
   if (meta.kind === "design") kind = "design";
   const origin = meta.origin ?? (s.kind === "video" ? "real_video" : kind === "photo" ? "real_photo" : "design_file");
-  const key = `brands/${brandId}/originals/${hash}.${s.ext}`;
-  await getStorage().put(key, file.buffer, s.mime);
+  const key = `brands/${brandId}/originals/${f.sha256}.${s.ext}`;
+  if (f.sourceKey) await getStorage().copy(f.sourceKey, key);
+  else await getStorage().putFile(key, f.file, s.mime);
   const asset = await q1<MediaAsset>(
     `INSERT INTO media_assets (brand_id, product_id, kind, origin, filename, mime_type, size_bytes, sha256, storage_key, width, height, duration_s,
        colors, themes, shot_type, format, rights_status, rights_note, tags)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
-    [brandId, meta.productId ?? null, kind, origin, file.filename.slice(0, 200), s.mime, file.buffer.length, hash, key, width, height, duration,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+     ON CONFLICT (brand_id, sha256) DO NOTHING RETURNING *`,
+    [brandId, meta.productId ?? null, kind, origin, f.filename.slice(0, 200), s.mime, f.sizeBytes, f.sha256, key, width, height, duration,
       colors, meta.themes ?? [], meta.shotType ?? null, aspect(width, height), meta.rightsStatus ?? "unknown", meta.rightsNote ?? null, JSON.stringify(tags)],
     db,
   );
-  await audit({ brandId, actor: "user", action: "media.upload", message: `Medya yüklendi: ${asset!.filename} (${kind}, ${origin})`, data: { assetId: asset!.id } }, db);
+  if (!asset) {
+    // Eşzamanlı aynı dosya yüklemesi: diğer istek kaydı oluşturdu
+    const again = await q1<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND sha256 = $2`, [brandId, f.sha256], db);
+    return { asset: again!, duplicate: true };
+  }
+  await audit({ brandId, actor: "user", action: "media.upload", message: `Medya yüklendi: ${asset.filename} (${kind}, ${origin}, ${(f.sizeBytes / 1e6).toFixed(1)} MB)`, data: { assetId: asset.id } }, db);
   // Gerçek içerik analizi arka planda (işleyici) yapılır
   const { enqueueAnalysis } = await import("@/lib/media-analysis");
-  await enqueueAnalysis(asset!, {}, db);
-  return { asset: asset!, duplicate: false };
+  await enqueueAnalysis(asset, {}, db);
+  return { asset, duplicate: false };
 }
 
 /** Üretilen/düzenlenen dosyayı yeni varlık olarak kaydeder ve kaynaklarla ilişkilendirir. */
