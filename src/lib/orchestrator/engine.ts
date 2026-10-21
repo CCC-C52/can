@@ -1,4 +1,4 @@
-import { q, q1, tx, getPool } from "@/lib/db/pool";
+import { q, q1, tx, getPool, type Queryable } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { log } from "@/lib/log";
 import { getLimits, isPaused, type Limits } from "@/lib/settings";
@@ -238,7 +238,7 @@ export async function claimTasks(workerId: string, limits: Limits): Promise<Task
 }
 
 /** Görevi yalnızca hâlâ bu işleyiciye aitse ve çalışıyorsa sonlandırır (iptal her zaman kazanır). */
-async function finish(task: Task, workerId: string, patch: { status: string; error?: string | null; phase?: string; outputId?: string; model?: string; service?: string; feedback?: string | null; regenInc?: boolean; failureClass?: FailureClass | null; nextAttemptMs?: number }) {
+async function finish(task: Task, workerId: string, patch: { status: string; error?: string | null; phase?: string; outputId?: string; model?: string; service?: string; feedback?: string | null; regenInc?: boolean; failureClass?: FailureClass | null; nextAttemptMs?: number }, db: Queryable = getPool()) {
   const terminal = ["completed", "failed", "cancelled", "approval_pending", "waiting_connection"].includes(patch.status);
   const r = await q1<Task>(
     `UPDATE tasks SET status = $3, error = $4, phase = COALESCE($5, phase), output_id = COALESCE($6, output_id), model = COALESCE($7, model),
@@ -250,9 +250,26 @@ async function finish(task: Task, workerId: string, patch: { status: string; err
      WHERE id = $1 AND lease_owner = $2 AND status = 'running' RETURNING *`,
     [task.id, workerId, patch.status, patch.error ?? null, patch.phase ?? null, patch.outputId ?? null, patch.model ?? null, patch.service ?? null,
       patch.feedback !== undefined, patch.feedback ?? null, !!patch.regenInc, terminal, patch.failureClass ?? null, patch.nextAttemptMs ?? null],
+    db,
   );
   if (!r) throw new CancelledError("Görev başka bir işlem tarafından değiştirildi (iptal edilmiş olabilir).");
   return r;
+}
+
+/**
+ * Sonuç yazımı yalnızca görev hâlâ bu işleyiciye aitken yapılır. Kiralaması dolup başka işleyiciye geçmiş (yavaş/donmuş)
+ * bir işleyici dönünce çıktı yazamaz: tekrar teslimde çift sürüm oluşmaz.
+ */
+async function owned<T>(task: Task, workerId: string, fn: (c: Queryable) => Promise<T>): Promise<T> {
+  return tx(async (c) => {
+    const r = await q1(`SELECT 1 FROM tasks WHERE id = $1 AND lease_owner = $2 AND status = 'running' FOR UPDATE`, [task.id, workerId], c);
+    if (!r) throw new CancelledError("Görev başka bir işleyiciye geçti veya iptal edildi; bu işleyicinin sonucu yazılmadı.");
+    return fn(c);
+  });
+}
+async function assertOwned(task: Task, workerId: string) {
+  const r = await q1(`SELECT 1 FROM tasks WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, [task.id, workerId]);
+  if (!r) throw new CancelledError("Görev başka bir işleyiciye geçti veya iptal edildi; bu işleyicinin sonucu yazılmadı.");
 }
 
 export async function updateProjectStatus(projectId: string) {
@@ -345,7 +362,7 @@ async function runPlan(ctx: RunCtx, workerId: string) {
   const res = await callModel(ctx, "manager", "plan", PlanSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [] }, 8000);
   const { tasks, dropped } = sanitizePlan(res.data, limits.maxTasksPerProject - 1);
 
-  await tx(async (c) => {
+  await owned(task, workerId, async (c) => {
     const ids = new Map<string, string>();
     for (const t of tasks) {
       const row = await q1<{ id: string }>(
@@ -366,16 +383,16 @@ async function runPlan(ctx: RunCtx, workerId: string) {
       );
       for (const id of ids.values()) await q(`INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1,$2)`, [rep!.id, id], c);
     }
-  });
 
-  const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "plan", title: "Görev planı" });
-  await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo });
-  const lines = tasks.map((t, i) => `${i + 1}. ${agentName(t.agent)} — ${t.title}${t.depends_on.length ? ` (önce: ${t.depends_on.join(", ")})` : ""}`);
-  const questions = (res.data.questions_for_owner ?? []).filter((x) => x.trim()).slice(0, 10);
-  await q(`UPDATE projects SET questions = $2 WHERE id = $1`, [task.project_id, JSON.stringify(questions)]);
-  const msg = [res.data.reply, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\nGörevler:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
-  await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, msg.trim(), JSON.stringify({ isDemo: res.isDemo, generator: res.generator })]);
-  await finish(task, workerId, { status: "completed", outputId: out.id, model: res.model, service: ctx.model.service });
+    const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "plan", title: "Görev planı" }, c);
+    await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo }, c);
+    const lines = tasks.map((t, i) => `${i + 1}. ${agentName(t.agent)} — ${t.title}${t.depends_on.length ? ` (önce: ${t.depends_on.join(", ")})` : ""}`);
+    const questions = (res.data.questions_for_owner ?? []).filter((x) => x.trim()).slice(0, 10);
+    await q(`UPDATE projects SET questions = $2 WHERE id = $1`, [task.project_id, JSON.stringify(questions)], c);
+    const msg = [res.data.reply, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\nGörevler:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
+    await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, msg.trim(), JSON.stringify({ isDemo: res.isDemo, generator: res.generator })], c);
+    await finish(task, workerId, { status: "completed", outputId: out.id, model: res.model, service: ctx.model.service }, c);
+  });
   // Görevsiz plan: soru varsa "bilgi bekliyor", yoksa tamamlandı (updateProjectStatus belirler)
 }
 
@@ -402,21 +419,23 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   const user = userPrompt({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra: await extraForAgent(agent, task.brand_id) });
   const res = await callModel(ctx, agent, "work", schema, user, { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key });
 
-  let outputId = task.output_id;
-  if (!outputId) {
-    const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent, kind: OUTPUT_KIND[agent], title: task.title });
-    outputId = out.id;
-  }
-  const v = await addVersion({ brandId: task.brand_id, outputId, content: res.data, createdBy: `agent:${agent}`, generator: res.generator, isDemo: res.isDemo });
-  await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: `agent:${agent}`, action: "output.version", message: `${agentName(agent)} çıktı üretti: ${task.title} (sürüm ${v.version}${res.isDemo ? ", DEMO" : ""})` });
+  await owned(task, workerId, async (c) => {
+    let outputId = task.output_id;
+    if (!outputId) {
+      const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent, kind: OUTPUT_KIND[agent], title: task.title }, c);
+      outputId = out.id;
+    }
+    const v = await addVersion({ brandId: task.brand_id, outputId, content: res.data, createdBy: `agent:${agent}`, generator: res.generator, isDemo: res.isDemo }, c);
+    await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: `agent:${agent}`, action: "output.version", message: `${agentName(agent)} çıktı üretti: ${task.title} (sürüm ${v.version}${res.isDemo ? ", DEMO" : ""})` }, c);
 
-  if (agent === "quality") {
-    // Analiz görevi bir kalite raporudur; ayrıca incelenmez.
-    await setVersionQa(v.id, { verdict: "pass", score: 0, checks: [{ name: "Analiz raporu", status: "pass", detail: "Kalite uzmanının kendi raporu; ayrıca incelenmedi." }], required_changes: [], sources: ["self"] });
-    await finish(task, workerId, { status: "completed", outputId, model: res.model, service: ctx.model.service });
-    return;
-  }
-  await finish(task, workerId, { status: "review_pending", phase: "review", outputId, model: res.model, service: ctx.model.service });
+    if (agent === "quality") {
+      // Analiz görevi bir kalite raporudur; ayrıca incelenmez.
+      await setVersionQa(v.id, { verdict: "pass", score: 0, checks: [{ name: "Analiz raporu", status: "pass", detail: "Kalite uzmanının kendi raporu; ayrıca incelenmedi." }], required_changes: [], sources: ["self"] }, c);
+      await finish(task, workerId, { status: "completed", outputId, model: res.model, service: ctx.model.service }, c);
+      return;
+    }
+    await finish(task, workerId, { status: "review_pending", phase: "review", outputId, model: res.model, service: ctx.model.service }, c);
+  });
 }
 
 // ---------------------------------------------------------------- Kalite kontrol
@@ -433,6 +452,7 @@ async function runReview(ctx: RunCtx, workerId: string) {
   const user = userPrompt({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
   const res = await callModel(ctx, "quality", "review", QaReviewSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [], target: { agent: task.agent, content: v.content } }, 6000);
   const merged = mergeReviews(rule, res.data as QaReview, res.isDemo ? "demo" : "model");
+  await assertOwned(task, workerId);
   await setVersionQa(v.id, { ...merged, reviewed_version: v.version, generator: res.generator });
   await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:quality", action: "qa.result", message: `Kalite kontrolü (${task.title}, sürüm ${v.version}): ${merged.verdict} — puan ${merged.score}` });
 
@@ -498,6 +518,7 @@ async function runRender(ctx: RunCtx, workerId: string) {
   const rctx: RenderCtx = { task, signal: ctx.signal, limits: ctx.limits, versionId: v.id, isDemo: v.is_demo, content: v.content };
   const o = task.agent === "design" ? await renderDesign(rctx) : task.agent === "video" ? await renderVideo(rctx) : null;
   if (!o) throw new PermanentError(`${task.agent} için render adımı yok.`);
+  await assertOwned(task, workerId);
   if (o.produced.length) await attachAssetsToVersion(v.id, o.produced);
   const summary = { produced: o.produced.length, waiting: o.waiting, in_progress: o.inProgress, failed: o.failed, uncertain: o.uncertain, notes: o.notes };
   await q(`UPDATE tasks SET input_refs = input_refs || $2::jsonb WHERE id = $1`, [task.id, JSON.stringify({ result: summary })]);
@@ -551,9 +572,6 @@ async function runReport(ctx: RunCtx, workerId: string) {
     mode: mode.mode,
     demo_outputs: demo?.n ?? 0,
   };
-  const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "project_report", title: "Proje raporu" });
-  await addVersion({ brandId: task.brand_id, outputId: out.id, content: report, createdBy: "agent:manager", generator: "local", isDemo: false });
-  await q(`UPDATE projects SET report = $2, updated_at = now() WHERE id = $1`, [task.project_id, JSON.stringify(report)]);
   const text = [
     `Rapor: ${report.headline}.`,
     report.summary,
@@ -563,8 +581,13 @@ async function runReport(ctx: RunCtx, workerId: string) {
     report.problems.length ? `\nSorunlar:\n${report.problems.map((x) => `• ${x}`).join("\n")}` : "",
     `\nMaliyet: tahmini ${fmtUsd(costs?.est)}, gerçekleşen ${fmtUsd(costs?.act)}${costs?.unknown ? `, ${costs.unknown} kayıt bilinmiyor` : ""}.`,
   ].filter(Boolean).join("\n");
-  await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, text, JSON.stringify({ report: true })]);
-  await finish(task, workerId, { status: "completed", outputId: out.id, service: "local" });
+  await owned(task, workerId, async (c) => {
+    const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "project_report", title: "Proje raporu" }, c);
+    await addVersion({ brandId: task.brand_id, outputId: out.id, content: report, createdBy: "agent:manager", generator: "local", isDemo: false }, c);
+    await q(`UPDATE projects SET report = $2, updated_at = now() WHERE id = $1`, [task.project_id, JSON.stringify(report)], c);
+    await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, text, JSON.stringify({ report: true })], c);
+    await finish(task, workerId, { status: "completed", outputId: out.id, service: "local" }, c);
+  });
 }
 
 function fmtUsd(n: number | null | undefined) {
