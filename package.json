@@ -14,6 +14,8 @@
     "test": "vitest run",
     "test:http": "tsx --tsconfig tsconfig.json tests/http/security.ts",
     "test:a11y": "tsx --tsconfig tsconfig.json tests/http/a11y.ts",
+    "acceptance": "tsx --tsconfig tsconfig.json scripts/acceptance.ts",
+    "test:live": "tsx --tsconfig tsconfig.json tests/live/live.ts",
     "db:restore": "tsx --tsconfig tsconfig.json scripts/restore.ts",
     "db:check": "tsx --tsconfig tsconfig.json scripts/db-check.ts"
   },

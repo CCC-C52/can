@@ -129,7 +129,11 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
 
   // 4) İçerik dili
   if (texts.length && (ctx.brand.content_language === "en" || ctx.brand.content_language === "tr")) {
-    const lang = detectLanguage(joined);
+    // Özel adlar (marka ve ürün adları) dil tespitinden çıkarılır: Türkçe adlı bir markanın İngilizce metni yanlış işaretlenmez
+    const names = [ctx.brand.name, ...ctx.products.map((p) => p.title)].filter((n) => n && n.length > 1).sort((a, b) => b.length - a.length);
+    let langText = joined;
+    for (const n of names) langText = langText.split(n).join(" ");
+    const lang = detectLanguage(langText);
     if (lang !== "unknown" && lang !== ctx.brand.content_language) {
       checks.push({ name: "İçerik dili", status: "fail", detail: `Müşteri metinleri '${lang}' görünüyor; marka içerik dili '${ctx.brand.content_language}'.` });
       required.push(`Müşteriye yönelik metinleri '${ctx.brand.content_language}' diline çevirin.`);
