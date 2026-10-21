@@ -88,10 +88,41 @@ describe("Ajan izinleri", () => {
     }
   });
 
-  it("izinsiz araç kullanımı görev hatasına yapılandırılmış olarak yansır ve proje başarılı gösterilmez", async () => {
-    const { assertTool, ToolPermissionError } = await import("@/lib/agents/registry");
-    expect(() => assertTool("marketing", "image.generate")).toThrow(ToolPermissionError);
-    const row = await q1(`SELECT 1`);
-    expect(row).not.toBeNull();
+  it("izin hatası yapılandırılmış hata sınıfıyla kaydedilir; bağımlılar iptal edilir; proje 'engellendi' olur, başarılı gösterilmez", async () => {
+    const original = [...AGENTS.marketing.tools];
+    AGENTS.marketing.tools.splice(AGENTS.marketing.tools.indexOf("outputs.read"), 1); // eski (hatalı) yapılandırmayı benzet
+    try {
+      setTextModelOverride(new ScriptedPlanModel({
+        reply: "plan", goals: [], questions_for_owner: [],
+        tasks: [
+          { key: "analysis", agent: "quality", title: "Analiz", instruction: "x", depends_on: [] },
+          { key: "strategy", agent: "marketing", title: "Strateji", instruction: "x", depends_on: ["analysis"] },
+          { key: "social", agent: "social", title: "Sosyal", instruction: "x", depends_on: ["strategy"] },
+        ],
+      } as Plan));
+      const { project } = await submitInstruction({ brandId, instruction: "eski hata benzetimi", idempotencyKey: key() });
+      await runUntilIdle(new Engine("perm-old"));
+      const tasks = await listTasks(brandId, { projectId: project.id });
+      const by = Object.fromEntries(tasks.map((t) => [t.key, t as typeof t & { failure_class: string | null }]));
+      expect(by.strategy.status).toBe("failed");
+      expect(by.strategy.failure_class).toBe("permission");
+      expect(by.social.status).toBe("cancelled");
+      expect(by.social.failure_class).toBe("dependency");
+      const p = await getProject(brandId, project.id);
+      expect(p!.status).toBe("blocked");
+      expect(p!.report.problems.join(" ")).toMatch(/Yetki hatası.*Öneri/);
+    } finally {
+      AGENTS.marketing.tools.splice(0, AGENTS.marketing.tools.length, ...original);
+    }
+  });
+
+  it("yönetici eksik bilgiyi sahibe sorar; görev açmadan soru sorarsa proje 'bilgi bekliyor' olur", async () => {
+    setTextModelOverride(new ScriptedPlanModel({ reply: "Önce birkaç bilgi gerekiyor.", goals: [], questions_for_owner: ["Kampanya bütçesi nedir?"], tasks: [] } as Plan));
+    const { project } = await submitInstruction({ brandId, instruction: "kampanya", idempotencyKey: key() });
+    await runUntilIdle(new Engine("perm-q"));
+    const p = await getProject(brandId, project.id);
+    expect(p!.status).toBe("needs_input");
+    const msg = await q1<{ content: string }>(`SELECT content FROM chat_messages WHERE project_id = $1 AND role = 'manager'`, [project.id]);
+    expect(msg!.content).toMatch(/Kampanya bütçesi nedir\?/);
   });
 });

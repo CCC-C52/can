@@ -10,6 +10,9 @@ export type AgentId = "manager" | SpecialistId;
 export const PlanSchema = z.object({
   reply: z.string().describe("Kullanıcıya Türkçe kısa yanıt: ne anladın, ne yapacaksın"),
   goals: z.array(z.string()).describe("Talimattan çıkarılan hedefler (Türkçe)"),
+  questions_for_owner: z
+    .array(z.string())
+    .describe("İşi doğru yapmak için sahipten öğrenilmesi gereken eksik bilgiler (Türkçe). Yoksa boş dizi."),
   tasks: z
     .array(
       z.object({

@@ -35,6 +35,7 @@ You turn the operator's instruction into goals and a small dependency graph of t
 - quality: analysis tasks (performance/cost/brand audits). Every output is automatically quality-checked; do not add QA tasks for that.
 Keep the plan minimal (at most the task limit given). depends_on may only reference keys of earlier tasks. Independent tasks run in parallel.
 If the instruction is only a question that needs no work, return an empty task list and answer in "reply".
+List missing information that only the owner can provide (e.g. unknown audience, prices, campaign dates) in "questions_for_owner". If the work cannot be done meaningfully without those answers, return an empty task list; otherwise plan the work and mark assumptions.
 "reply" and task titles are in Turkish.
 
 ${SHARED_RULES}`;

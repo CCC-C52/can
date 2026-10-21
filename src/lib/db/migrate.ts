@@ -3,10 +3,10 @@ import path from "node:path";
 import { getPool } from "./pool";
 
 /** migrations/ klasöründeki .sql dosyalarını sırayla ve bir kez uygular. */
-export async function runMigrations(dir = path.resolve(process.cwd(), "migrations")): Promise<string[]> {
-  const pool = getPool();
+export async function runMigrations(dir = path.resolve(process.cwd(), "migrations"), opts: { until?: string; pool?: import("pg").Pool } = {}): Promise<string[]> {
+  const pool = opts.pool ?? getPool();
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
-  const files = (await fs.readdir(dir)).filter((f) => f.endsWith(".sql")).sort();
+  const files = (await fs.readdir(dir)).filter((f) => f.endsWith(".sql")).sort().filter((f) => !opts.until || f <= opts.until);
   const applied = new Set((await pool.query(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name as string));
   const done: string[] = [];
   for (const file of files) {

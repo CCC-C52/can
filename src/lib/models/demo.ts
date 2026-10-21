@@ -145,6 +145,11 @@ export function demoPlan(input: DemoInput): Plan {
       "Marka bilgileriyle tutarlı, doğrulanmamış iddia içermeyen içerik üretmek",
       "Dış işlemleri yalnızca onaydan sonra yürütmek",
     ],
+    questions_for_owner: [
+      ...(!known(input.ctx.brand.target_audience) ? ["Hedef kitleniz kim (yaş, şehir, ilgi alanları)?"] : []),
+      ...(has("shopify") && !known(input.ctx.brand.shipping_info) ? ["Gönderim süresi ve ücreti nedir? (bilinmediği için vaat verilmedi)"] : []),
+      ...focusProducts(input.ctx, input.instruction).filter((p) => !known(p.price)).map((p) => `"${p.title}" ürününün fiyatı nedir?`),
+    ],
     tasks,
   };
 }

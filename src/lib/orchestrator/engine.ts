@@ -4,7 +4,7 @@ import { getLimits, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
 import { ModelUnavailableError, PermanentError, TransientError, type TextModelAdapter } from "@/lib/models/types";
 import { buildBrandContext, type BrandContext } from "@/lib/agents/context";
-import { AGENTS, agentName, assertTool, isSpecialist } from "@/lib/agents/registry";
+import { AGENTS, agentName, assertTool, isSpecialist, ToolPermissionError } from "@/lib/agents/registry";
 import { OUTPUT_KIND, OUTPUT_SCHEMAS, PlanSchema, QaReviewSchema, type AgentId, type Plan, type ProjectReport, type QaReview, type SpecialistId } from "@/lib/agents/schemas";
 import { systemPrompt, userPrompt } from "@/lib/agents/prompts";
 import { mergeReviews, runRuleChecks } from "@/lib/agents/qa-rules";
@@ -23,6 +23,32 @@ const LEASE_MS = 60_000;
 
 class PausedError extends Error {}
 class CancelledError extends Error {}
+class TimeoutError extends TransientError {}
+
+/** Yöneticinin karar verebilmesi için hata sınıfı. */
+export type FailureClass = "transient" | "timeout" | "permanent" | "permission" | "budget" | "connection" | "quality" | "dependency" | "cancelled";
+
+export function classifyFailure(err: unknown): FailureClass {
+  if (err instanceof ToolPermissionError) return "permission";
+  if (err instanceof BudgetExceededError || err instanceof ModelCallLimitError) return "budget";
+  if (err instanceof ModelUnavailableError) return "connection";
+  if (err instanceof TimeoutError) return "timeout";
+  if (err instanceof TransientError) return "transient";
+  return "permanent";
+}
+
+/** Hata sınıfına göre yöneticinin önerdiği eylem (rapor ve panelde gösterilir). */
+export const FAILURE_ACTION: Record<FailureClass, { label: string; action: string; blocks: boolean }> = {
+  transient: { label: "Geçici hata", action: "Güvenle tekrar denenebilir.", blocks: false },
+  timeout: { label: "Süre aşımı", action: "Görev süre sınırını artırıp tekrar deneyin veya işi küçültün.", blocks: false },
+  permanent: { label: "Kalıcı hata", action: "Hata kaydını inceleyin; talimatı veya verileri düzeltip tekrar deneyin.", blocks: true },
+  permission: { label: "Yetki hatası", action: "Ajan izin yapılandırması hatalı; geliştiriciye bildirin. Tekrar denemek sonucu değiştirmez.", blocks: true },
+  budget: { label: "Bütçe/sınır", action: "Ayarlar'dan bütçe veya model çağrısı sınırını sahip olarak artırın, sonra tekrar deneyin.", blocks: true },
+  connection: { label: "Bağlantı gerekli", action: "Entegrasyonlar ekranından servisi bağlayıp 'Bağlantı bekleyenleri tekrar dene' deyin.", blocks: false },
+  quality: { label: "Kalite kontrolü", action: "Çıktıyı düzenleyin veya geri bildirimle yeniden üretim isteyin.", blocks: false },
+  dependency: { label: "Bağımlılık", action: "Önce başarısız olan üst görevi düzeltin; bu görev otomatik yeniden planlanır.", blocks: false },
+  cancelled: { label: "İptal", action: "Gerekirse tekrar deneyin.", blocks: false },
+};
 class ModelCallLimitError extends Error {}
 
 type RunCtx = {
@@ -88,7 +114,7 @@ export class Engine {
       `INSERT INTO task_attempts (task_id, attempt, phase, worker_id) VALUES ($1,$2,$3,$4) RETURNING id`,
       [task.id, task.attempts, task.phase, this.workerId],
     );
-    const timeout = setTimeout(() => ctrl.abort(new TransientError(`Görev süre sınırını aştı (${Math.round(limits.taskTimeoutMs / 1000)} sn)`)), limits.taskTimeoutMs);
+    const timeout = setTimeout(() => ctrl.abort(new TimeoutError(`Görev süre sınırını aştı (${Math.round(limits.taskTimeoutMs / 1000)} sn)`)), limits.taskTimeoutMs);
     const renew = setInterval(async () => {
       try {
         const r = await q1<{ status: string }>(
@@ -125,7 +151,7 @@ export class Engine {
         outcome = "cancelled";
       } else if (err instanceof ModelUnavailableError) {
         outcome = "waiting_connection";
-        await finish(task, this.workerId, { status: "waiting_connection", error: err.message }).catch(() => {});
+        await finish(task, this.workerId, { status: "waiting_connection", error: err.message, failureClass: "connection" }).catch(() => {});
       } else if (err instanceof TransientError && task.attempts < task.max_attempts) {
         outcome = "retry";
         const backoff = Math.min(60_000, 2 ** task.attempts * 2000);
@@ -137,7 +163,7 @@ export class Engine {
       } else {
         outcome = err instanceof BudgetExceededError ? "budget_blocked" : "failed";
         const prefix = err instanceof BudgetExceededError ? "Bütçe sınırı: " : err instanceof ModelCallLimitError ? "Model çağrısı sınırı: " : err instanceof TransientError ? `Deneme sınırı doldu (${task.max_attempts}): ` : "";
-        await finish(task, this.workerId, { status: "failed", error: prefix + err.message });
+        await finish(task, this.workerId, { status: "failed", error: prefix + err.message, failureClass: classifyFailure(err) });
       }
       await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "worker", action: `task.${outcome}`, message: `${task.title}: ${outcome} — ${errMsg}` });
     } finally {
@@ -170,7 +196,7 @@ export async function recoverExpiredLeases() {
 
 export async function promotePlanned() {
   const cancelled = await q<Task>(
-    `UPDATE tasks t SET status = 'cancelled', error = 'Bağımlılık başarısız veya iptal edildi', finished_at = now(), updated_at = now()
+    `UPDATE tasks t SET status = 'cancelled', failure_class = 'dependency', error = 'Bağımlılık başarısız veya iptal edildi', finished_at = now(), updated_at = now()
      WHERE t.status = 'planned' AND t.dep_mode = 'completed' AND EXISTS (
        SELECT 1 FROM task_dependencies d JOIN tasks u ON u.id = d.depends_on_task_id
        WHERE d.task_id = t.id AND u.status IN ('failed','cancelled'))
@@ -209,29 +235,44 @@ export async function claimTasks(workerId: string, limits: Limits): Promise<Task
 }
 
 /** Görevi yalnızca hâlâ bu işleyiciye aitse ve çalışıyorsa sonlandırır (iptal her zaman kazanır). */
-async function finish(task: Task, workerId: string, patch: { status: string; error?: string | null; phase?: string; outputId?: string; model?: string; service?: string; feedback?: string | null; regenInc?: boolean }) {
+async function finish(task: Task, workerId: string, patch: { status: string; error?: string | null; phase?: string; outputId?: string; model?: string; service?: string; feedback?: string | null; regenInc?: boolean; failureClass?: FailureClass | null; nextAttemptMs?: number }) {
   const terminal = ["completed", "failed", "cancelled", "approval_pending", "waiting_connection"].includes(patch.status);
   const r = await q1<Task>(
     `UPDATE tasks SET status = $3, error = $4, phase = COALESCE($5, phase), output_id = COALESCE($6, output_id), model = COALESCE($7, model),
        service = COALESCE($8, service), feedback = CASE WHEN $9::boolean THEN $10 ELSE feedback END,
        regen_count = regen_count + CASE WHEN $11::boolean THEN 1 ELSE 0 END,
        attempts = CASE WHEN $3 IN ('ready','review_pending') THEN 0 ELSE attempts END,
-       lease_owner = NULL, lease_expires_at = NULL, finished_at = CASE WHEN $12::boolean THEN now() ELSE NULL END, updated_at = now()
+       lease_owner = NULL, lease_expires_at = NULL, finished_at = CASE WHEN $12::boolean THEN now() ELSE NULL END, updated_at = now(),
+       failure_class = $13, next_attempt_at = CASE WHEN $14::int IS NULL THEN NULL ELSE now() + ($14::int || ' milliseconds')::interval END
      WHERE id = $1 AND lease_owner = $2 AND status = 'running' RETURNING *`,
     [task.id, workerId, patch.status, patch.error ?? null, patch.phase ?? null, patch.outputId ?? null, patch.model ?? null, patch.service ?? null,
-      patch.feedback !== undefined, patch.feedback ?? null, !!patch.regenInc, terminal],
+      patch.feedback !== undefined, patch.feedback ?? null, !!patch.regenInc, terminal, patch.failureClass ?? null, patch.nextAttemptMs ?? null],
   );
   if (!r) throw new CancelledError("Görev başka bir işlem tarafından değiştirildi (iptal edilmiş olabilir).");
   return r;
 }
 
 export async function updateProjectStatus(projectId: string) {
-  const p = await q1<{ status: string; brand_id: string }>(`SELECT status, brand_id FROM projects WHERE id = $1`, [projectId]);
+  const p = await q1<{ status: string; brand_id: string; questions: string[] }>(`SELECT status, brand_id, questions FROM projects WHERE id = $1`, [projectId]);
   if (!p || p.status === "cancelled") return;
   const counts = await q<{ status: string; n: number }>(`SELECT status, COUNT(*)::int AS n FROM tasks WHERE project_id = $1 GROUP BY status`, [projectId]);
   const n = (s: string) => counts.find((c) => c.status === s)?.n ?? 0;
+  const blocking = await q1<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM tasks WHERE project_id = $1 AND status = 'failed' AND failure_class = ANY($2::text[])`,
+    [projectId, (Object.keys(FAILURE_ACTION) as FailureClass[]).filter((k) => FAILURE_ACTION[k].blocks)],
+  );
   const active = n("planned") + n("ready") + n("running") + n("review_pending");
-  const status = active ? (n("running") || n("ready") || n("review_pending") ? "running" : "running") : n("failed") || n("waiting_connection") || n("approval_pending") ? "needs_attention" : "completed";
+  const total = counts.reduce((a, c) => a + c.n, 0);
+  // Başarısız bir alt görev varken proje asla "tamamlandı" olmaz.
+  const status = active
+    ? "running"
+    : (blocking?.n ?? 0) > 0
+      ? "blocked"
+      : n("failed") + n("waiting_connection") + n("approval_pending") + n("cancelled") > 0
+        ? "needs_attention"
+        : (p.questions?.length ?? 0) > 0 && total <= 1
+          ? "needs_input"
+          : "completed";
   if (status !== p.status) await q(`UPDATE projects SET status = $2, updated_at = now() WHERE id = $1`, [projectId, status]);
 }
 
@@ -327,10 +368,12 @@ async function runPlan(ctx: RunCtx, workerId: string) {
   const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "plan", title: "Görev planı" });
   await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo });
   const lines = tasks.map((t, i) => `${i + 1}. ${agentName(t.agent)} — ${t.title}${t.depends_on.length ? ` (önce: ${t.depends_on.join(", ")})` : ""}`);
-  const msg = [res.data.reply, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\nGörevler:\n${lines.join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
+  const questions = (res.data.questions_for_owner ?? []).filter((x) => x.trim()).slice(0, 10);
+  await q(`UPDATE projects SET questions = $2 WHERE id = $1`, [task.project_id, JSON.stringify(questions)]);
+  const msg = [res.data.reply, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\nGörevler:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
   await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, msg.trim(), JSON.stringify({ isDemo: res.isDemo, generator: res.generator })]);
   await finish(task, workerId, { status: "completed", outputId: out.id, model: res.model, service: ctx.model.service });
-  if (!tasks.length) await q(`UPDATE projects SET status = 'completed' WHERE id = $1`, [task.project_id]);
+  // Görevsiz plan: soru varsa "bilgi bekliyor", yoksa tamamlandı (updateProjectStatus belirler)
 }
 
 // ---------------------------------------------------------------- Uzman üretimi
@@ -402,7 +445,7 @@ async function runReview(ctx: RunCtx, workerId: string) {
     await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:manager", action: "task.regenerate", message: `Kalite kontrolünden geçemedi; yeniden üretime gönderildi (${task.regen_count + 1}/${limits.maxRegenerations})` });
     return;
   }
-  await finish(task, workerId, { status: "failed", error: `Kalite kontrolünden geçemedi (yeniden üretim sınırı doldu): ${merged.required_changes.join("; ").slice(0, 500)}` });
+  await finish(task, workerId, { status: "failed", failureClass: "quality", error: `Kalite kontrolünden geçemedi (yeniden üretim sınırı doldu): ${merged.required_changes.join("; ").slice(0, 500)}` });
 }
 
 async function createCalendarEntries(task: Task, v: OutputVersion) {
@@ -546,7 +589,11 @@ async function runReport(ctx: RunCtx, workerId: string) {
     summary: `${mode.label}. ${demo?.n ? `${demo.n} çıktı sürümü DEMO şablonla üretildi (gerçek AI değil). ` : ""}Dış platformlarda hiçbir işlem onayınız olmadan yapılmadı.`,
     completed: tasks.filter((t) => t.status === "completed").map(label),
     pending_approvals: tasks.filter((t) => t.status === "approval_pending").map(label),
-    problems: tasks.filter((t) => ["failed", "cancelled"].includes(t.status)).map((t) => `${label(t)} — ${t.status === "failed" ? "başarısız" : "iptal"}: ${t.error ?? ""}`),
+    problems: tasks.filter((t) => ["failed", "cancelled"].includes(t.status)).map((t) => {
+      const fc = t.failure_class as FailureClass | null;
+      const info = fc ? FAILURE_ACTION[fc] : null;
+      return `${label(t)} — ${info?.label ?? (t.status === "failed" ? "başarısız" : "iptal")}: ${t.error ?? ""}${info ? ` → Öneri: ${info.action}` : ""}`;
+    }),
     missing_connections: tasks.filter((t) => t.status === "waiting_connection").map((t) => `${label(t)} — ${t.error ?? ""}`),
     next_steps: [
       ...(tasks.some((t) => t.status === "approval_pending") ? ["Onay merkezinde bekleyen çıktıları inceleyin, gerekirse düzenleyip onaylayın."] : []),

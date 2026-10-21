@@ -66,6 +66,8 @@ export const PROJECT_STATUS_LABEL: Record<string, string> = {
   planning: "Planlanıyor",
   running: "Yürütülüyor",
   needs_attention: "İlgi bekliyor",
+  needs_input: "Bilgi bekliyor",
+  blocked: "Engellendi",
   completed: "Tamamlandı",
   failed: "Başarısız",
   cancelled: "İptal edildi",

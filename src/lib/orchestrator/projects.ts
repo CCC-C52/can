@@ -12,6 +12,7 @@ export type Project = {
   idempotency_key: string;
   model_calls: number;
   report: any;
+  questions: string[];
   created_at: string;
   updated_at: string;
 };
@@ -39,6 +40,8 @@ export type Task = {
   regen_count: number;
   feedback: string | null;
   error: string | null;
+  failure_class: string | null;
+  progress: unknown;
   lease_owner: string | null;
   lease_expires_at: string | null;
   next_attempt_at: string | null;
@@ -154,7 +157,7 @@ export async function retryTask(brandId: string, taskId: string) {
     if (!t) throw new InputError("Görev bulunamadı.");
     if (!["failed", "cancelled", "waiting_connection"].includes(t.status)) throw new InputError("Yalnızca başarısız, iptal edilmiş veya bağlantı bekleyen görevler tekrar denenebilir.");
     await q(
-      `UPDATE tasks SET status = 'planned', phase = CASE WHEN output_id IS NULL THEN 'generate' ELSE phase END, attempts = 0, error = NULL,
+      `UPDATE tasks SET status = 'planned', phase = CASE WHEN output_id IS NULL THEN 'generate' ELSE phase END, attempts = 0, error = NULL, failure_class = NULL,
          next_attempt_at = NULL, finished_at = NULL, updated_at = now() WHERE id = $1`,
       [taskId],
       c,
@@ -164,7 +167,7 @@ export async function retryTask(brandId: string, taskId: string) {
       `WITH RECURSIVE downstream AS (
          SELECT d.task_id FROM task_dependencies d WHERE d.depends_on_task_id = $1
          UNION SELECT d.task_id FROM task_dependencies d JOIN downstream x ON d.depends_on_task_id = x.task_id)
-       UPDATE tasks SET status = 'planned', error = NULL, finished_at = NULL, updated_at = now()
+       UPDATE tasks SET status = 'planned', error = NULL, failure_class = NULL, finished_at = NULL, updated_at = now()
        WHERE id IN (SELECT task_id FROM downstream) AND status = 'cancelled' AND error LIKE 'Bağımlılık%'`,
       [taskId],
       c,
@@ -203,7 +206,7 @@ export async function setPaused(paused: boolean) {
 
 export async function retryWaitingConnections(brandId: string) {
   const rows = await q<Task>(
-    `UPDATE tasks SET status = 'planned', error = NULL, attempts = 0, updated_at = now() WHERE brand_id = $1 AND status = 'waiting_connection' RETURNING *`,
+    `UPDATE tasks SET status = 'planned', error = NULL, failure_class = NULL, attempts = 0, updated_at = now() WHERE brand_id = $1 AND status = 'waiting_connection' RETURNING *`,
     [brandId],
   );
   if (rows.length) await audit({ brandId, actor: "user", action: "task.retry_waiting", message: `${rows.length} bağlantı bekleyen görev tekrar planlandı` });
