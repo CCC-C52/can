@@ -96,6 +96,7 @@ export const MEDIA_ORIGIN_LABEL: Record<string, string> = {
   real_video: "Gerçek çekim",
   ai_generated: "AI ile üretildi",
   edited: "Düzenlenmiş sürüm",
+  composed: "Yerel tasarım derlemesi",
   design_file: "Tasarım dosyası",
   export: "Dışa aktarma",
 };
@@ -119,3 +120,14 @@ export const LANGUAGES: { code: string; label: string }[] = [
 export function langLabel(code: string) {
   return LANGUAGES.find((l) => l.code === code)?.label ?? code;
 }
+
+export const PROVIDER_JOB_STATUS_LABEL: Record<string, string> = {
+  submitting: "Gönderiliyor",
+  submitted: "Gönderildi",
+  running: "Üretiliyor",
+  downloading: "İndiriliyor",
+  succeeded: "Tamamlandı",
+  failed: "Başarısız",
+  unknown: "Sonuç bilinmiyor",
+  cancelled: "İptal",
+};

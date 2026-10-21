@@ -234,7 +234,11 @@ export async function registerFile(
 /** Üretilen/düzenlenen dosyayı yeni varlık olarak kaydeder ve kaynaklarla ilişkilendirir. */
 export async function saveDerivedAsset(
   brandId: string,
-  args: { buffer: Buffer; filename: string; origin: "edited" | "ai_generated" | "export"; sourceAssetIds: string[]; productId?: string | null; taskId?: string | null; outputVersionId?: string | null; tags?: { tag: string; source: string }[]; themes?: string[] },
+  args: {
+    buffer: Buffer; filename: string; origin: "edited" | "composed" | "ai_generated" | "export"; sourceAssetIds: string[]; productId?: string | null;
+    taskId?: string | null; projectId?: string | null; outputVersionId?: string | null; tags?: { tag: string; source: string }[]; themes?: string[];
+    generationMethod?: string; // sharp_compose | ffmpeg_edit | ai_image:<servis> | ai_video:<servis>
+  },
   db: Queryable = getPool(),
 ) {
   const s = sniff(args.buffer);
@@ -260,10 +264,11 @@ export async function saveDerivedAsset(
   await getStorage().put(key, args.buffer, s.mime);
   const asset = await q1<MediaAsset>(
     `INSERT INTO media_assets (brand_id, product_id, kind, origin, filename, mime_type, size_bytes, sha256, storage_key, width, height, duration_s,
-       format, rights_status, tags, themes, parent_asset_id, version, source_task_id, source_output_version_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+       format, rights_status, tags, themes, parent_asset_id, version, source_task_id, source_output_version_id, project_id, generation_method)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
     [brandId, args.productId ?? null, s.kind, args.origin, args.filename, s.mime, args.buffer.length, hash, key, width, height, duration,
-      aspect(width, height), "owned", JSON.stringify(args.tags ?? []), args.themes ?? [], parent, version, args.taskId ?? null, args.outputVersionId ?? null],
+      aspect(width, height), "owned", JSON.stringify(args.tags ?? []), args.themes ?? [], parent, version, args.taskId ?? null, args.outputVersionId ?? null,
+      args.projectId ?? null, args.generationMethod ?? (args.origin === "export" ? "export" : "derived")],
     db,
   );
   for (const src of args.sourceAssetIds) {

@@ -10,12 +10,8 @@ import { systemPrompt, userPrompt } from "@/lib/agents/prompts";
 import { mergeReviews, runRuleChecks } from "@/lib/agents/qa-rules";
 import { addVersion, attachAssetsToVersion, createOutput, getCurrentVersion, setVersionQa, type OutputVersion } from "@/lib/services/outputs";
 import { assertBudget, BudgetExceededError, costSummary, recordCost } from "@/lib/services/costs";
-import { capabilityReady, effectiveStatus, PROVIDERS } from "@/lib/services/connections";
-import { getMedia, readMediaFile, saveDerivedAsset } from "@/lib/services/media";
-import { composePost } from "@/lib/adapters/compose";
-import { renderEdit } from "@/lib/adapters/video-edit";
-import { OpenAIImageGenerator, formatToSize } from "@/lib/adapters/images";
-import { getVideoGenerator } from "@/lib/adapters/video-generation";
+import { effectiveStatus, PROVIDERS } from "@/lib/services/connections";
+import { renderDesign, renderVideo, RENDER_POLL_MS, type RenderCtx } from "./render";
 import { textModelMode } from "@/lib/models";
 import type { Task } from "./projects";
 
@@ -26,7 +22,7 @@ class CancelledError extends Error {}
 class TimeoutError extends TransientError {}
 
 /** Yöneticinin karar verebilmesi için hata sınıfı. */
-export type FailureClass = "transient" | "timeout" | "permanent" | "permission" | "budget" | "connection" | "quality" | "dependency" | "cancelled";
+export type FailureClass = "transient" | "timeout" | "permanent" | "permission" | "budget" | "connection" | "quality" | "dependency" | "cancelled" | "uncertain";
 
 export function classifyFailure(err: unknown): FailureClass {
   if (err instanceof ToolPermissionError) return "permission";
@@ -48,6 +44,7 @@ export const FAILURE_ACTION: Record<FailureClass, { label: string; action: strin
   quality: { label: "Kalite kontrolü", action: "Çıktıyı düzenleyin veya geri bildirimle yeniden üretim isteyin.", blocks: false },
   dependency: { label: "Bağımlılık", action: "Önce başarısız olan üst görevi düzeltin; bu görev otomatik yeniden planlanır.", blocks: false },
   cancelled: { label: "İptal", action: "Gerekirse tekrar deneyin.", blocks: false },
+  uncertain: { label: "Sonuç belirsiz", action: "Sağlayıcı panelinden işin işlenip ücretlendirilmediğini kontrol edin. Yeniden gönderim yeni ücret doğurabilir; karar sizin (Çıktı sayfası → Üretim işleri).", blocks: true },
 };
 class ModelCallLimitError extends Error {}
 
@@ -492,81 +489,25 @@ async function runRender(ctx: RunCtx, workerId: string) {
   const versionId = task.input_refs?.version_id as string | undefined;
   const v = versionId ? await q1<OutputVersion>(`SELECT * FROM output_versions WHERE id = $1 AND brand_id = $2`, [versionId, task.brand_id]) : null;
   if (!v) throw new PermanentError("Render edilecek sürüm bulunamadı.");
-  const brand = await q1<{ colors: { name: string; hex: string }[]; fonts: { role: string; family: string }[] }>(`SELECT colors, fonts FROM brands WHERE id = $1`, [task.brand_id]);
-  const produced: string[] = [];
-  const waiting: string[] = [];
-  const notes: string[] = [];
-
-  if (task.agent === "design") {
-    assertTool("design", "media.read");
-    const bg = brand?.colors?.[1]?.hex ?? "#f4f4f2";
-    const accent = brand?.colors?.[0]?.hex ?? "#1f2937";
-    const font = brand?.fonts?.[0]?.family;
-    for (const b of v.content.briefs ?? []) {
-      if (ctx.signal.aborted) throw ctx.signal.reason;
-      if (b.use_real_product_photo && b.source_asset_ids?.length) {
-        const src = await getMedia(task.brand_id, b.source_asset_ids[0]);
-        if (!src || src.kind !== "photo") { notes.push(`${b.id}: kaynak fotoğraf bulunamadı.`); continue; }
-        const png = await composePost({ photo: await readMediaFile(src), format: b.format, headline: b.headline.replace(/\[DEMO\]\s*/g, ""), subline: b.body_text?.replace(/\[DEMO\]\s*/g, ""), bg, accent, font });
-        const asset = await saveDerivedAsset(task.brand_id, {
-          buffer: png, filename: `${b.id}-${b.format.replace(":", "x")}.png`, origin: "edited", sourceAssetIds: [src.id], productId: src.product_id, taskId: task.id, outputVersionId: v.id,
-          tags: [{ tag: `ref:${b.id}`, source: "system" }, { tag: "yerel derleme (AI değil)", source: "system" }, ...(v.is_demo ? [{ tag: "DEMO metni", source: "system" }] : [])],
-        });
-        produced.push(asset.id);
-      } else {
-        const ready = await capabilityReady("image_generation", task.brand_id);
-        if (!ready.ready) { waiting.push(`${b.id}: AI görsel üretimi — ${ready.reason}`); continue; }
-        assertTool("design", "image.generate");
-        const gen = new OpenAIImageGenerator();
-        const est = gen.estimateCostUsd();
-        await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
-        await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "estimated", amountUsd: est });
-        const img = await gen.generate(b.generation_prompt, formatToSize(b.format));
-        await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, note: "Sağlayıcı faturasıyla doğrulanmadı; yapılandırılmış birim fiyat" });
-        const asset = await saveDerivedAsset(task.brand_id, {
-          buffer: img, filename: `${b.id}-ai.png`, origin: "ai_generated", sourceAssetIds: [], taskId: task.id, outputVersionId: v.id,
-          tags: [{ tag: `ref:${b.id}`, source: "system" }, { tag: "AI kampanya görseli — gerçek ürün fotoğrafı değil", source: "system" }],
-        });
-        produced.push(asset.id);
-      }
-    }
-  } else if (task.agent === "video") {
-    assertTool("video", "media.read");
-    for (const vid of v.content.videos ?? []) {
-      if (ctx.signal.aborted) throw ctx.signal.reason;
-      if (vid.mode === "edit_existing") {
-        const ready = await capabilityReady("video_edit", task.brand_id);
-        if (!ready.ready) { waiting.push(`${vid.id}: video düzenleme — ${ready.reason}`); continue; }
-        assertTool("video", "video.edit");
-        const clips = [];
-        for (let i = 0; i < vid.selected_asset_ids.length; i++) {
-          const m = await getMedia(task.brand_id, vid.selected_asset_ids[i]);
-          if (!m || m.kind !== "video") continue;
-          const seg = vid.script[i];
-          clips.push({ buffer: await readMediaFile(m), ext: m.filename.split(".").pop() || "mp4", duration: seg ? seg.t_end - seg.t_start : 3, sourceDuration: m.duration_s, id: m.id, productId: m.product_id });
-        }
-        if (!clips.length) { notes.push(`${vid.id}: kullanılabilir çekim yok.`); continue; }
-        const subs = (vid.subtitles ?? []).map((s: any) => ({ ...s, text: String(s.text).replace(/\[DEMO\]\s*/g, "") }));
-        const r = await renderEdit({ clips, format: vid.format, subtitles: subs, signal: ctx.signal, timeoutMs: ctx.limits.taskTimeoutMs });
-        const asset = await saveDerivedAsset(task.brand_id, {
-          buffer: r.video, filename: `${vid.id}-${vid.format.replace(":", "x")}.mp4`, origin: "edited", sourceAssetIds: clips.map((c) => c.id), productId: clips[0].productId, taskId: task.id, outputVersionId: v.id,
-          tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "ffmpeg kurgu (AI değil)", source: "system" }],
-        });
-        produced.push(asset.id);
-      } else {
-        const gen = getVideoGenerator();
-        const ready = await capabilityReady("video_generation", task.brand_id);
-        if (!gen || !ready.ready) { waiting.push(`${vid.id}: AI video üretimi — sağlayıcı bağlı değil`); continue; }
-      }
-    }
-  }
-  if (produced.length) await attachAssetsToVersion(v.id, produced);
-  const summary = { produced: produced.length, waiting, notes };
+  const rctx: RenderCtx = { task, signal: ctx.signal, limits: ctx.limits, versionId: v.id, isDemo: v.is_demo, content: v.content };
+  const o = task.agent === "design" ? await renderDesign(rctx) : task.agent === "video" ? await renderVideo(rctx) : null;
+  if (!o) throw new PermanentError(`${task.agent} için render adımı yok.`);
+  if (o.produced.length) await attachAssetsToVersion(v.id, o.produced);
+  const summary = { produced: o.produced.length, waiting: o.waiting, in_progress: o.inProgress, failed: o.failed, uncertain: o.uncertain, notes: o.notes };
   await q(`UPDATE tasks SET input_refs = input_refs || $2::jsonb WHERE id = $1`, [task.id, JSON.stringify({ result: summary })]);
-  if (waiting.length) {
-    await finish(task, workerId, { status: "waiting_connection", error: `Bağlantı bekleyen öğeler: ${waiting.join(" | ")}${produced.length ? ` (üretilen: ${produced.length})` : ""}`, service: task.agent === "design" ? "sharp/openai_images" : "ffmpeg" });
+  const service = task.agent === "design" ? "sharp/openai_images" : "ffmpeg/video_generation";
+  const made = o.produced.length ? ` (üretilen dosya: ${o.produced.length})` : "";
+  if (o.inProgress.length) {
+    // Sağlayıcı işi sürüyor: görev kuyruğa döner ve daha sonra durumu sorgular (deneme hakkı tüketmez)
+    await finish(task, workerId, { status: "ready", phase: "render", error: `Sürüyor: ${o.inProgress.join(" | ")}${made}`, service, nextAttemptMs: RENDER_POLL_MS });
+  } else if (o.uncertain.length) {
+    await finish(task, workerId, { status: "failed", error: `Sonucu belirsiz ücretli işlem: ${o.uncertain.join(" | ")}${made}`, service, failureClass: "uncertain" });
+  } else if (o.failed.length) {
+    await finish(task, workerId, { status: "failed", error: `Başarısız öğeler: ${o.failed.join(" | ")}${made}`, service, failureClass: "permanent" });
+  } else if (o.waiting.length) {
+    await finish(task, workerId, { status: "waiting_connection", error: `Bağlantı/izin bekleyen öğeler: ${o.waiting.join(" | ")}${made}`, service, failureClass: "connection" });
   } else {
-    await finish(task, workerId, { status: "completed", error: notes.length ? notes.join(" | ") : null, service: task.agent === "design" ? "sharp (yerel)" : "ffmpeg (yerel)" });
+    await finish(task, workerId, { status: "completed", error: o.notes.length ? o.notes.join(" | ") : null, service: task.agent === "design" ? "sharp (yerel)" : "ffmpeg (yerel)" });
   }
 }
 

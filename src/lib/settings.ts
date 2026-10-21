@@ -10,6 +10,8 @@ export type Limits = {
   perTaskBudgetUsd: number | null; // görev başına harcama sınırı (null = sınırsız)
   dailyBudgetUsd: number | null;   // günlük toplam AI harcama sınırı
   blockUnknownCost: boolean;       // maliyeti tahmin edilemeyen ücretli işlemler engellensin mi
+  paidMediaGeneration: boolean;    // ücretli AI görsel/video üretimine sahip izni (varsayılan kapalı)
+  maxVideoGenSeconds: number;      // proje başına AI video saniye sınırı
 };
 
 export const DEFAULT_LIMITS: Limits = {
@@ -22,6 +24,8 @@ export const DEFAULT_LIMITS: Limits = {
   perTaskBudgetUsd: 1,
   dailyBudgetUsd: 10,
   blockUnknownCost: true,
+  paidMediaGeneration: false,
+  maxVideoGenSeconds: 16,
 };
 
 export async function getSetting<T>(key: string, fallback: T, db: Queryable = getPool()): Promise<T> {

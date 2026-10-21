@@ -11,6 +11,7 @@ import { redact } from "@/lib/security/crypto";
 import { backupConfigured, maybeRunScheduledBackup } from "@/lib/services/backup";
 import { runAnalysisQueueOnce } from "@/lib/media-analysis";
 import { runUploadQueueOnce } from "@/lib/uploads";
+import { reconcileStaleSubmissions } from "@/lib/services/provider-jobs";
 
 const problems = assertProductionConfig("worker");
 if (problems.length) {
@@ -57,6 +58,10 @@ async function main() {
       // Yedekleme görev döngüsünü bloklamadan, en fazla 30 sn'de bir kontrol edilir
       if (!backupRunning && Date.now() - lastBackupCheck > 30_000) {
         lastBackupCheck = Date.now();
+        // Ücretli gönderim sırasında yarıda kalan işler (gönderim zaman aşımı 3 dk'dan uzun süredir "submitting"): sonucu bilinmiyor
+        reconcileStaleSubmissions(10 * 60_000)
+          .then((n) => n && console.log(`[worker] ${n} sağlayıcı işi 'sonuç bilinmiyor' olarak işaretlendi (otomatik tekrar gönderilmedi)`))
+          .catch((e) => console.error("[worker] uzlaştırma hatası:", redact((e as Error).message)));
         backupRunning = true;
         maybeRunScheduledBackup()
           .then((s) => s && console.log(`[worker] Yedekleme ${s.ok ? "tamamlandı" : `başarısız: ${s.error}`}`))

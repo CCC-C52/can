@@ -7,14 +7,15 @@ import { listProducts } from "@/lib/services/brands";
 import { q } from "@/lib/db/pool";
 import type { MediaAsset } from "@/lib/services/media";
 import type { ExternalAction } from "@/lib/services/gateway";
+import type { ProviderJob } from "@/lib/services/provider-jobs";
 import { getLimits } from "@/lib/settings";
 import { agentName } from "@/lib/agents/registry";
-import { APPROVAL_SCOPE_LABEL, EXTERNAL_ACTION_STATUS_LABEL, TASK_STATUS_LABEL } from "@/lib/labels";
+import { APPROVAL_SCOPE_LABEL, EXTERNAL_ACTION_STATUS_LABEL, PROVIDER_JOB_STATUS_LABEL, TASK_STATUS_LABEL } from "@/lib/labels";
 import { Badge, DemoBadge, Flash, PageHeader, dt } from "@/components/ui";
 import { AutoRefresh, IdempotencyField, SubmitButton } from "@/components/client";
 import { StructuredEditor } from "@/components/editor";
 import { OutputPreview, QaPanel } from "@/components/previews";
-import { decideAction, editOutputAction, externalAction, reconcileAction_, regenerateAction, revokeApprovalAction } from "@/app/actions";
+import { decideAction, editOutputAction, externalAction, reconcileAction_, regenerateAction, releaseProviderJobAction, revokeApprovalAction } from "@/app/actions";
 
 export default async function OutputPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SP }) {
   const { id } = await params;
@@ -31,9 +32,10 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
   if (!shown) return <p className="muted">Bu çıktının henüz sürümü yok.</p>;
   const isCurrent = shown.version === current.version;
   const assetIds = [...new Set(versions.flatMap((v) => v.asset_ids))];
-  const [assets, actions] = await Promise.all([
+  const [assets, actions, jobs] = await Promise.all([
     assetIds.length ? q<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) ORDER BY created_at`, [brand.id, assetIds]) : Promise.resolve([] as MediaAsset[]),
     q<ExternalAction & { version: number }>(`SELECT a.*, v.version FROM external_actions a JOIN output_versions v ON v.id = a.output_version_id WHERE v.output_id = $1 AND a.brand_id = $2 ORDER BY a.created_at DESC`, [id, brand.id]),
+    q<ProviderJob>(`SELECT j.* FROM provider_jobs j JOIN tasks t ON t.id = j.task_id WHERE t.output_id = $1 AND j.brand_id = $2 ORDER BY j.created_at DESC`, [id, brand.id]),
   ]);
   const latestDecision = approvals.find((a) => a.output_version_id === current.id && !a.revoked_at);
   const scopes = requiredScopes(out.kind, current.content);
@@ -135,6 +137,32 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
                   </span>
                 </div>
               ))}
+            </section>
+          )}
+
+          {jobs.length > 0 && (
+            <section className="card space-y-2" aria-labelledby="jobs-h">
+              <h2 id="jobs-h" className="h2">AI üretim işleri</h2>
+              <p className="text-xs text-muted">Ücretli sağlayıcıya yapılan her gönderim tek kayıttır; yeniden deneme veya işleyici yeniden başlatması ikinci gönderim yapmaz.</p>
+              <ul className="space-y-2 text-xs">
+                {jobs.map((j) => (
+                  <li key={j.id} className="rounded bg-gray-50 p-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge tone={j.status === "succeeded" ? "ok" : j.status === "failed" ? "bad" : "warn"}>{PROVIDER_JOB_STATUS_LABEL[j.status] ?? j.status}</Badge>
+                      {j.item_ref} · {j.kind === "video_generation" ? "AI video" : "AI görsel"} · {j.provider}
+                    </div>
+                    <div className="text-muted">{dt(j.created_at)} · tahmini {j.cost_estimated_usd === null ? "bilinmiyor" : `$${Number(j.cost_estimated_usd).toFixed(3)}`}{j.cost_actual_usd !== null ? ` · gerçekleşen $${Number(j.cost_actual_usd).toFixed(3)}` : ""}{j.poll_count ? ` · ${j.poll_count} sorgu` : ""}</div>
+                    {j.error && <div className="text-red-700">{j.error}</div>}
+                    {j.result_asset_id && <Link className="text-brand underline" href={`/medya/${j.result_asset_id}`}>Üretilen dosya</Link>}
+                    {(j.status === "failed" || j.status === "unknown") && !j.idempotency_key.includes(":released:") && (
+                      <form action={releaseProviderJobAction} className="mt-1">
+                        <input type="hidden" name="jobId" value={j.id} /><input type="hidden" name="back" value={`/taslaklar/${id}`} />
+                        <SubmitButton className="btn px-2 py-0.5 text-xs" confirm={j.status === "unknown" ? "Önceki gönderimin sonucu bilinmiyor; sağlayıcı ücretlendirmiş olabilir. Yine de yeniden gönderilsin mi? (yeni ücret oluşabilir)" : "Yeniden gönderilsin mi? (yeni ücret oluşabilir)"}>Yeniden gönder</SubmitButton>
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
 

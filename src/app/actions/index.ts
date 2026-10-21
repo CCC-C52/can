@@ -11,7 +11,7 @@ import { config } from "@/lib/config";
 import {
   addBrandFact, addProductFact, addVariant, createBrand, createProduct, deleteBrandFact, deleteProductFact, deleteVariant, getBrand, updateBrand, updateProduct,
 } from "@/lib/services/brands";
-import { submitInstruction, cancelTask, cancelProject, retryTask, requestRegeneration, setPaused, retryWaitingConnections } from "@/lib/orchestrator/projects";
+import { submitInstruction, cancelTask, cancelProject, retryTask, requestRegeneration, setPaused, retryWaitingConnections, getTask } from "@/lib/orchestrator/projects";
 import { decide, editOutput, revokeApproval } from "@/lib/services/outputs";
 import { executeExternalAction, reconcileAction, type ActionType } from "@/lib/services/gateway";
 import { updateMediaMeta, getMedia } from "@/lib/services/media";
@@ -21,6 +21,8 @@ import { disconnect, type ProviderId, upsertConnection } from "@/lib/services/co
 import { testShopify, syncShopifyProducts } from "@/lib/adapters/shopify";
 import { testInstagram } from "@/lib/adapters/instagram";
 import { testOpenAIImages } from "@/lib/adapters/images";
+import { testVeo } from "@/lib/adapters/video-generation";
+import { releaseJob } from "@/lib/services/provider-jobs";
 import { testAnthropic } from "@/lib/models/test";
 import { audit } from "@/lib/audit";
 
@@ -309,6 +311,21 @@ export async function reconcileAction_(fd: FormData) {
   });
 }
 
+/** Sahip kararı: başarısız/sonucu belirsiz AI üretim işini yeniden gönderime açar ve render görevini tekrar planlar. */
+export async function releaseProviderJobAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(str(fd, "back") || "/projeler", async () => {
+    const job = await releaseJob(brand.id, str(fd, "jobId"));
+    if (!job) throw new Error("İş bulunamadı veya yeniden gönderilebilir durumda değil.");
+    await audit({ brandId: brand.id, projectId: job.project_id, taskId: job.task_id, actor: "user", action: "provider_job.release", message: `AI üretim işi yeniden gönderime açıldı (${job.item_ref}, önceki durum: ${job.status}). Yeni ücret oluşabilir.` });
+    if (job.task_id) {
+      const t = await getTask(brand.id, job.task_id);
+      if (t && ["failed", "cancelled", "waiting_connection"].includes(t.status)) await retryTask(brand.id, t.id);
+    }
+    return "İş yeniden gönderime açıldı; render görevi tekrar planlandı.";
+  });
+}
+
 // ---------------------------------------------------------------- Medya
 
 export async function updateMediaAction(fd: FormData) {
@@ -354,6 +371,7 @@ export async function testConnectionAction(fd: FormData) {
     let r: { ok: boolean; detail: string };
     if (provider === "anthropic") r = await testAnthropic();
     else if (provider === "openai_images") r = await testOpenAIImages();
+    else if (provider === "video_generation") r = await testVeo();
     else if (provider === "shopify") r = await testShopify(brand.id, str(fd, "shop"));
     else if (provider === "instagram") r = await testInstagram(brand.id);
     else throw new Error("Bu sağlayıcı için test yok.");
@@ -419,6 +437,8 @@ export async function saveLimitsAction(fd: FormData) {
       perTaskBudgetUsd: money("perTaskBudgetUsd"),
       dailyBudgetUsd: money("dailyBudgetUsd"),
       blockUnknownCost: str(fd, "blockUnknownCost") === "on",
+      paidMediaGeneration: str(fd, "paidMediaGeneration") === "on",
+      maxVideoGenSeconds: n("maxVideoGenSeconds", 0, 120),
     };
     await setSetting("limits", next);
     await audit({ actor: "user", action: "settings.limits", message: "Sınırlar güncellendi", data: next });

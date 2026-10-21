@@ -219,9 +219,12 @@ describe("Bağlantılar", () => {
     expect((await effectiveStatus("tiktok", brandId)).status).toBe("unsupported");
     expect((await effectiveStatus("meta_ads", brandId)).status).toBe("unsupported");
     expect((await effectiveStatus("shopify", brandId)).status).toBe("not_connected");
-    const waiting = await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM tasks WHERE project_id = $1 AND status = 'waiting_connection'`, [projectId]);
-    expect(waiting!.n).toBe(1);
-    expect(await q1(`SELECT 1 FROM media_assets WHERE origin = 'ai_generated'`)).toBeNull();
+    expect((await capabilityReady("video_generation", brandId)).ready).toBe(false);
+    // Demo planı yalnızca yerel olarak üretilebilen dosyaları ister (derleme + ffmpeg); bağlantısız AI üretimi denenmez
+    const rendered = await q<{ status: string }>(`SELECT status FROM tasks WHERE project_id = $1 AND kind = 'render'`, [projectId]);
+    expect(rendered.map((r) => r.status)).toEqual(["completed", "completed"]);
+    expect(await q1(`SELECT 1 FROM media_assets WHERE brand_id = $1 AND origin = 'ai_generated'`, [brandId])).toBeNull();
+    expect(await q1(`SELECT 1 FROM provider_jobs WHERE brand_id = $1`, [brandId])).toBeNull();
   });
 });
 

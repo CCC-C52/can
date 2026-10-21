@@ -58,6 +58,15 @@ export const config = {
       return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
     },
   },
+  gemini: {
+    // Google Veo (Gemini API) — AI video üretimi. Birim fiyat sahibin belirlediği değerdir; uydurulmaz.
+    get apiKey() { return str("GEMINI_API_KEY"); },
+    get veoModel() { return str("VEO_MODEL") ?? "veo-3.1-fast-generate-preview"; },
+    get costPerSecondUsd(): number | null {
+      const v = str("VEO_COST_PER_SECOND_USD");
+      return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
+    },
+  },
   shopify: {
     get clientId() { return str("SHOPIFY_CLIENT_ID"); },
     get clientSecret() { return str("SHOPIFY_CLIENT_SECRET"); },

@@ -42,6 +42,11 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
             <label className="block"><span className="label">Görev başına bütçe (USD, boş = sınırsız)</span><input name="perTaskBudgetUsd" defaultValue={limits.perTaskBudgetUsd ?? ""} className="input" /></label>
             <label className="block"><span className="label">Günlük AI bütçesi (USD, boş = sınırsız)</span><input name="dailyBudgetUsd" defaultValue={limits.dailyBudgetUsd ?? ""} className="input" /></label>
             <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" name="blockUnknownCost" defaultChecked={limits.blockUnknownCost} /> Maliyeti tahmin edilemeyen ücretli işlemleri engelle (bütçe sınırı varken)</label>
+            <fieldset className="rounded-lg border border-amber-300 bg-amber-50 p-3 sm:col-span-2">
+              <legend className="px-1 text-sm font-semibold">Ücretli AI medya üretimi (sahip izni)</legend>
+              <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="paidMediaGeneration" defaultChecked={limits.paidMediaGeneration} className="mt-1" /> <span>AI görsel (OpenAI Images) ve AI video (Google Veo) üretimine izin ver. Kapalıyken bu işler hiç gönderilmez ve &quot;izin bekliyor&quot; olarak kalır. Açıkken her gönderim yukarıdaki bütçe sınırlarına tabidir; sonucu belirsiz kalan gönderimler otomatik tekrarlanmaz.</span></label>
+              <div className="mt-2 max-w-xs">{num("maxVideoGenSeconds", "Proje başına AI video sınırı (saniye)", limits.maxVideoGenSeconds, "Veo bir videoda 4-8 sn üretir.")}</div>
+            </fieldset>
             <div className="sm:col-span-2"><SubmitButton>Kaydet</SubmitButton></div>
           </form>
         </section>

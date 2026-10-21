@@ -10,7 +10,7 @@ export default async function Previews() {
   const assets = await q<MediaAsset & { output_id: string | null; output_title: string | null }>(
     `SELECT m.*, o.id AS output_id, o.title AS output_title FROM media_assets m
      LEFT JOIN output_versions v ON v.id = m.source_output_version_id LEFT JOIN outputs o ON o.id = v.output_id
-     WHERE m.brand_id = $1 AND m.origin IN ('edited','ai_generated') ORDER BY m.created_at DESC LIMIT 100`,
+     WHERE m.brand_id = $1 AND m.origin IN ('edited','composed','ai_generated') ORDER BY m.created_at DESC LIMIT 100`,
     [brand.id],
   );
   return (

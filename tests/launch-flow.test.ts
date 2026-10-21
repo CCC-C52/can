@@ -37,7 +37,7 @@ describe("Örnek ürün lansmanı (demo modu, uçtan uca)", () => {
     expect(byKey.strategy.status).toBe("completed");
     expect(byKey.store.status).toBe("approval_pending"); // canlı mağaza önerisi → onay bekler
     expect(byKey.social.status).toBe("approval_pending"); // yayın paketi → onay bekler
-    expect(byKey["visuals-render"].status).toBe("waiting_connection"); // kapak için AI görsel servisi yok
+    expect(byKey["visuals-render"].status).toBe("completed"); // yerel derleme (gönderi, carousel, story, tipografik kapak)
     expect(byKey["video-render"].status).toBe("completed"); // yerel ffmpeg ile gerçek kurgu
     expect(byKey.report.status).toBe("completed");
   });
@@ -54,7 +54,11 @@ describe("Örnek ürün lansmanı (demo modu, uçtan uca)", () => {
 
     // Render edilmiş dosyalar kaynakla ilişkili
     const derived = await q<{ origin: string; n: number }>(`SELECT origin, COUNT(*)::int AS n FROM media_assets WHERE brand_id = $1 AND source_task_id IS NOT NULL GROUP BY origin`, [brandId]);
-    expect(derived.find((d) => d.origin === "edited")?.n).toBeGreaterThanOrEqual(2); // derlenmiş post + ffmpeg video
+    expect(derived.find((d) => d.origin === "composed")?.n).toBeGreaterThanOrEqual(3); // derlenmiş gönderi/carousel/story/kapak
+    expect(derived.find((d) => d.origin === "edited")?.n).toBeGreaterThanOrEqual(2); // ffmpeg video + kapak karesi
+    const formats = await q<{ format: string; generation_method: string; project_id: string }>(`SELECT format, generation_method, project_id FROM media_assets WHERE brand_id = $1 AND origin = 'composed'`, [brandId]);
+    expect([...new Set(formats.map((f) => f.format))]).toEqual(expect.arrayContaining(["4:5", "9:16"]));
+    expect(formats.every((f) => f.generation_method === "sharp_compose" && f.project_id === projectId)).toBe(true);
     const lineage = await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM media_lineage l JOIN media_assets m ON m.id = l.derived_asset_id WHERE m.brand_id = $1`, [brandId]);
     expect(lineage!.n).toBeGreaterThanOrEqual(2);
     expect(await q1(`SELECT 1 FROM media_assets WHERE brand_id = $1 AND origin = 'ai_generated'`, [brandId])).toBeNull(); // sahte AI görseli yok
