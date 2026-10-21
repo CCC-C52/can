@@ -12,6 +12,7 @@
     "db:seed-demo": "tsx --tsconfig tsconfig.json scripts/seed-demo.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:http": "tsx --tsconfig tsconfig.json tests/http/security.ts",
     "db:restore": "tsx --tsconfig tsconfig.json scripts/restore.ts",
     "db:check": "tsx --tsconfig tsconfig.json scripts/db-check.ts"
   },

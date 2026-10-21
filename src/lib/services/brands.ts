@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import { q, q1, type Queryable, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 
@@ -55,6 +56,7 @@ export async function listBrands(db: Queryable = getPool()) {
 }
 
 export async function getBrand(id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<Brand>(`SELECT * FROM brands WHERE id = $1`, [id], db);
 }
 
@@ -143,6 +145,7 @@ export async function listProducts(brandId: string, db: Queryable = getPool()) {
 }
 
 export async function getProduct(brandId: string, id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<Product>(`SELECT * FROM products WHERE id = $1 AND brand_id = $2`, [id, brandId], db);
 }
 

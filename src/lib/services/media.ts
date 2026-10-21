@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -289,6 +290,7 @@ export async function listMedia(brandId: string, f: { kind?: string; origin?: st
 }
 
 export async function getMedia(brandId: string, id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<MediaAsset>(`SELECT * FROM media_assets WHERE id = $1 AND brand_id = $2`, [id, brandId], db);
 }
 

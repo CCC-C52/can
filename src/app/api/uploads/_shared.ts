@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { requireBrand } from "@/lib/current";
 import { UploadError } from "@/lib/uploads";
 import { rateLimit } from "@/lib/security/rate-limit";
-import { redact } from "@/lib/security/crypto";
+import { headers } from "next/headers";
+import { log } from "@/lib/log";
 
 /** Yükleme API'leri için ortak sarmalayıcı: seçili marka, hız sınırı, güvenli hata mesajı. */
 export async function withBrand(limitKey: string, max: number, fn: (brandId: string) => Promise<unknown>) {
@@ -14,7 +15,8 @@ export async function withBrand(limitKey: string, max: number, fn: (brandId: str
     return NextResponse.json(await fn(brand.id));
   } catch (err) {
     if (err instanceof UploadError) return NextResponse.json({ error: err.message }, { status: err.status });
-    console.error("[uploads]", redact((err as Error).message));
-    return NextResponse.json({ error: "Beklenmeyen hata" }, { status: 500 });
+    const requestId = (await headers()).get("x-request-id") ?? undefined;
+    log("error", "api.uploads_error", { requestId, brandId: brand.id, route: limitKey, error: err });
+    return NextResponse.json({ error: "Beklenmeyen hata", requestId }, { status: 500 });
   }
 }

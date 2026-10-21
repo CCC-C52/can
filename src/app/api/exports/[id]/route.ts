@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import { requireBrand } from "@/lib/current";
 import { q1 } from "@/lib/db/pool";
 import { getStorage } from "@/lib/storage";
@@ -6,6 +7,7 @@ export const runtime = "nodejs";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  if (!isUuid(id)) return new Response("Bulunamadı", { status: 404 });
   const brand = await requireBrand().catch(() => null);
   if (!brand) return new Response("Marka seçili değil", { status: 400 });
   const a = await q1<{ response: { storage_key?: string } | null }>(`SELECT response FROM external_actions WHERE id = $1 AND brand_id = $2 AND status = 'manual_export'`, [id, brand.id]);

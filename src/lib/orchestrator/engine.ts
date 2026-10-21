@@ -1,5 +1,6 @@
 import { q, q1, tx, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
+import { log } from "@/lib/log";
 import { getLimits, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
 import { ModelUnavailableError, PermanentError, TransientError, type TextModelAdapter } from "@/lib/models/types";
@@ -125,6 +126,7 @@ export class Engine {
     }, 10_000);
     let outcome = "succeeded";
     let errMsg: string | null = null;
+    const startedAt = Date.now();
     try {
       const ctx: RunCtx = { task, signal: ctrl.signal, limits, model: getTextModel() };
       await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: `agent:${task.agent}`, action: "task.start", message: `${agentName(task.agent)} başladı: ${task.title}${task.phase === "review" ? " (kalite kontrol)" : ""}` });
@@ -168,6 +170,10 @@ export class Engine {
       clearInterval(renew);
       await q(`UPDATE task_attempts SET outcome = $2, error = $3, finished_at = now() WHERE id = $1`, [attempt!.id, outcome, errMsg]);
       await updateProjectStatus(task.project_id);
+      log(outcome === "failed" ? "warn" : "info", "task.attempt", {
+        taskId: task.id, projectId: task.project_id, brandId: task.brand_id, agent: task.agent, kind: task.kind, phase: task.phase,
+        attempt: task.attempts, outcome, durationMs: Date.now() - startedAt, workerId: this.workerId, error: errMsg ?? undefined,
+      });
     }
   }
 }

@@ -4,7 +4,7 @@ import { q } from "@/lib/db/pool";
 import { config } from "@/lib/config";
 import { textModelMode } from "@/lib/models";
 import { loginRequired } from "@/lib/auth";
-import { pauseAction, requestBackupAction, saveLimitsAction } from "@/app/actions";
+import { pauseAction, requestBackupAction, saveAnalysisSettingsAction, saveLimitsAction } from "@/app/actions";
 import { backupConfigured, type BackupStatus } from "@/lib/services/backup";
 import { getSetting } from "@/lib/settings";
 import { Flash, PageHeader, dt } from "@/components/ui";
@@ -13,7 +13,7 @@ import { SubmitButton } from "@/components/client";
 export default async function Settings({ searchParams }: { searchParams: SP }) {
   const { ok, err, one } = await flash(searchParams);
   const { brand } = await getCurrentBrand();
-  const [limits, paused] = await Promise.all([getLimits(), isPaused()]);
+  const [limits, paused, visionOnUpload] = await Promise.all([getLimits(), isPaused(), getSetting<boolean>("vision_on_upload", true)]);
   const scope = one("scope") === "all" ? "all" : "brand";
   const logs = await q<{ id: number; actor: string; action: string; message: string; created_at: string; brand_id: string | null }>(
     scope === "all" || !brand ? `SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200` : `SELECT * FROM audit_log WHERE brand_id = $1 OR brand_id IS NULL ORDER BY created_at DESC LIMIT 200`,
@@ -48,6 +48,13 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
               <div className="mt-2 max-w-xs">{num("maxVideoGenSeconds", "Proje başına AI video sınırı (saniye)", limits.maxVideoGenSeconds, "Veo bir videoda 4-8 sn üretir.")}</div>
             </fieldset>
             <div className="sm:col-span-2"><SubmitButton>Kaydet</SubmitButton></div>
+          </form>
+        </section>
+        <section className="card lg:col-span-2">
+          <h2 className="h2 mb-2">Medya analizi</h2>
+          <form action={saveAnalysisSettingsAction} className="space-y-2 text-sm">
+            <label className="flex items-start gap-2"><input type="checkbox" name="visionOnUpload" defaultChecked={visionOnUpload} className="mt-1" /> <span>Yüklenen her fotoğraf ve videoyu AI görsel modeliyle de analiz et (ücretli; model gerçek modda çalışır). Kapalıyken yalnızca ücretsiz yerel piksel/kare analizi yapılır; dosya sayfasından tek tek &quot;Yeniden analiz et&quot; denebilir.</span></label>
+            <SubmitButton>Kaydet</SubmitButton>
           </form>
         </section>
         <section className="card space-y-3 text-sm">

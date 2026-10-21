@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -53,6 +54,7 @@ function partBytes(s: Pick<UploadSession, "size_bytes" | "part_size" | "part_cou
 }
 
 export async function getSession(brandId: string, id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<UploadSession>(`SELECT * FROM upload_sessions WHERE id = $1 AND brand_id = $2`, [id, brandId], db);
 }
 

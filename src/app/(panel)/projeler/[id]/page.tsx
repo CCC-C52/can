@@ -1,3 +1,4 @@
+import { FAILURE_ACTION, type FailureClass } from "@/lib/orchestrator/engine";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBrand, flash, type SP } from "@/lib/current";
@@ -62,7 +63,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
             <tbody>
               {ordered.map((t) => (
                 <tr key={t.id}>
-                  <td><Link className="text-brand" href={`/gorevler/${t.id}`}>{t.title}</Link>{t.error && <div className="mt-1 max-w-md text-xs text-red-700">{t.error}</div>}</td>
+                  <td><Link className="text-brand" href={`/gorevler/${t.id}`}>{t.title}</Link>{t.error && <div className={`mt-1 max-w-md text-xs ${t.status === "ready" ? "text-muted" : "text-red-700"}`}>{t.error}</div>}{t.failure_class && FAILURE_ACTION[t.failure_class as FailureClass] && <div className="mt-1 max-w-md text-xs text-amber-800">{FAILURE_ACTION[t.failure_class as FailureClass].label}: {FAILURE_ACTION[t.failure_class as FailureClass].action}</div>}</td>
                   <td className="whitespace-nowrap">{agentName(t.agent)}</td>
                   <td><Badge tone={TASK_STATUS_TONE[t.status]}>{TASK_STATUS_LABEL[t.status]}</Badge></td>
                   <td className="text-xs text-muted">{t.depends_on.map((d) => byId.get(d)?.key).filter(Boolean).join(", ") || "—"}</td>

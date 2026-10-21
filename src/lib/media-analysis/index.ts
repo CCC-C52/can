@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -119,6 +120,7 @@ export async function enqueueAnalysis(asset: Pick<MediaAsset, "id" | "brand_id" 
 
 /** Bir varlığın en güncel tamamlanmış (tercihen vision) analizi. Marka kontrolü yapılır. */
 export async function latestAnalysis(brandId: string, assetId: string, db: Queryable = getPool()) {
+  if (!isUuid(assetId)) return null;
   return q1<MediaAnalysis>(
     `SELECT * FROM media_analyses WHERE brand_id = $1 AND asset_id = $2
      ORDER BY (status = 'completed') DESC, (level = 'vision') DESC, created_at DESC LIMIT 1`,

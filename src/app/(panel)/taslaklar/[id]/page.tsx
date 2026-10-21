@@ -32,10 +32,14 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
   if (!shown) return <p className="muted">Bu çıktının henüz sürümü yok.</p>;
   const isCurrent = shown.version === current.version;
   const assetIds = [...new Set(versions.flatMap((v) => v.asset_ids))];
-  const [assets, actions, jobs] = await Promise.all([
+  const [assets, actions, jobs, costs] = await Promise.all([
     assetIds.length ? q<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) ORDER BY created_at`, [brand.id, assetIds]) : Promise.resolve([] as MediaAsset[]),
     q<ExternalAction & { version: number }>(`SELECT a.*, v.version FROM external_actions a JOIN output_versions v ON v.id = a.output_version_id WHERE v.output_id = $1 AND a.brand_id = $2 ORDER BY a.created_at DESC`, [id, brand.id]),
     q<ProviderJob>(`SELECT j.* FROM provider_jobs j JOIN tasks t ON t.id = j.task_id WHERE t.output_id = $1 AND j.brand_id = $2 ORDER BY j.created_at DESC`, [id, brand.id]),
+    q<{ service: string; est: number | null; act: number | null; unknown: number; n: number }>(
+      `SELECT c.service, SUM(c.amount_usd) FILTER (WHERE c.kind = 'estimated')::float AS est, SUM(c.amount_usd) FILTER (WHERE c.kind = 'actual')::float AS act,
+         COUNT(*) FILTER (WHERE c.amount_usd IS NULL)::int AS unknown, COUNT(*)::int AS n
+       FROM cost_entries c JOIN tasks t ON t.id = c.task_id WHERE t.output_id = $1 AND c.brand_id = $2 GROUP BY c.service ORDER BY c.service`, [id, brand.id]),
   ]);
   const latestDecision = approvals.find((a) => a.output_version_id === current.id && !a.revoked_at);
   const scopes = requiredScopes(out.kind, current.content);
@@ -139,6 +143,19 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
               ))}
             </section>
           )}
+
+          <section className="card space-y-2" aria-labelledby="cost-h">
+            <h2 id="cost-h" className="h2">Maliyet</h2>
+            {costs.length ? (
+              <table className="w-full text-left text-xs">
+                <thead><tr className="text-muted"><th className="py-1">Servis</th><th>Tahmini</th><th>Gerçekleşen</th></tr></thead>
+                <tbody>{costs.map((c) => (
+                  <tr key={c.service} className="border-t border-line"><td className="py-1">{c.service}</td><td>{c.est === null ? "—" : `$${c.est.toFixed(4)}`}</td><td>{c.act === null ? "—" : `$${c.act.toFixed(4)}`}{c.unknown ? ` · ${c.unknown} bilinmiyor` : ""}</td></tr>
+                ))}</tbody>
+              </table>
+            ) : <p className="text-xs text-muted">Bu çıktı için ücretli işlem kaydı yok (DEMO ve yerel işlemler ücretsizdir).</p>}
+            <p className="text-xs text-muted">Gerçekleşen tutarlar sağlayıcının bildirdiği kullanım veya yapılandırılmış birim fiyattır; fatura ile doğrulanmamıştır.</p>
+          </section>
 
           {jobs.length > 0 && (
             <section className="card space-y-2" aria-labelledby="jobs-h">

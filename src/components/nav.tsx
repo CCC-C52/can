@@ -16,6 +16,7 @@ export const NAV = [
   { href: "/entegrasyonlar", label: "Entegrasyonlar" },
   { href: "/raporlar", label: "Maliyet ve performans" },
   { href: "/ajanlar", label: "Ajanlar" },
+  { href: "/tanilama", label: "Sistem durumu" },
   { href: "/ayarlar", label: "Ayarlar ve geçmiş" },
 ];
 

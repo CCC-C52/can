@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import { q, q1, tx, type Queryable, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { getLimits, setSetting } from "@/lib/settings";
@@ -94,6 +95,7 @@ export async function submitInstruction(args: { brandId: string; instruction: st
 }
 
 export async function getProject(brandId: string, id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<Project>(`SELECT * FROM projects WHERE id = $1 AND brand_id = $2`, [id, brandId], db);
 }
 
@@ -120,6 +122,7 @@ export async function listTasks(brandId: string, f: { projectId?: string; status
 }
 
 export async function getTask(brandId: string, id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<Task>(`SELECT * FROM tasks WHERE id = $1 AND brand_id = $2`, [id, brandId], db);
 }
 

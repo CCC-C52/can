@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import { q, q1, tx, type Queryable, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { contentHash } from "@/lib/security/crypto";
@@ -87,6 +88,7 @@ export async function attachAssetsToVersion(versionId: string, assetIds: string[
 }
 
 export async function getOutput(brandId: string, id: string, db: Queryable = getPool()) {
+  if (!isUuid(id)) return null;
   return q1<Output>(`SELECT * FROM outputs WHERE id = $1 AND brand_id = $2`, [id, brandId], db);
 }
 
@@ -108,10 +110,12 @@ export async function listVersions(brandId: string, outputId: string, db: Querya
 }
 
 export async function getVersion(brandId: string, versionId: string, db: Queryable = getPool()) {
+  if (!isUuid(versionId)) return null;
   return q1<OutputVersion>(`SELECT * FROM output_versions WHERE id = $1 AND brand_id = $2`, [versionId, brandId], db);
 }
 
 export async function getCurrentVersion(brandId: string, outputId: string, db: Queryable = getPool()) {
+  if (!isUuid(outputId)) return null;
   return q1<OutputVersion>(
     `SELECT v.* FROM output_versions v JOIN outputs o ON o.id = v.output_id AND v.version = o.current_version
      WHERE o.id = $1 AND o.brand_id = $2`,

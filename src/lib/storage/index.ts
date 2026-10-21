@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import {
   S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CopyObjectCommand, HeadObjectCommand,
   CreateMultipartUploadCommand, UploadPartCommand, ListPartsCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand,
@@ -14,6 +15,8 @@ export interface StorageAdapter {
   readonly driver: "local" | "s3";
   put(key: string, data: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
+  /** Belleğe almadan okuma akışı; isteğe bağlı bayt aralığı (her iki uç dahil). */
+  stream(key: string, range?: { start: number; end: number }): Promise<ReadableStream<Uint8Array>>;
   /** Büyük dosyaları belleğe almadan yerel dosyaya akıtır. */
   downloadToFile(key: string, file: string): Promise<number>;
   /** Yerel dosyayı belleğe almadan yükler. */
@@ -58,6 +61,11 @@ export class LocalStorage implements StorageAdapter {
   }
   async get(key: string) {
     return fs.readFile(this.file(key));
+  }
+  async stream(key: string, range?: { start: number; end: number }) {
+    const f = this.file(key);
+    await fs.access(f);
+    return Readable.toWeb(createReadStream(f, range ? { start: range.start, end: range.end } : {})) as ReadableStream<Uint8Array>;
   }
   async downloadToFile(key: string, file: string) {
     await fs.copyFile(this.file(key), file);
@@ -156,6 +164,10 @@ export class S3Storage implements StorageAdapter {
     const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));
     const bytes = await res.Body!.transformToByteArray();
     return Buffer.from(bytes);
+  }
+  async stream(key: string, range?: { start: number; end: number }) {
+    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: safeKey(key), Range: range ? `bytes=${range.start}-${range.end}` : undefined }));
+    return res.Body!.transformToWebStream() as ReadableStream<Uint8Array>;
   }
   async downloadToFile(key: string, file: string) {
     const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: safeKey(key) }));

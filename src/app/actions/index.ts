@@ -49,7 +49,8 @@ export async function loginAction(fd: FormData) {
   const s = signSession();
   (await cookies()).set(sessionCookieName(), s.value, { httpOnly: true, sameSite: "lax", secure: config.appMode === "production", maxAge: s.maxAge, path: "/" });
   await audit({ actor: "user", action: "auth.login", message: "Panele giriş yapıldı" });
-  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+  // Yalnızca site içi yol: "//evil", "/\\evil" ve kontrol karakterleri başka siteye yönlendirmeye çevrilemez
+  redirect(/^\/(?![\/\\])[^\s\\]*$/.test(next) ? next : "/");
 }
 
 export async function logoutAction() {
@@ -407,6 +408,15 @@ export async function requestBackupAction() {
     await setSetting("backup_requested", true);
     await audit({ actor: "user", action: "backup.requested", message: "Elle yedekleme istendi" });
     return "Yedekleme istendi; işleyici en geç 30 saniye içinde başlatır.";
+  });
+}
+
+export async function saveAnalysisSettingsAction(fd: FormData) {
+  await act("/ayarlar", async () => {
+    const on = str(fd, "visionOnUpload") === "on";
+    await setSetting("vision_on_upload", on);
+    await audit({ actor: "user", action: "settings.vision_on_upload", message: `Yüklemede AI görsel analizi ${on ? "açıldı" : "kapatıldı"}` });
+    return "Analiz ayarı kaydedildi.";
   });
 }
 

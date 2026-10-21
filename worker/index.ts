@@ -7,7 +7,7 @@ import { runMigrations } from "@/lib/db/migrate";
 import { closePool } from "@/lib/db/pool";
 import { assertProductionConfig, config } from "@/lib/config";
 import { textModelMode } from "@/lib/models";
-import { redact } from "@/lib/security/crypto";
+import { log } from "@/lib/log";
 import { backupConfigured, maybeRunScheduledBackup } from "@/lib/services/backup";
 import { runAnalysisQueueOnce } from "@/lib/media-analysis";
 import { runUploadQueueOnce } from "@/lib/uploads";
@@ -15,7 +15,7 @@ import { reconcileStaleSubmissions } from "@/lib/services/provider-jobs";
 
 const problems = assertProductionConfig("worker");
 if (problems.length) {
-  console.error("[worker] Üretim yapılandırması eksik:\n - " + problems.join("\n - "));
+  log("error", "worker.config_invalid", { problems });
   process.exit(1);
 }
 
@@ -25,17 +25,17 @@ let stopping = false;
 
 async function main() {
   const applied = await runMigrations();
-  if (applied.length) console.log(`[worker] Geçişler uygulandı: ${applied.join(", ")}`);
-  console.log(`[worker] Başladı: ${workerId} · ${textModelMode().label} · yoklama ${config.workerPollMs} ms`);
+  if (applied.length) log("info", "worker.migrations_applied", { migrations: applied });
+  log("info", "worker.started", { workerId, mode: textModelMode().mode, pollMs: config.workerPollMs });
   const b = backupConfigured();
-  console.log(b.ok ? `[worker] Günlük yedekleme etkin (UTC ${config.backup.hourUtc}:00 sonrası)` : `[worker] UYARI: yedekleme kapalı — ${b.reason}`);
+  log(b.ok ? "info" : "warn", b.ok ? "backup.enabled" : "backup.disabled", b.ok ? { hourUtc: config.backup.hourUtc } : { reason: b.reason });
   let backupRunning = false;
   let analysisRunning = false;
   let lastBackupCheck = 0;
   while (!stopping) {
     try {
       const n = await engine.tick();
-      if (n) console.log(`[worker] ${n} görev alındı (aktif: ${engine.activeCount})`);
+      if (n) log("info", "tasks.claimed", { count: n, active: engine.activeCount });
       // Medya analizi: görev döngüsünü bloklamadan, aynı anda tek analiz (bellek sınırı)
       if (!analysisRunning) {
         analysisRunning = true;
@@ -44,15 +44,15 @@ async function main() {
           for (let i = 0; i < 5; i++) {
             const u = await runUploadQueueOnce(workerId);
             if (!u) break;
-            console.log(`[worker] yükleme ${u.id.slice(0, 8)} (${u.filename}): ${u.status}${u.error ? ` — ${u.error}` : ""}`);
+            log(u.status === "failed" ? "warn" : "info", "upload.processed", { uploadId: u.id, status: u.status, error: u.error ?? undefined });
           }
           for (let i = 0; i < 5; i++) {
             const a = await runAnalysisQueueOnce(workerId);
             if (!a) break;
-            console.log(`[worker] medya analizi ${a.id.slice(0, 8)}: ${a.status}${a.error ? ` — ${a.error}` : ""}`);
+            log(a.status === "failed" ? "warn" : "info", "analysis.processed", { analysisId: a.id, status: a.status, error: a.error ?? undefined });
           }
         })()
-          .catch((e) => console.error("[worker] analiz hatası:", redact((e as Error).message)))
+          .catch((e) => log("error", "analysis.loop_error", { error: e }))
           .finally(() => { analysisRunning = false; });
       }
       // Yedekleme görev döngüsünü bloklamadan, en fazla 30 sn'de bir kontrol edilir
@@ -60,16 +60,16 @@ async function main() {
         lastBackupCheck = Date.now();
         // Ücretli gönderim sırasında yarıda kalan işler (gönderim zaman aşımı 3 dk'dan uzun süredir "submitting"): sonucu bilinmiyor
         reconcileStaleSubmissions(10 * 60_000)
-          .then((n) => n && console.log(`[worker] ${n} sağlayıcı işi 'sonuç bilinmiyor' olarak işaretlendi (otomatik tekrar gönderilmedi)`))
-          .catch((e) => console.error("[worker] uzlaştırma hatası:", redact((e as Error).message)));
+          .then((n) => n && log("warn", "provider_jobs.marked_unknown", { count: n }))
+          .catch((e) => log("error", "provider_jobs.reconcile_error", { error: e }));
         backupRunning = true;
         maybeRunScheduledBackup()
-          .then((s) => s && console.log(`[worker] Yedekleme ${s.ok ? "tamamlandı" : `başarısız: ${s.error}`}`))
-          .catch((e) => console.error("[worker] yedekleme hatası:", redact((e as Error).message)))
+          .then((s) => s && log(s.ok ? "info" : "error", s.ok ? "backup.completed" : "backup.failed", { error: s.error ?? undefined }))
+          .catch((e) => log("error", "backup.error", { error: e }))
           .finally(() => { backupRunning = false; });
       }
     } catch (err) {
-      console.error("[worker] döngü hatası:", redact((err as Error).message));
+      log("error", "worker.loop_error", { error: err });
     }
     await new Promise((r) => setTimeout(r, config.workerPollMs));
   }
@@ -78,7 +78,7 @@ async function main() {
 async function stop(signal: string) {
   if (stopping) return;
   stopping = true;
-  console.log(`[worker] ${signal} alındı, çalışan görevler kuyruğa geri bırakılıyor...`);
+  log("info", "worker.stopping", { signal });
   await engine.shutdown().catch(() => {});
   await closePool();
   process.exit(0);
@@ -87,7 +87,7 @@ process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));
 
 main().catch(async (err) => {
-  console.error("[worker] başlatılamadı:", redact((err as Error).message));
+  log("error", "worker.start_failed", { error: err });
   await closePool();
   process.exit(1);
 });

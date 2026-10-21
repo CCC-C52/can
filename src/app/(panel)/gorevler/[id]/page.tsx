@@ -1,3 +1,4 @@
+import { FAILURE_ACTION, type FailureClass } from "@/lib/orchestrator/engine";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBrand, flash, type SP } from "@/lib/current";
@@ -42,7 +43,12 @@ export default async function TaskDetail({ params, searchParams }: { params: Pro
           <div className="label">Talimat</div>
           <p className="whitespace-pre-wrap text-sm">{t.instruction}</p>
           {t.feedback && <><div className="label mt-3">Geri bildirim (yeniden üretim)</div><p className="whitespace-pre-wrap text-sm">{t.feedback}</p></>}
-          {t.error && <><div className="label mt-3">Hata / not</div><p className="whitespace-pre-wrap text-sm text-red-700">{t.error}</p></>}
+          {t.error && <><div className="label mt-3">{t.status === "ready" ? "Durum" : "Hata / not"}</div><p className={`whitespace-pre-wrap text-sm ${t.status === "ready" ? "text-muted" : "text-red-700"}`}>{t.error}</p></>}
+          {t.failure_class && FAILURE_ACTION[t.failure_class as FailureClass] && (
+            <div className="mt-2 rounded-lg bg-amber-50 p-2 text-sm text-amber-900 ring-1 ring-amber-200">
+              <strong>{FAILURE_ACTION[t.failure_class as FailureClass].label}</strong>{FAILURE_ACTION[t.failure_class as FailureClass].blocks ? " (projeyi engeller)" : ""} — {FAILURE_ACTION[t.failure_class as FailureClass].action}
+            </div>
+          )}
           {t.output_id && <Link href={`/taslaklar/${t.output_id}`} className="btn-primary mt-4">Çıktıyı aç</Link>}
           <dl className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
             <div><dt className="label">Kimlik</dt><dd className="break-all text-xs">{t.id}</dd></div>

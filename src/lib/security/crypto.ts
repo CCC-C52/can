@@ -64,6 +64,8 @@ export function redact(text: string): string {
     .replace(/sk-ant-[A-Za-z0-9_\-]+/g, "sk-ant-***")
     .replace(/sk-[A-Za-z0-9_\-]{16,}/g, "sk-***")
     .replace(/shpat_[A-Za-z0-9]+/g, "shpat_***")
-    .replace(/(access_token|client_secret|api_key|password)=([^&\s]+)/gi, "$1=***")
-    .replace(/("?(?:access_token|client_secret|api_key|password|authorization)"?\s*[:=]\s*")([^"]+)"/gi, '$1***"');
+    .replace(/AIza[0-9A-Za-z_\-]{20,}/g, "AIza***")
+    .replace(/Bearer\s+[A-Za-z0-9._\-]{8,}/g, "Bearer ***")
+    .replace(/(access_token|client_secret|api_key|password|key|sig|signature|X-Amz-Signature|X-Amz-Credential)=([^&\s]+)/gi, "$1=***")
+    .replace(/("?(?:access_token|client_secret|api_key|password|authorization|x-goog-api-key)"?\s*[:=]\s*")([^"]+)"/gi, '$1***"');
 }
