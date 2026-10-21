@@ -48,6 +48,10 @@ const T = {
     collectionDesc: "Products featured in the launch campaign.",
     faqTitle: "Shipping & returns",
     pendingInfo: "[Pending: shipping and return details have not been provided yet.]",
+    details: "The details",
+    styleIt: "How to wear it",
+    behind: "Behind the design",
+    swipe: "Swipe for details",
   },
   tr: {
     discover: "Keşif",
@@ -65,6 +69,10 @@ const T = {
     collectionDesc: "Lansman kampanyasında yer alan ürünler.",
     faqTitle: "Gönderim ve iade",
     pendingInfo: "[Bekliyor: gönderim ve iade bilgileri henüz girilmedi.]",
+    details: "Detaylar",
+    styleIt: "Nasıl kombinlenir",
+    behind: "Tasarımın hikâyesi",
+    swipe: "Detaylar için kaydır",
   },
 };
 
@@ -181,6 +189,28 @@ export function demoStrategy(input: DemoInput): StrategyOutput {
     ad_ideas: [
       { platform: "Instagram", format: "Reel 9:16", hook: `${t.newIn}: ${names}`, audience: known(ctx.brand.target_audience) ? ctx.brand.target_audience : "Bilinmiyor", budget_note: "Bütçe belirlenmedi; reklam başlatmak ayrı onay gerektirir." },
     ],
+    brand_analysis: {
+      strengths: [
+        ...(known(ctx.brand.story) ? [{ point: "Marka hikâyesi tanımlı", basis: "brand_data" as const }] : []),
+        ...products.filter((p) => p.verified_facts.length).map((p) => ({ point: `${p.title}: ${p.verified_facts.length} doğrulanmış özellik`, basis: "brand_data" as const })),
+      ],
+      gaps: brandUnknowns(ctx),
+    },
+    competitor_framework: {
+      criteria: ["Fiyat aralığı", "Ürün çeşitliliği", "Görsel dil", "İçerik sıklığı", "Topluluk etkileşimi"],
+      competitors_to_research: [],
+      questions: ["Doğrudan rakip olarak gördüğünüz markalar hangileri?"],
+    },
+    organic_strategy: {
+      pillars: t.themes,
+      posting_frequency: "Haftada 3-4 gönderi önerilir (performans verisi olmadığından başlangıç önerisidir).",
+      channels: [{ platform: "Instagram", role: "Ana vitrin" }, { platform: "TikTok", role: "Keşif / erişim" }],
+    },
+    performance_recommendations: [
+      { metric: "Kaydetme oranı", how_to_measure: "Instagram Insights — kaydetme / erişim", note: "Hedef rakam, ilk 2 haftalık gerçek veriden sonra belirlenmeli." },
+      { metric: "Ürün sayfası ziyareti", how_to_measure: "Shopify Analytics — kaynak: sosyal", note: "Bağlantı olmadan ölçülemez." },
+    ],
+    assumptions: known(ctx.brand.target_audience) ? [] : ["Hedef kitle kayıtta olmadığı için genel bir kitle varsayıldı."],
     unknowns: brandUnknowns(ctx),
   };
 }
@@ -201,6 +231,14 @@ export function demoShopify(input: DemoInput): ShopifyProposal {
     collections: products.length ? [{ title: t.collection, description: t.collectionDesc, rule_summary: "Manuel koleksiyon", product_ids: products.map((p) => p.id) }] : [],
     pages: [{ title: t.faqTitle, purpose: "Gönderim/iade bilgisi sayfası", body: known(ctx.brand.shipping_info) || known(ctx.brand.return_policy) ? [ctx.brand.shipping_info, ctx.brand.return_policy].filter(known).join("\n\n") : t.pendingInfo }],
     bundles: products.length > 1 ? [{ name: `${products[0].title} + ${products[1].title}`, product_ids: [products[0].id, products[1].id], rationale: "Lansman ürünlerini birlikte sunmak", pricing_note: "Bundle fiyatı belirlenmedi; fiyat kararı kullanıcıya ait." }] : [],
+    pdp_drafts: products.map((p) => ({
+      product_id: p.id,
+      headline: p.title,
+      body: `${DEMO_TAG} ${p.title}.`,
+      bullet_points: p.verified_facts.map((f) => `${f.attribute}: ${f.value}`),
+      seo_title: `${p.title} | ${ctx.brand.name}`.slice(0, 70),
+      seo_description: `${p.title}${factLine(p) ? ` — ${factLine(p)}` : ""}`.slice(0, 160),
+    })),
     unknowns: brandUnknowns(ctx),
   };
 }
@@ -223,6 +261,8 @@ export function demoDesign(input: DemoInput): DesignBriefOutput {
       product_ids: [p.id],
       source_asset_ids: photos.slice(0, 3),
       use_real_product_photo: photos.length > 0,
+      render_mode: photos.length > 0 ? "photo_composition" : "typography",
+      slides: [],
       generation_prompt: `Clean editorial background for a fashion product post, palette ${palette}. Do not depict or alter the product itself.`,
       notes: DEMO_TAG,
     });
@@ -237,9 +277,48 @@ export function demoDesign(input: DemoInput): DesignBriefOutput {
     product_ids: products.map((p) => p.id),
     source_asset_ids: [],
     use_real_product_photo: false,
+    render_mode: "typography",
+    slides: [],
     generation_prompt: `Minimal vertical cover background, palette ${palette}, space for headline text.`,
     notes: DEMO_TAG,
   });
+  const carouselPhoto = ctx.media.find((m) => products.some((p) => p.id === m.product_id) && m.origin === "real_photo");
+  if (products[0]) {
+    const p0 = products[0];
+    briefs.push({
+      id: "carousel-1",
+      purpose: "carousel",
+      format: "4:5",
+      headline: `${t.newIn}: ${p0.title}`,
+      body_text: t.swipe,
+      visual_direction: `Carousel. Palet: ${palette}.`,
+      product_ids: [p0.id],
+      source_asset_ids: carouselPhoto ? [carouselPhoto.id] : [],
+      use_real_product_photo: !!carouselPhoto,
+      render_mode: carouselPhoto ? "photo_composition" : "typography",
+      slides: [
+        { headline: t.details, body_text: factLine(p0) || p0.title },
+        { headline: t.styleIt, body_text: t.cta },
+      ],
+      generation_prompt: "",
+      notes: DEMO_TAG,
+    });
+    briefs.push({
+      id: "story-1",
+      purpose: "story",
+      format: "9:16",
+      headline: `${t.newIn}: ${p0.title}`,
+      body_text: t.cta,
+      visual_direction: `Story. Palet: ${palette}.`,
+      product_ids: [p0.id],
+      source_asset_ids: carouselPhoto ? [carouselPhoto.id] : [],
+      use_real_product_photo: !!carouselPhoto,
+      render_mode: carouselPhoto ? "photo_composition" : "typography",
+      slides: [],
+      generation_prompt: "",
+      notes: DEMO_TAG,
+    });
+  }
   return { summary: `${DEMO_TAG} ${briefs.length} görsel brief hazırlandı.`, briefs, unknowns: brandUnknowns(ctx) };
 }
 
@@ -265,6 +344,10 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
           subtitles: clips.map((_, i) => ({ start: i * per, end: (i + 1) * per - 0.2, text: i === 0 ? `${t.newIn}: ${name}` : i === clips.length - 1 ? t.cta : ctx.brand.name })),
           generation_prompt: "",
           music_note: "Lisanslı müzik seçilmedi; müzik ekleme manuel.",
+          transition: "fade",
+          framing: "fit",
+          intro_text: ctx.brand.name,
+          outro_text: t.cta,
         },
       ],
       unknowns: brandUnknowns(ctx),
@@ -289,6 +372,10 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
         ],
         generation_prompt: "Atmospheric vertical b-roll, soft light, no product shown, no text.",
         music_note: "Müzik seçilmedi.",
+        transition: "cut",
+        framing: "fit",
+        intro_text: "",
+        outro_text: "",
       },
     ],
     unknowns: [...brandUnknowns(ctx), "Arşivde ürün videosu yok; gerçek ürün görüntüsü için çekim gerekli."],
@@ -324,7 +411,27 @@ export function demoSocial(input: DemoInput): SocialPackage {
     posts.push({ id: "ig-reel-1", platform: "instagram", format: "reel", caption: `${DEMO_TAG} ${ctx.brand.name} — ${t.launch}`, hashtags: [tag], cta: t.learnMore, suggested_datetime: iso(posts.length), media_refs: [video.videos[0].id], cover_text: `${ctx.brand.name}` });
     posts.push({ id: "tt-video-1", platform: "tiktok", format: "video", caption: `${DEMO_TAG} ${ctx.brand.name} ${t.launch}`, hashtags: [tag], cta: t.learnMore, suggested_datetime: iso(posts.length), media_refs: [video.videos[0].id], cover_text: `${ctx.brand.name}` });
   }
-  return { summary: `${DEMO_TAG} ${posts.length} gönderilik yayın paketi taslağı. Yayın yalnızca onaydan sonra yapılabilir.`, posts, unknowns: brandUnknowns(ctx) };
+  // En az üç Instagram konsepti (ürün sayısı azsa farklı temalarla)
+  const themes = [t.details, t.styleIt, t.behind];
+  for (let k = 0; posts.filter((x) => x.platform === "instagram" && x.format !== "reel").length < 3 && products.length; k++) {
+    const p = products[k % products.length];
+    posts.push({
+      id: `ig-post-${posts.length + 1}`, platform: "instagram", format: k === 0 && design?.briefs.some((b) => b.purpose === "carousel") ? "carousel" : "feed",
+      caption: `${DEMO_TAG} ${themes[k % themes.length]} — ${p.title}.${factLine(p) ? `\n${factLine(p)}` : ""}`, hashtags: [tag], cta: t.cta,
+      suggested_datetime: iso(posts.length), media_refs: design?.briefs.filter((b) => b.product_ids.includes(p.id)).map((b) => b.id).slice(0, 1) ?? [], cover_text: p.title,
+    });
+  }
+  const p0 = products[0];
+  const reels_ideas: SocialPackage["reels_ideas"] = p0 ? [
+    { id: "reel-idea-1", title: `${p0.title} — ${t.details}`, hook: `${t.newIn}: ${p0.title}`, shots: ["Yakın plan ürün detayı", "Tam boy ürün", "Logo / kapanış"], on_screen_text: factLine(p0) || p0.title, media_refs: video?.videos.map((v) => v.id).slice(0, 1) ?? [] },
+    { id: "reel-idea-2", title: `${p0.title} — ${t.styleIt}`, hook: t.styleIt, shots: ["Kombin 1", "Kombin 2", "Kapanış"], on_screen_text: t.cta, media_refs: [] },
+  ] : [];
+  const tiktok_concepts: SocialPackage["tiktok_concepts"] = p0 ? [{ id: "tt-concept-1", title: `${t.behind}: ${p0.title}`, hook: `${t.newIn}: ${p0.title}`, format: "Dikey 9:16, 8-15 sn", notes: "Gerçek çekim kullanılmalı; ürün özellikleri yalnızca doğrulanmış bilgilerden." }] : [];
+  const calendar_7d: SocialPackage["calendar_7d"] = Array.from({ length: 7 }, (_, d) => {
+    const post = posts[d % Math.max(1, posts.length)];
+    return { day: d + 1, date: iso(d).slice(0, 10), platform: post?.platform ?? "instagram", format: post?.format ?? "story", post_ref: d < posts.length ? post.id : "", theme: d < posts.length ? themes[d % themes.length] : "Story / etkileşim (yeni içerik gerekmez)" };
+  });
+  return { summary: `${DEMO_TAG} ${posts.length} gönderilik yayın paketi, ${reels_ideas.length} Reels fikri, 7 günlük plan. Yayın yalnızca onaydan sonra yapılabilir.`, posts, reels_ideas, tiktok_concepts, calendar_7d, unknowns: brandUnknowns(ctx) };
 }
 
 export function demoQualityAnalysis(input: DemoInput): QaReview {

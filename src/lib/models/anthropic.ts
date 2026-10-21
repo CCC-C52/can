@@ -29,7 +29,12 @@ export function toStrictJsonSchema(schema: z.ZodType): Record<string, unknown> {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) return node.forEach(walk);
     const n = node as Record<string, unknown>;
-    if (n.type === "object") n.additionalProperties = false;
+    if (n.type === "object") {
+      n.additionalProperties = false;
+      // Varsayılanlı alanlar da üretimde zorunlu tutulur (eski kayıtların düzenlenmesi için varsayılan yalnızca ayrıştırmada kullanılır)
+      if (n.properties && typeof n.properties === "object") n.required = Object.keys(n.properties as object);
+    }
+    delete n.default;
     Object.values(n).forEach(walk);
   };
   walk(js);

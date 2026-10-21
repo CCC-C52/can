@@ -63,7 +63,7 @@ describe("Örnek ürün lansmanı (demo modu, uçtan uca)", () => {
   it("kullanıcı çıktıyı düzenleyip onaylar; onay doğru sürümle eşleşir", async () => {
     const out = (await listOutputs(brandId, { projectId })).find((o) => o.kind === "shopify_proposal")!;
     const v1 = (await getCurrentVersion(brandId, out.id))!;
-    const edited = structuredClone(v1.content);
+    const edited = JSON.parse(JSON.stringify(v1.content).replace(/\[DEMO\] ?/g, ""));
     edited.product_changes[0].proposed_value = "<p>Sample Linen Shirt.</p><ul><li>Fabric: 100% linen</li><li>Fit: Relaxed fit</li></ul>";
     edited.summary = "Edited by operator";
     const v2 = await editOutput(brandId, out.id, edited);

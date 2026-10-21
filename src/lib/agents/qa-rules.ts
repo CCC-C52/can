@@ -36,18 +36,22 @@ function customerStrings(agent: string, c: Record<string, any>): string[] {
       c.collections?.forEach((x: any) => { push(x.title); push(x.description); });
       c.pages?.forEach((x: any) => push(x.body));
       c.bundles?.forEach((x: any) => push(x.name));
+      c.pdp_drafts?.forEach((d: any) => { push(d.headline); push(d.body); d.bullet_points?.forEach(push); push(d.seo_title); push(d.seo_description); });
       break;
     case "design":
-      c.briefs?.forEach((b: any) => { push(b.headline); push(b.body_text); });
+      c.briefs?.forEach((b: any) => { push(b.headline); push(b.body_text); b.slides?.forEach((x: any) => { push(x.headline); push(x.body_text); }); });
       break;
     case "video":
       c.videos?.forEach((v: any) => {
         v.script?.forEach((s: any) => { push(s.on_screen_text); push(s.voiceover); });
         v.subtitles?.forEach((s: any) => push(s.text));
+        push(v.intro_text); push(v.outro_text);
       });
       break;
     case "social":
       c.posts?.forEach((p: any) => { push(p.caption); push(p.cta); push(p.cover_text); });
+      c.reels_ideas?.forEach((r: any) => { push(r.hook); push(r.on_screen_text); });
+      c.tiktok_concepts?.forEach((r: any) => push(r.hook));
       break;
   }
   return out;
@@ -153,6 +157,12 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
       }
       if (ch.field === "price" || ch.field === "compare_at_price") {
         checks.push({ name: "Fiyat değişikliği", status: "warn", detail: `"${p.title}" için fiyat değişikliği önerildi — ayrı fiyat onayı gerekir.` });
+      }
+    }
+    for (const d of content.pdp_drafts ?? []) {
+      if (!productIds.has(d.product_id)) {
+        checks.push({ name: "Ürün sayfası taslağı", status: "fail", detail: `Bu markada olmayan ürün: ${d.product_id}` });
+        required.push("Yalnızca bu markanın ürünlerini kullanın.");
       }
     }
     for (const col of [...(content.collections ?? []), ...(content.bundles ?? [])]) {

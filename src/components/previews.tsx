@@ -46,6 +46,27 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
             <ol className="mt-1 space-y-1">{content.campaign?.phases?.map((p: any, i: number) => <li key={i}><strong>{p.name}</strong> ({p.timing}): {p.actions.join(", ")}</li>)}</ol></div>
           <List title="İçerik temaları" items={content.content_themes} />
           <div><div className="label">Reklam önerileri</div><ul className="space-y-1">{content.ad_ideas?.map((a: any, i: number) => <li key={i}>{a.platform} · {a.format}: “{a.hook}” — {a.audience}. <span className="text-muted">{a.budget_note}</span></li>)}</ul></div>
+          {content.brand_analysis && (content.brand_analysis.strengths?.length > 0 || content.brand_analysis.gaps?.length > 0) && (
+            <div><div className="label">Marka analizi</div>
+              <ul className="space-y-1">{content.brand_analysis.strengths.map((x: any, i: number) => <li key={i}>{x.point} <Badge tone={x.basis === "assumption" ? "warn" : "ok"}>{x.basis === "assumption" ? "Varsayım" : "Marka verisi"}</Badge></li>)}</ul>
+              <List title="Eksikler" items={content.brand_analysis.gaps} /></div>
+          )}
+          {content.competitor_framework && content.competitor_framework.criteria?.length > 0 && (
+            <div><div className="label">Rakip analizi çerçevesi</div>
+              <p>Kriterler: {content.competitor_framework.criteria.join(", ")}</p>
+              <p className="text-muted">İncelenecek rakipler: {content.competitor_framework.competitors_to_research.length ? content.competitor_framework.competitors_to_research.join(", ") : "sizden bekleniyor (uydurulmadı)"}</p>
+              <List title="Sorular" items={content.competitor_framework.questions} /></div>
+          )}
+          {content.organic_strategy && content.organic_strategy.pillars?.length > 0 && (
+            <div><div className="label">Organik sosyal medya stratejisi</div>
+              <p>İçerik sütunları: {content.organic_strategy.pillars.join(", ")}</p>
+              <p>Sıklık: {content.organic_strategy.posting_frequency}</p>
+              <ul>{content.organic_strategy.channels.map((c: any, i: number) => <li key={i}>{c.platform}: {c.role}</li>)}</ul></div>
+          )}
+          {content.performance_recommendations?.length > 0 && (
+            <div><div className="label">Performans ölçümü önerileri</div><ul className="space-y-1">{content.performance_recommendations.map((r: any, i: number) => <li key={i}><strong>{r.metric}</strong> — {r.how_to_measure}. <span className="text-muted">{r.note}</span></li>)}</ul></div>
+          )}
+          <List title="Varsayımlar (doğrulanmış veri değil)" items={content.assumptions} />
           <List title="Bilinmeyenler" items={content.unknowns} />
         </div>
       );
@@ -70,6 +91,18 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
           </div>
           {content.collections?.length > 0 && <div><div className="label">Koleksiyonlar</div><ul>{content.collections.map((c: any, i: number) => <li key={i}><strong>{c.title}</strong> — {c.description} ({c.product_ids.map(pname).join(", ")})</li>)}</ul></div>}
           {content.pages?.length > 0 && <div><div className="label">Sayfalar</div>{content.pages.map((p: any, i: number) => <div key={i} className="rounded bg-gray-50 p-2"><strong>{p.title}</strong> <span className="text-muted">({p.purpose})</span><p className="whitespace-pre-wrap">{p.body}</p></div>)}<p className="mt-1 text-xs text-muted">Sayfalar bu sürümde canlıya otomatik yazılmaz; Shopify yönetim panelinden eklenir.</p></div>}
+          {content.pdp_drafts?.length > 0 && (
+            <div><div className="label">Ürün sayfası taslakları</div>
+              {content.pdp_drafts.map((d: any, i: number) => (
+                <div key={i} className="mb-2 rounded bg-gray-50 p-2">
+                  <strong>{d.headline}</strong> <span className="text-xs text-muted">({pname(d.product_id)})</span>
+                  <p className="whitespace-pre-wrap">{d.body}</p>
+                  {d.bullet_points.length > 0 && <ul className="list-disc pl-5">{d.bullet_points.map((b: string) => <li key={b}>{b}</li>)}</ul>}
+                  <p className="mt-1 text-xs text-muted">SEO: {d.seo_title} — {d.seo_description}</p>
+                </div>
+              ))}
+            </div>
+          )}
           {content.bundles?.length > 0 && <div><div className="label">Bundle önerileri</div><ul>{content.bundles.map((b: any, i: number) => <li key={i}><strong>{b.name}</strong>: {b.product_ids.map(pname).join(" + ")} — {b.rationale}. <span className="text-muted">{b.pricing_note}</span></li>)}</ul><p className="mt-1 text-xs text-muted">Bundle'lar Shopify'da bir bundle uygulaması gerektirir; otomatik oluşturulmaz.</p></div>}
           <List title="Bilinmeyenler" items={content.unknowns} />
         </div>
@@ -81,11 +114,12 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
           <div className="grid gap-3 md:grid-cols-2">
             {content.briefs?.map((b: any) => (
               <div key={b.id} className="rounded-lg border border-line p-3">
-                <div className="flex flex-wrap items-center gap-1"><strong>{b.id}</strong><Badge>{b.purpose}</Badge><Badge>{b.format}</Badge>{b.use_real_product_photo ? <Badge tone="ok">Gerçek ürün fotoğrafı</Badge> : <Badge tone="warn">AI görseli gerekir</Badge>}</div>
+                <div className="flex flex-wrap items-center gap-1"><strong>{b.id}</strong><Badge>{b.purpose}</Badge><Badge>{b.format}</Badge>{(b.render_mode ?? (b.use_real_product_photo ? "photo_composition" : "ai_image")) === "photo_composition" ? <Badge tone="ok">Gerçek ürün fotoğrafı + metin</Badge> : b.render_mode === "typography" ? <Badge tone="info">Tipografik tasarım</Badge> : <Badge tone="warn">AI görseli gerekir</Badge>}</div>
                 <p className="mt-2 font-medium">{b.headline}</p>
                 <p className="text-muted">{b.body_text}</p>
                 <p className="mt-1 text-xs">{b.visual_direction}</p>
-                {!b.use_real_product_photo && <p className="mt-1 text-xs text-muted">İstem: {b.generation_prompt}</p>}
+                {b.slides?.length > 0 && <ol className="mt-1 list-decimal pl-5 text-xs">{b.slides.map((x: any, i: number) => <li key={i}><strong>{x.headline}</strong> — {x.body_text}</li>)}</ol>}
+                {b.render_mode === "ai_image" && <p className="mt-1 text-xs text-muted">İstem: {b.generation_prompt}</p>}
                 <div className="mt-2 grid gap-2">{assetsFor(b.id).map((a) => <MediaThumb key={a.id} m={a} />)}</div>
                 {assetsFor(b.id).length === 0 && <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">Henüz görsel üretilmedi{b.use_real_product_photo ? " (render görevi bekleniyor)" : " — görsel üretim servisi bağlı değilse yalnızca brief mevcuttur"}.</p>}
               </div>
@@ -133,6 +167,19 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
               );
             })}
           </div>
+          {content.reels_ideas?.length > 0 && (
+            <div><div className="label">Reels fikirleri</div>
+              <ul className="space-y-2">{content.reels_ideas.map((r: any) => <li key={r.id} className="rounded bg-gray-50 p-2"><strong>{r.title}</strong> — kanca: “{r.hook}”<br /><span className="text-xs">Çekimler: {r.shots.join(" → ")} · Ekran metni: {r.on_screen_text}</span></li>)}</ul></div>
+          )}
+          {content.tiktok_concepts?.length > 0 && (
+            <div><div className="label">TikTok konseptleri</div>
+              <ul className="space-y-1">{content.tiktok_concepts.map((r: any) => <li key={r.id}><strong>{r.title}</strong> ({r.format}) — “{r.hook}”. <span className="text-muted">{r.notes}</span></li>)}</ul></div>
+          )}
+          {content.calendar_7d?.length > 0 && (
+            <div><div className="label">7 günlük organik plan</div>
+              <div className="overflow-x-auto"><table className="table"><thead><tr><th>Gün</th><th>Tarih</th><th>Platform</th><th>Biçim</th><th>Tema</th><th>Gönderi</th></tr></thead>
+                <tbody>{content.calendar_7d.map((d: any) => <tr key={d.day}><td>{d.day}</td><td className="whitespace-nowrap">{d.date}</td><td>{d.platform}</td><td>{d.format}</td><td>{d.theme}</td><td>{d.post_ref || "—"}</td></tr>)}</tbody></table></div></div>
+          )}
           <List title="Bilinmeyenler" items={content.unknowns} />
         </div>
       );

@@ -49,6 +49,22 @@ export const StrategySchema = z.object({
   ad_ideas: z.array(
     z.object({ platform: z.string(), format: z.string(), hook: z.string(), audience: z.string(), budget_note: z.string() }),
   ),
+  brand_analysis: z.object({
+    strengths: z.array(z.object({ point: z.string(), basis: z.enum(["brand_data", "assumption"]) })),
+    gaps: z.array(z.string()).describe("Marka kaydındaki eksikler veya zayıf noktalar"),
+  }).default({ strengths: [], gaps: [] }),
+  competitor_framework: z.object({
+    criteria: z.array(z.string()).describe("Rakip karşılaştırma kriterleri"),
+    competitors_to_research: z.array(z.string()).describe("YALNIZCA sahibin verdiği veya kayıttaki rakip adları; yoksa boş"),
+    questions: z.array(z.string()),
+  }).default({ criteria: [], competitors_to_research: [], questions: [] }),
+  organic_strategy: z.object({
+    pillars: z.array(z.string()),
+    posting_frequency: z.string().describe("Öneri; kesin performans vaadi değil"),
+    channels: z.array(z.object({ platform: z.string(), role: z.string() })),
+  }).default({ pillars: [], posting_frequency: "", channels: [] }),
+  performance_recommendations: z.array(z.object({ metric: z.string(), how_to_measure: z.string(), note: z.string().describe("Uydurma hedef rakam yazma") })).default([]),
+  assumptions: z.array(z.string()).describe("Doğrulanmış veriden ayrı tutulan varsayımlar").default([]),
   unknowns: Unknowns,
 });
 
@@ -72,6 +88,14 @@ export const ShopifyProposalSchema = z.object({
   bundles: z.array(
     z.object({ name: z.string(), product_ids: z.array(z.string()), rationale: z.string(), pricing_note: z.string() }),
   ),
+  pdp_drafts: z.array(z.object({
+    product_id: z.string(),
+    headline: z.string(),
+    body: z.string(),
+    bullet_points: z.array(z.string()).describe("Yalnızca doğrulanmış özellikler"),
+    seo_title: z.string(),
+    seo_description: z.string(),
+  })).default([]),
   unknowns: Unknowns,
 });
 
@@ -80,7 +104,9 @@ export const DesignBriefSchema = z.object({
   briefs: z.array(
     z.object({
       id: z.string(),
-      purpose: z.enum(["post", "cover", "ad", "story", "banner"]),
+      purpose: z.enum(["post", "cover", "ad", "story", "banner", "carousel", "reel_cover", "launch"]),
+      render_mode: z.enum(["photo_composition", "typography", "ai_image"]).describe("photo_composition: arşivdeki gerçek ürün fotoğrafı + metin; typography: yalnızca marka renkleri ve metin; ai_image: AI görsel servisi (ürünü değiştirmez)").default("photo_composition"),
+      slides: z.array(z.object({ headline: z.string(), body_text: z.string() })).describe("Yalnızca carousel için; ilk slayt dışındaki slaytlar").default([]),
       format: z.enum(["1:1", "4:5", "9:16", "16:9"]),
       headline: z.string(),
       body_text: z.string(),
@@ -110,6 +136,10 @@ export const VideoPlanSchema = z.object({
       subtitles: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })),
       generation_prompt: z.string().describe("Yalnızca generate_new için; aksi halde boş"),
       music_note: z.string(),
+      transition: z.enum(["cut", "fade"]).default("cut"),
+      framing: z.enum(["fit", "fill"]).describe("fit: ürün kırpılmaz (kenar boşluklu); fill: kadrajı doldurur (kenarlar kırpılabilir)").default("fit"),
+      intro_text: z.string().describe("Giriş kartı metni; yoksa boş").default(""),
+      outro_text: z.string().describe("Kapanış kartı metni; yoksa boş").default(""),
     }),
   ),
   unknowns: Unknowns,
@@ -130,6 +160,13 @@ export const SocialPackageSchema = z.object({
       cover_text: z.string(),
     }),
   ),
+  reels_ideas: z.array(z.object({
+    id: z.string(), title: z.string(), hook: z.string(), shots: z.array(z.string()), on_screen_text: z.string(), media_refs: z.array(z.string()),
+  })).default([]),
+  tiktok_concepts: z.array(z.object({ id: z.string(), title: z.string(), hook: z.string(), format: z.string(), notes: z.string() })).default([]),
+  calendar_7d: z.array(z.object({
+    day: z.number().describe("1-7"), date: z.string().describe("YYYY-MM-DD"), platform: z.string(), format: z.string(), post_ref: z.string(), theme: z.string(),
+  })).describe("Yedi günlük organik plan").default([]),
   unknowns: Unknowns,
 });
 
