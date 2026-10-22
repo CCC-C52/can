@@ -1,3 +1,4 @@
+import { isUuid } from "@/lib/ids";
 import { q, type Queryable, getPool } from "@/lib/db/pool";
 import { getBrand, listBrandFacts, listProductFacts, listProducts, listVariants } from "@/lib/services/brands";
 import { langLabel } from "@/lib/labels";
@@ -25,6 +26,10 @@ export type MediaSummary = {
   alt_text?: string | null;
   /** Tamamlanmış gerçek içerik analizi (piksel/kare ölçümleri ve varsa vision özeti). Yoksa null. */
   analysis?: ReturnType<typeof compactAnalysis>;
+  /** En son analiz kaydının durumu (none = hiç analiz edilmemiş). Analizi tamamlanmamış video kurguda kullanılamaz. */
+  analysis_status?: "none" | "pending" | "processing" | "completed" | "failed";
+  /** Talimatta açıkça istenen dosya. */
+  requested?: boolean;
 };
 
 export type BrandContext = {
@@ -71,7 +76,7 @@ const u = (v: unknown) => (v === null || v === undefined || v === "" ? UNKNOWN :
  * `agent` verilirse bağlam o ajanın izinlerine göre daraltılır (en az yetki): products.read yoksa ürünler,
  * media.read yoksa medya listesi bağlama girmez.
  */
-export async function buildBrandContext(brandId: string, db: Queryable = getPool(), opts: { agent?: AgentId } = {}): Promise<BrandContext> {
+export async function buildBrandContext(brandId: string, db: Queryable = getPool(), opts: { agent?: AgentId; includeAssetIds?: string[] } = {}): Promise<BrandContext> {
   const brand = await getBrand(brandId, db);
   if (!brand) throw new Error("Marka bulunamadı");
   const [facts, products, variants, pfacts, media] = await Promise.all([
@@ -79,14 +84,18 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
     listProducts(brandId, db),
     listVariants(brandId, undefined, db),
     listProductFacts(brandId, undefined, db),
-    q<MediaSummary & { a: MediaAnalysis | null }>(
+    // Son 80 dosya + talimatta açıkça istenen dosyalar (sınırdan bağımsız; yalnızca bu markaya ait olanlar)
+    q<MediaSummary & { a: MediaAnalysis | null; last_status: string | null; requested: boolean }>(
       `SELECT m.id, m.kind, m.origin, m.filename, m.product_id, m.duration_s, m.width, m.height, m.format, m.shot_type, m.colors, m.themes,
-              m.rights_status, m.tags, m.alt_text, row_to_json(a.*) AS a
+              m.rights_status, m.tags, m.alt_text, row_to_json(a.*) AS a,
+              (SELECT x.status FROM media_analyses x WHERE x.asset_id = m.id AND x.brand_id = m.brand_id ORDER BY x.created_at DESC LIMIT 1) AS last_status,
+              (m.id = ANY($2::uuid[])) AS requested
        FROM media_assets m
        LEFT JOIN LATERAL (SELECT * FROM media_analyses x WHERE x.asset_id = m.id AND x.brand_id = m.brand_id AND x.status = 'completed'
                           ORDER BY (x.level = 'vision') DESC, x.created_at DESC LIMIT 1) a ON true
-       WHERE m.brand_id = $1 ORDER BY m.created_at DESC LIMIT 80`,
-      [brandId],
+       WHERE m.brand_id = $1 AND (m.id = ANY($2::uuid[]) OR m.id IN (SELECT id FROM media_assets WHERE brand_id = $1 ORDER BY created_at DESC LIMIT 80))
+       ORDER BY (m.id = ANY($2::uuid[])) DESC, m.created_at DESC`,
+      [brandId, (opts.includeAssetIds ?? []).filter(isUuid)],
       db,
     ),
   ]);
@@ -127,6 +136,13 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
       verified_facts: pfacts.filter((f) => f.product_id === p.id && f.status === "verified").map((f) => ({ attribute: f.attribute, value: f.value })),
       unverified_facts: pfacts.filter((f) => f.product_id === p.id && f.status !== "verified").map((f) => ({ attribute: f.attribute, value: f.value })),
     })),
-    media: can("media.read") ? media.map(({ a, ...m }) => ({ ...m, analysis: compactAnalysis(a) })) : [],
+    media: can("media.read")
+      ? media.map(({ a, last_status, requested, ...m }) => ({
+          ...m,
+          analysis: compactAnalysis(a),
+          analysis_status: a ? "completed" : ((last_status ?? "none") as MediaSummary["analysis_status"]),
+          ...(requested ? { requested: true } : {}),
+        }))
+      : [],
   };
 }

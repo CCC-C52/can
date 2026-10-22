@@ -17,7 +17,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const m = await getMedia(brand.id, id);
   if (!m) return new Response("Bulunamadı", { status: 404 });
   const size = Number(m.size_bytes);
-  const inline = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime)|application\/pdf)$/.test(m.mime_type);
+  const download = new URL(req.url).searchParams.get("download") === "1";
+  const inline = !download && /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime)|application\/pdf)$/.test(m.mime_type);
   const headers: Record<string, string> = {
     "Content-Type": m.mime_type,
     "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(m.filename)}`,

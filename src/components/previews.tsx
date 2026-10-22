@@ -19,6 +19,7 @@ export function MediaThumb({ m, big = false }: { m: MediaAsset; big?: boolean })
       )}
       <figcaption className="flex flex-wrap items-center gap-1 p-2 text-xs">
         <Link href={`/medya/${m.id}`} className="truncate font-medium text-brand">{m.filename}</Link>
+        <a href={`${src}?download=1`} className="text-brand underline" download aria-label={`${m.filename} dosyasını indir`}>İndir</a>
         <Badge tone={m.origin === "ai_generated" ? "warn" : m.origin === "edited" || m.origin === "composed" ? "info" : "neutral"}>{MEDIA_ORIGIN_LABEL[m.origin] ?? m.origin}</Badge>
       </figcaption>
     </figure>

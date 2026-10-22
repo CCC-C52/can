@@ -367,20 +367,44 @@ describe("ffmpeg kurgu", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("kesme (cut) ve sığdırma (fit) ile mevcut çekimlerden kurgu; platformda dosya + kapak oluşur", async () => {
+  it("kesme (cut) ve sığdırma (fit) ile doğrulanmış sahnelerden kurgu; platformda dosya + kapak oluşur", async () => {
+    // Plan, kaynak videoların GERÇEK analizinden kurulur (sahne 0, her iki dosyadan)
+    const { ensureAnalysis } = await import("@/lib/media-analysis");
+    const { getMedia } = await import("@/lib/services/media");
+    for (const id of clipIds) expect((await ensureAnalysis((await getMedia(brandId, id))!)).state).toBe("completed");
     setTextModelOverride(new ScriptedModel(videoPlan, { video: { summary: "s", unknowns: [], videos: [{
       id: "ev", mode: "edit_existing", format: "4:5", duration_s: 4, selected_asset_ids: clipIds,
-      script: [{ t_start: 0, t_end: 2, visual: "", voiceover: "", on_screen_text: "Red" }, { t_start: 1, t_end: 3, visual: "", voiceover: "", on_screen_text: "" }],
-      subtitles: [{ start: 0, end: 2, text: "Hello" }], generation_prompt: "", music_note: "", transition: "cut", framing: "fit", intro_text: "", outro_text: "Thanks",
+      script: [], subtitles: [{ start: 0, end: 2, text: "Hello" }], generation_prompt: "", music_note: "", transition: "cut", framing: "fit", intro_text: "", outro_text: "Thanks",
+      segments: [
+        { asset_id: clipIds[0], scene_index: 0, source_start: 0, source_end: 2, on_screen_text: "Red", purpose: "açılış" },
+        { asset_id: clipIds[1], scene_index: 0, source_start: 1, source_end: 3, on_screen_text: "", purpose: "kapanış" },
+      ],
     }] } }));
     const { project } = await submitInstruction({ brandId, instruction: "Kurgu", idempotencyKey: key() });
     await drive(new Engine("edit-w1"));
-    const render = (await listTasks(brandId, { projectId: project.id })).find((t) => t.kind === "render")!;
+    const tasks = await listTasks(brandId, { projectId: project.id });
+    const render = tasks.find((t) => t.kind === "render")!;
     expect(render.status).toBe("completed");
+    expect(tasks.find((t) => t.key === "video")!.status).toBe("approval_pending"); // MP4 hazır → insan onayı bekler
     const assets = await q<any>(`SELECT * FROM media_assets WHERE source_task_id = $1 ORDER BY kind`, [render.id]);
     expect(assets.map((x) => [x.kind, x.generation_method])).toEqual([["photo", "ffmpeg_thumbnail"], ["video", "ffmpeg_edit"]]);
     const video = assets.find((x) => x.kind === "video");
     expect([video.width, video.height]).toEqual([1080, 1350]);
     expect(Number(video.duration_s)).toBeCloseTo(6, 0); // 2 + 2 + 2 sn kapanış kartı
+  });
+
+  it("sahne bölümü olmayan (eski biçim) kurgu planı kalite kontrolünde reddedilir; MP4 üretilmez", async () => {
+    setTextModelOverride(new ScriptedModel(videoPlan, { video: { summary: "s", unknowns: [], videos: [{
+      id: "ev", mode: "edit_existing", format: "4:5", duration_s: 4, selected_asset_ids: clipIds,
+      script: [{ t_start: 0, t_end: 2, visual: "", voiceover: "", on_screen_text: "Red" }], subtitles: [], generation_prompt: "", music_note: "",
+      transition: "cut", framing: "fit", intro_text: "", outro_text: "",
+    }] } }));
+    const { project } = await submitInstruction({ brandId, instruction: "Kurgu eski", idempotencyKey: key() });
+    await drive(new Engine("edit-w2"));
+    const tasks = await listTasks(brandId, { projectId: project.id });
+    const v = tasks.find((t) => t.key === "video")!;
+    expect(v.status).toBe("failed");
+    expect(v.error).toMatch(/segments/);
+    expect(tasks.some((t) => t.kind === "render")).toBe(false);
   });
 });

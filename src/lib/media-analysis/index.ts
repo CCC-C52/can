@@ -15,6 +15,7 @@ import { redact } from "@/lib/security/crypto";
 import type { MediaAsset } from "@/lib/services/media";
 import { analyzeImagePixels, visionImage } from "./pixels";
 import { analyzeVideoLocal } from "./video";
+import { withFfmpegSlot } from "@/lib/adapters/ffmpeg";
 
 // Medya anlama hattı.
 //  Katman 1 (yerel, her zaman): gerçek piksel/kare ölçümleri — ücretsiz, deterministik.
@@ -154,7 +155,9 @@ export function compactAnalysis(a: MediaAnalysis | null) {
     duration_s: local.probe?.duration,
     orientation: local.probe?.orientation,
     resolution: local.probe ? `${local.probe.display_width}x${local.probe.display_height}` : undefined,
-    scenes: (local.scenes ?? []).map((s: any) => ({ start: s.start, end: s.end, colors: s.dominant_colors })),
+    // Doğrulanmış sahneler: sınırlar ffmpeg sahne tespitinden, kare zamanı gerçekten çıkarılan kareden
+    scenes: (local.scenes ?? []).map((s: any) => ({ index: s.index, start: s.start, end: s.end, frame_t: local.frames?.[s.frame_index]?.t ?? null, colors: s.dominant_colors, brightness: s.brightness })),
+    frame_count: (r.frame_keys ?? []).length,
     motion: local.motion?.level,
     audio: local.audio?.present ? (local.audio.silent ? "sessiz" : "ses var") : "ses yok",
     usability_issues: local.usability?.issues,
@@ -240,7 +243,8 @@ export async function processAnalysis(a: MediaAnalysis, db: Queryable = getPool(
         alt = `${local.orientation === "portrait" ? "Dikey" : local.orientation === "landscape" ? "Yatay" : "Kare"} görsel; baskın renkler: ${local.dominant_colors.slice(0, 3).map((c) => c.name).join(", ")}`;
       }
     } else {
-      const { analysis, frames } = await analyzeVideoLocal(file);
+      // ffmpeg işi süreç genelindeki sınır içinde (kurgu ile aynı anda çalışmaz)
+      const { analysis, frames } = await withFfmpegSlot(() => analyzeVideoLocal(file));
       // Anahtar kareleri sakla (panelde "modelin gördüğü kareler" olarak gösterilir)
       const keys: string[] = [];
       for (const f of frames) {
@@ -304,6 +308,75 @@ export async function runAnalysisQueueOnce(workerId: string): Promise<MediaAnaly
   const a = await claimAnalysis(workerId);
   if (!a) return null;
   return processAnalysis(a);
+}
+
+export type AnalysisGate =
+  | { state: "completed"; analysis: MediaAnalysis }
+  | { state: "pending"; analysis: MediaAnalysis | null; reason: string }
+  | { state: "failed"; analysis: MediaAnalysis | null; error: string };
+
+/** Görev içinde beklemeden işlenebilecek en büyük dosya (daha büyükleri analiz kuyruğunda işlenir, görev bekler). */
+export const INLINE_ANALYSIS_MAX_BYTES = 100 * 1024 * 1024;
+export const INLINE_ANALYSIS_MAX_SECONDS = 90;
+
+/**
+ * Video kurgu görevinden ÖNCE çağrılır: dosyanın tamamlanmış gerçek analizi yoksa mevcut analiz hattını başlatır.
+ *  - tamamlanmış analiz varsa onu döndürür;
+ *  - hiç yoksa kuyruğa ekler (ücretli vision yalnızca sahibin "yüklemede AI görsel analizi" ayarı açık ve gerçek model bağlıysa);
+ *  - bekleyen kayıt küçük bir dosyaya aitse ve başka işleyici almamışsa burada (aynı işleyicide) işler;
+ *  - aksi halde "pending" döner: çağıran görev bekletilir, sahne UYDURULMAZ;
+ *  - kalıcı hata "failed" döner.
+ * Daha önce yüklenmiş dosyalar için de çalışır (yeniden yükleme gerekmez).
+ */
+export async function ensureAnalysis(asset: MediaAsset, opts: { inline?: boolean; workerId?: string } = {}, db: Queryable = getPool()): Promise<AnalysisGate> {
+  const kind = analyzable(asset);
+  if (!kind) return { state: "failed", analysis: null, error: `${asset.filename}: bu dosya türü analiz edilemiyor.` };
+  const done = await q1<MediaAnalysis>(
+    `SELECT * FROM media_analyses WHERE brand_id = $1 AND asset_id = $2 AND status = 'completed' AND analysis_version = $3
+     ORDER BY (level = 'vision') DESC, created_at DESC LIMIT 1`,
+    [asset.brand_id, asset.id, ANALYSIS_VERSION],
+    db,
+  );
+  if (done) return { state: "completed", analysis: done };
+  let row = await q1<MediaAnalysis>(
+    `SELECT * FROM media_analyses WHERE brand_id = $1 AND asset_id = $2 AND analysis_version = $3 ORDER BY created_at DESC LIMIT 1`,
+    [asset.brand_id, asset.id, ANALYSIS_VERSION],
+    db,
+  );
+  if (!row) row = await enqueueAnalysis(asset, {}, db);
+  if (!row) return { state: "failed", analysis: null, error: `${asset.filename}: analiz kaydı oluşturulamadı.` };
+  if (row.status === "failed") return { state: "failed", analysis: row, error: row.error ?? "Analiz başarısız." };
+  // Kısa/küçük dosyalar görev içinde işlenir; uzun videolar işleyicinin analiz kuyruğunda işlenir (görev süre sınırı aşılmasın)
+  const canInline = opts.inline !== false && Number(asset.size_bytes) <= INLINE_ANALYSIS_MAX_BYTES
+    && (asset.duration_s === null || Number(asset.duration_s) <= INLINE_ANALYSIS_MAX_SECONDS);
+  if (row.status === "pending" && canInline) {
+    const claimed = await q1<MediaAnalysis>(
+      `UPDATE media_analyses SET status = 'processing', lease_owner = $2, lease_expires_at = now() + interval '15 minutes',
+         attempts = attempts + 1, started_at = now(), updated_at = now()
+       WHERE id = $1 AND status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= now()) RETURNING *`,
+      [row.id, opts.workerId ?? "task-inline"],
+      db,
+    );
+    if (claimed) {
+      const r = await processAnalysis(claimed, db);
+      if (r.status === "completed") return { state: "completed", analysis: r };
+      if (r.status === "failed") return { state: "failed", analysis: r, error: r.error ?? "Analiz başarısız." };
+      return { state: "pending", analysis: r, reason: `geçici hata, yeniden denenecek: ${r.error ?? ""}` };
+    }
+  }
+  return { state: "pending", analysis: row, reason: row.status === "processing" ? "analiz işleniyor" : "analiz kuyrukta" };
+}
+
+/** Analizde saklanan gerçek kareler (S3 anahtarları ve zamanları). */
+export function analysisFrames(a: MediaAnalysis | null): { key: string; t: number; scene: number | null }[] {
+  if (!a?.result?.frame_keys) return [];
+  const frames = a.result.local?.frames ?? [];
+  const scenes = a.result.local?.scenes ?? [];
+  return (a.result.frame_keys as string[]).map((key, i) => ({
+    key,
+    t: frames[i]?.t ?? 0,
+    scene: scenes.find((s: any) => s.frame_index === i)?.index ?? null,
+  }));
 }
 
 /** Panelden "yeniden analiz": başarısız kaydı yeniden kuyruğa alır veya (model değiştiyse) yeni kayıt açar. */

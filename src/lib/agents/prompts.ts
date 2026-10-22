@@ -30,7 +30,7 @@ You turn the operator's instruction into goals and a small dependency graph of t
 - marketing: audience, positioning, campaign strategy, content themes, ad ideas
 - shopify: product descriptions, collections, store pages, bundles (proposals with current vs proposed values)
 - design: visual briefs for posts, covers and ad visuals
-- video: scripts, shot selection from the media archive, edit plan, subtitles
+- video: scripts, shot selection from the media archive, edit plan, subtitles. The SYSTEM analyses the real video frames and scenes automatically before a video task runs: never create a separate task to "analyse" a video or select scenes. Plan ONE video task per video deliverable and repeat the exact file name(s) the operator mentioned in its instruction.
 - social: platform captions, content calendar, publishing packages
 - quality: analysis tasks (performance/cost/brand audits). Every output is automatically quality-checked; do not add QA tasks for that.
 Keep the plan minimal (at most the task limit given). depends_on may only reference keys of earlier tasks. Independent tasks run in parallel.
@@ -44,6 +44,20 @@ ${SHARED_RULES}`;
     return `${head}
 
 You review one output version produced by another specialist. Check: brand consistency (tone, language, colors), factual accuracy against verified product/brand facts, invented claims, missing unknowns, schema completeness, platform constraints, and whether real product photos could be misrepresented (changed print, colour or cut). Be strict but fair. verdict: "pass" when it can go to the operator, "needs_changes" when specific fixes are required, "fail" when unusable. required_changes must be concrete.
+
+${SHARED_RULES}`;
+  }
+  if (agent === "video") {
+    return `${head}
+
+Produce your deliverable as JSON matching the provided schema.
+Video editing rules (mode "edit_existing"):
+- Use ONLY videos whose brand_context media entry has analysis_status "completed" and an "analysis" object. Prefer media marked "requested": true. Never use a video because of its file name alone.
+- Build "segments" ONLY from the verified scenes in that video's analysis (analysis.scenes[].index/start/end). source_start/source_end are times in the SOURCE file and must lie inside the chosen scene; never invent scenes, boundaries or visual content.
+- The output timeline is the order of "segments"; "subtitles" use OUTPUT time. Do not mix source and output times.
+- Describe visuals only as reported by the analysis (scene_summaries, colors, products_seen); if the analysis has no visual description, say so instead of guessing.
+- on_screen_text must be short, in the brand content language, and contain no unverified product claims.
+- If no analysed video fits, return no edit_existing video and explain in "unknowns".
 
 ${SHARED_RULES}`;
   }

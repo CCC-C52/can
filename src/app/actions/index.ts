@@ -424,8 +424,10 @@ export async function requestBackupAction() {
 export async function saveAnalysisSettingsAction(fd: FormData) {
   await act("/ayarlar", async () => {
     const on = str(fd, "visionOnUpload") === "on";
+    const frames = str(fd, "videoAgentFrames") === "on";
     await setSetting("vision_on_upload", on);
-    await audit({ actor: "user", action: "settings.vision_on_upload", message: `Yüklemede AI görsel analizi ${on ? "açıldı" : "kapatıldı"}` });
+    await setSetting("video_agent_frames", frames);
+    await audit({ actor: "user", action: "settings.vision_on_upload", message: `Yüklemede AI görsel analizi ${on ? "açıldı" : "kapatıldı"}; video uzmanına gerçek kareler ${frames ? "gönderilir" : "gönderilmez"}` });
     return "Analiz ayarı kaydedildi.";
   });
 }
@@ -452,6 +454,7 @@ export async function saveLimitsAction(fd: FormData) {
       maxTasksPerProject: n("maxTasksPerProject", 2, 30),
       maxModelCallsPerProject: n("maxModelCallsPerProject", 1, 200),
       taskTimeoutMs: n("taskTimeoutMs", 10_000, 1_800_000),
+      renderTimeoutMs: n("renderTimeoutMs", 60_000, 3_600_000),
       maxAttempts: n("maxAttempts", 1, 5),
       maxRegenerations: n("maxRegenerations", 0, 10),
       perTaskBudgetUsd: money("perTaskBudgetUsd"),

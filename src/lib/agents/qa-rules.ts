@@ -44,6 +44,7 @@ function customerStrings(agent: string, c: Record<string, any>): string[] {
     case "video":
       c.videos?.forEach((v: any) => {
         v.script?.forEach((s: any) => { push(s.on_screen_text); push(s.voiceover); });
+        v.segments?.forEach((s: any) => push(s.on_screen_text));
         v.subtitles?.forEach((s: any) => push(s.text));
         push(v.intro_text); push(v.outro_text);
       });
@@ -209,6 +210,33 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
             required.push("edit_existing için yalnızca arşivdeki video dosyalarını seçin.");
           }
         }
+        // Sahne bölümleri: yalnızca doğrulanmış analiz sahnelerinden, kaynak süresi içinde
+        const segs: any[] = v.segments ?? [];
+        if (!segs.length) {
+          checks.push({ name: "Sahne bölümleri", status: "fail", detail: `${v.id}: kurgu için doğrulanmış sahne bölümü (segments) yok.` });
+          required.push("Kurguyu yalnızca analizi tamamlanmış videoların sahnelerinden segments olarak tanımlayın.");
+        }
+        const bad: string[] = [];
+        segs.forEach((sg, i) => {
+          const m = mediaById.get(sg.asset_id);
+          const a = m?.analysis as any;
+          const scene = a?.scenes?.find((x: any) => x.index === sg.scene_index);
+          const dur = Number(a?.duration_s ?? m?.duration_s ?? NaN);
+          const why = !m || m.kind !== "video" ? "arşivde olmayan dosya"
+            : !a ? "görsel analizi yok (sahne uydurulamaz)"
+            : !scene ? `analizde ${sg.scene_index} numaralı sahne yok (uydurma sahne)`
+            : !(sg.source_end > sg.source_start) || sg.source_end - sg.source_start < 0.5 ? "geçersiz/0,5 sn'den kısa aralık"
+            : sg.source_start < 0 || (Number.isFinite(dur) && sg.source_end > dur + 0.05) ? `kaynak süresini (${dur} sn) aşıyor`
+            : sg.source_start < scene.start - 0.15 || sg.source_end > scene.end + 0.15 ? `sahne sınırları (${scene.start}–${scene.end} sn) dışında`
+            : null;
+          if (why) bad.push(`bölüm ${i + 1}: ${why}`);
+        });
+        if (bad.length) {
+          checks.push({ name: "Sahne doğrulaması", status: "fail", detail: `${v.id}: ${bad.slice(0, 5).join("; ")}` });
+          required.push("Bölümleri yalnızca ilgili videonun analizindeki sahne sınırları içinde, kaynak zamanlarıyla tanımlayın.");
+        } else if (segs.length) {
+          checks.push({ name: "Sahne doğrulaması", status: "pass", detail: `${v.id}: ${segs.length} bölüm doğrulanmış analiz sahneleriyle uyumlu.` });
+        }
       } else {
         checks.push({ name: "AI video", status: "warn", detail: `${v.id}: yeni AI görüntüsü üretimi planlandı; gerçek ürün görüntüsü yerine geçmez.` });
       }
@@ -267,4 +295,12 @@ export function mergeReviews(rule: QaReview, model: QaReview | null, modelSource
     required_changes: [...new Set([...rule.required_changes, ...model.required_changes])],
     sources: ["rules", modelSource],
   };
+}
+
+/** Bir çıktının başvurduğu medya kimlikleri (kalite kontrol bağlamına sınırdan bağımsız eklenir). */
+export function referencedAssetIds(agent: string, content: any): string[] {
+  const ids: string[] = [];
+  if (agent === "video") for (const v of content?.videos ?? []) { ids.push(...(v.selected_asset_ids ?? []), ...(v.segments ?? []).map((s: any) => s.asset_id)); }
+  if (agent === "design") for (const b of content?.briefs ?? []) ids.push(...(b.source_asset_ids ?? []));
+  return [...new Set(ids.filter((x) => typeof x === "string"))];
 }

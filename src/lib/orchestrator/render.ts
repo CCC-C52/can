@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { q1 } from "@/lib/db/pool";
 import { composeDesign } from "@/lib/adapters/compose";
-import { renderEdit } from "@/lib/adapters/video-edit";
+import { renderEdit, type EditClip } from "@/lib/adapters/video-edit";
+import { FfmpegError } from "@/lib/adapters/ffmpeg";
+import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
 import { getVideoGenerator, veoAspect, veoDuration } from "@/lib/adapters/video-generation";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
@@ -31,6 +33,7 @@ export type RenderOutcome = {
   failed: string[];       // kesin başarısız öğeler
   uncertain: string[];    // sonucu bilinmeyen ücretli gönderimler
   notes: string[];
+  artifacts: { ref: string; asset_id: string; codec: string | null; width: number; height: number; duration_s: number; bytes: number; segments: number; sources: number; decoded: boolean; audio: string }[];
 };
 
 const VIDEO_POLL_MS = 15_000;
@@ -70,7 +73,7 @@ export async function renderDesign(ctx: RenderCtx): Promise<RenderOutcome> {
   assertTool("design", "media.read");
   const { task } = ctx;
   const style = await brandStyle(task.brand_id);
-  const o: RenderOutcome = { produced: [], waiting: [], inProgress: [], failed: [], uncertain: [], notes: [] };
+  const o: RenderOutcome = { produced: [], waiting: [], inProgress: [], failed: [], uncertain: [], notes: [], artifacts: [] };
   for (const b of ctx.content.briefs ?? []) {
     if (ctx.signal.aborted) throw ctx.signal.reason;
     const mode: string = b.render_mode ?? (b.use_real_product_photo ? "photo_composition" : "ai_image");
@@ -191,7 +194,7 @@ async function providerError(ctx: RenderCtx, job: ProviderJob, service: string, 
 
 export async function renderVideo(ctx: RenderCtx): Promise<RenderOutcome> {
   assertTool("video", "media.read");
-  const o: RenderOutcome = { produced: [], waiting: [], inProgress: [], failed: [], uncertain: [], notes: [] };
+  const o: RenderOutcome = { produced: [], waiting: [], inProgress: [], failed: [], uncertain: [], notes: [], artifacts: [] };
   for (const vid of ctx.content.videos ?? []) {
     if (ctx.signal.aborted) throw ctx.signal.reason;
     if (vid.mode === "edit_existing") await editVideo(ctx, vid, o);
@@ -200,6 +203,9 @@ export async function renderVideo(ctx: RenderCtx): Promise<RenderOutcome> {
   return o;
 }
 
+/** Sahne sınırı toleransı (sn): analizdeki sahne sınırları kare zamanlarına yuvarlanmıştır. */
+const SCENE_TOLERANCE_S = 0.15;
+
 async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   const { task } = ctx;
   const ready = await capabilityReady("video_edit", task.brand_id);
@@ -207,40 +213,88 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   assertTool("video", "video.edit");
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "edit-src-"));
   try {
-    const clips = [];
+    const clips: EditClip[] = [];
     const sources: MediaAsset[] = [];
-    for (let i = 0; i < (vid.selected_asset_ids ?? []).length; i++) {
-      const m = await getMedia(task.brand_id, vid.selected_asset_ids[i]);
-      if (!m || m.kind !== "video") continue;
-      const seg = vid.script?.[i];
-      const file = path.join(dir, `src${i}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
-      await getStorage().downloadToFile(m.storage_key, file);
-      // Senaryo bölümü kaynak çekimin içinden seçilir; süre bölüm uzunluğu kadardır
-      const dur = seg ? Math.max(0.5, seg.t_end - seg.t_start) : 3;
-      const start = seg && m.duration_s && seg.t_start + dur <= m.duration_s ? seg.t_start : 0;
-      clips.push({ file, start, duration: dur, sourceDuration: m.duration_s });
-      sources.push(m);
+    const segments: any[] = Array.isArray(vid.segments) ? vid.segments : [];
+    if (segments.length) {
+      // Kaynak bölümleri: her dosya bir kez indirilir; aynı dosyadan birden çok bölüm kesilebilir.
+      const files = new Map<string, { file: string; duration: number; scenes: { index: number; start: number; end: number }[] }>();
+      for (let i = 0; i < segments.length; i++) {
+        const sg = segments[i];
+        let src = files.get(sg.asset_id);
+        if (!src) {
+          const m = await getMedia(task.brand_id, String(sg.asset_id)); // marka kapsamı: başka markanın dosyası bulunamaz
+          if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: bölüm ${i + 1} — kaynak video bulunamadı (${sg.asset_id})`); return; }
+          const analysis = await latestAnalysis(task.brand_id, m.id);
+          if (!analysis || analysis.status !== "completed") { o.failed.push(`${vid.id}: bölüm ${i + 1} — ${m.filename} için tamamlanmış görsel analiz yok; sahne kullanılamaz`); return; }
+          const file = path.join(dir, `src-${sources.length}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
+          await getStorage().downloadToFile(m.storage_key, file);
+          const probe = await probeVideo(file); // gerçek süre: veritabanındaki meta veriye güvenilmez
+          src = { file, duration: probe.duration, scenes: analysis.result?.local?.scenes ?? [] };
+          files.set(m.id, src);
+          sources.push(m);
+        }
+        const start = Number(sg.source_start), end = Number(sg.source_end);
+        const scene = src.scenes.find((x) => x.index === Number(sg.scene_index));
+        const problem = !(end > start) ? "bitiş başlangıçtan önce"
+          : end - start < 0.5 ? "bölüm 0,5 sn'den kısa"
+          : start < 0 || end > src.duration + 0.05 ? `kaynak süresi (${src.duration.toFixed(2)} sn) dışında`
+          : !scene ? `analizde ${sg.scene_index} numaralı sahne yok`
+          : start < scene.start - SCENE_TOLERANCE_S || end > scene.end + SCENE_TOLERANCE_S ? `sahne ${scene.index} sınırları (${scene.start}–${scene.end} sn) dışında`
+          : null;
+        if (problem) { o.failed.push(`${vid.id}: bölüm ${i + 1} (${start}–${end} sn) — ${problem}`); return; }
+        clips.push({ file: src.file, start, duration: Math.round((Math.min(end, src.duration) - start) * 1000) / 1000, sourceDuration: src.duration, text: clean(sg.on_screen_text) });
+      }
+    } else {
+      // Eski biçim (sahne bölümü olmayan planlar): dosya başına tek bölüm
+      for (let i = 0; i < (vid.selected_asset_ids ?? []).length; i++) {
+        const m = await getMedia(task.brand_id, vid.selected_asset_ids[i]);
+        if (!m || m.kind !== "video") continue;
+        const seg = vid.script?.[i];
+        const file = path.join(dir, `src${i}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
+        await getStorage().downloadToFile(m.storage_key, file);
+        const actual = (await probeVideo(file)).duration;
+        const dur = Math.min(actual, seg ? Math.max(0.5, seg.t_end - seg.t_start) : 3);
+        const start = seg && seg.t_start + dur <= actual ? seg.t_start : 0;
+        clips.push({ file, start, duration: dur, sourceDuration: actual, text: clean(seg?.on_screen_text) });
+        sources.push(m);
+      }
+      if (clips.length) o.notes.push(`${vid.id}: eski plan biçimi (sahne bölümü yok); dosya başına tek bölüm kullanıldı.`);
     }
     if (!clips.length) { o.notes.push(`${vid.id}: kullanılabilir çekim yok.`); return; }
     const style = await brandStyle(task.brand_id);
     const card = (text: string) => (clean(text).trim() ? { text: clean(text), bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined);
-    const r = await renderEdit({
-      clips, format: vid.format, framing: vid.framing ?? "fit", transition: vid.transition ?? "cut",
-      subtitles: (vid.subtitles ?? []).map((s: any) => ({ start: s.start, end: s.end, text: clean(s.text) })),
-      onScreenText: (vid.script ?? []).filter((s: any) => clean(s.on_screen_text).trim()).map((s: any) => ({ start: s.t_start, end: s.t_end, text: clean(s.on_screen_text) })),
-      intro: card(vid.intro_text), outro: card(vid.outro_text),
-      signal: ctx.signal, timeoutMs: ctx.limits.taskTimeoutMs,
-    });
+    let r;
+    try {
+      r = await renderEdit({
+        clips, format: vid.format, framing: vid.framing ?? "fit", transition: vid.transition ?? "cut",
+        subtitles: (vid.subtitles ?? []).map((s: any) => ({ start: s.start, end: s.end, text: clean(s.text) })),
+        intro: card(vid.intro_text), outro: card(vid.outro_text),
+        signal: ctx.signal, timeoutMs: Math.max(ctx.limits.taskTimeoutMs, ctx.limits.renderTimeoutMs ?? 0) - 15_000,
+      });
+    } catch (err) {
+      if (err instanceof FfmpegError) { o.failed.push(`${vid.id}: ${err.message}`); return; }
+      throw err; // zaman aşımı/iptal: görev motoru sınıflandırır
+    }
     const common = { taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId, productId: sources[0].product_id, sourceAssetIds: sources.map((s) => s.id) };
     const video = await saveDerivedAsset(task.brand_id, {
       ...common, buffer: r.video, filename: `${vid.id}-${vid.format.replace(":", "x")}.mp4`, origin: "edited", generationMethod: "ffmpeg_edit",
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "ffmpeg kurgu (AI değil)", source: "system" }, { tag: `geçiş:${vid.transition ?? "cut"}`, source: "system" }],
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "ffmpeg kurgu (AI değil)", source: "system" }, { tag: `geçiş:${vid.transition ?? "cut"}`, source: "system" }, { tag: `bölüm:${clips.length}`, source: "system" }],
     });
     const thumb = await saveDerivedAsset(task.brand_id, {
       ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
     });
+    // Dosyanın depoda gerçekten bulunduğu ve boyutunun eşleştiği doğrulanır (kayıt + depo tutarlılığı)
+    if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) {
+      o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`);
+      return;
+    }
     o.produced.push(video.id, thumb.id);
+    o.artifacts.push({
+      ref: vid.id, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
+      bytes: r.video.length, segments: clips.length, sources: sources.length, decoded: true, audio: "kaldırıldı (bilinçli sessiz çıktı)",
+    });
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

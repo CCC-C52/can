@@ -105,7 +105,10 @@ async function seed() {
 }
 
 async function startServer(): Promise<ChildProcess> {
-  const proc = spawn("npx", ["next", "start", "-H", "127.0.0.1", "-p", String(PORT)], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  // Önceki bir çalıştırmadan kalan sunucu (farklı gizli değerlerle) varsa testler ona bağlanırdı: başlamadan önce port boş olmalı
+  if (await fetch(`${BASE}/api/health`).then(() => true, () => false)) throw new Error(`Port ${PORT} zaten kullanımda; önceki test sunucusunu kapatın.`);
+  // Ayrı süreç grubu: kapatırken npx ile birlikte asıl next-server süreci de sonlandırılır
+  const proc = spawn("npx", ["next", "start", "-H", "127.0.0.1", "-p", String(PORT)], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"], detached: true });
   let log = "";
   proc.stdout!.on("data", (d) => (log += d));
   proc.stderr!.on("data", (d) => (log += d));
@@ -195,6 +198,12 @@ async function main() {
       expect(part.status() === 206 && (await part.body()).length === 10, `aralık ${part.status()}`);
       const bad = await api.get(`${BASE}/api/media/${s.mediaA.id}/file`, { headers: { range: "bytes=999999-" } });
       expect(bad.status() === 416, `geçersiz aralık ${bad.status()}`);
+    });
+    await check("indirme bağlantısı: kendi dosyası 'attachment', başka markanınki 404", async () => {
+      const own = await api.get(`${BASE}/api/media/${s.mediaA.id}/file?download=1`);
+      expect(own.status() === 200 && (own.headers()["content-disposition"] ?? "").startsWith("attachment"), `durum ${own.status()} ${own.headers()["content-disposition"]}`);
+      const foreign = await api.get(`${BASE}/api/media/${s.mediaB.id}/file?download=1`);
+      expect(foreign.status() === 404, `durum ${foreign.status()}`);
     });
     for (const [name, method, url, body] of [
       ["B'nin medya dosyası", "GET", `/api/media/${s.mediaB.id}/file`, undefined],
@@ -303,7 +312,8 @@ async function main() {
     });
   } finally {
     await browser.close();
-    server.kill("SIGTERM");
+    try { process.kill(-server.pid!, "SIGTERM"); } catch { server.kill("SIGTERM"); }
+    for (let i = 0; i < 20 && (await fetch(`${BASE}/api/health`).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 250));
     const { closePool } = await import("@/lib/db/pool");
     await closePool().catch(() => {});
   }

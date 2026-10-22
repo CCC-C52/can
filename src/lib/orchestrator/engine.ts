@@ -1,18 +1,21 @@
 import { q, q1, tx, getPool, type Queryable } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { log } from "@/lib/log";
-import { getLimits, isPaused, type Limits } from "@/lib/settings";
+import { getLimits, getSetting, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
-import { ModelUnavailableError, PermanentError, TransientError, type TextModelAdapter } from "@/lib/models/types";
+import { ModelUnavailableError, PermanentError, TransientError, type GenerateRequest, type TextModelAdapter } from "@/lib/models/types";
 import { buildBrandContext, type BrandContext } from "@/lib/agents/context";
 import { AGENTS, agentName, assertTool, isSpecialist, ToolPermissionError } from "@/lib/agents/registry";
 import { OUTPUT_KIND, OUTPUT_SCHEMAS, PlanSchema, QaReviewSchema, type AgentId, type Plan, type ProjectReport, type QaReview, type SpecialistId } from "@/lib/agents/schemas";
 import { systemPrompt, userPrompt } from "@/lib/agents/prompts";
-import { mergeReviews, runRuleChecks } from "@/lib/agents/qa-rules";
+import { mergeReviews, referencedAssetIds, runRuleChecks } from "@/lib/agents/qa-rules";
 import { addVersion, attachAssetsToVersion, createOutput, getCurrentVersion, setVersionQa, type OutputVersion } from "@/lib/services/outputs";
 import { assertBudget, BudgetExceededError, costSummary, recordCost } from "@/lib/services/costs";
 import { effectiveStatus, PROVIDERS } from "@/lib/services/connections";
 import { renderDesign, renderVideo, RENDER_POLL_MS, type RenderCtx } from "./render";
+import { analysisFrames, compactAnalysis, ensureAnalysis, type MediaAnalysis } from "@/lib/media-analysis";
+import type { MediaAsset } from "@/lib/services/media";
+import { getStorage } from "@/lib/storage";
 import { textModelMode } from "@/lib/models";
 import type { Task } from "./projects";
 
@@ -112,7 +115,8 @@ export class Engine {
       `INSERT INTO task_attempts (task_id, attempt, phase, worker_id) VALUES ($1,$2,$3,$4) RETURNING id`,
       [task.id, task.attempts, task.phase, this.workerId],
     );
-    const timeout = setTimeout(() => ctrl.abort(new TimeoutError(`Görev süre sınırını aştı (${Math.round(limits.taskTimeoutMs / 1000)} sn)`)), limits.taskTimeoutMs);
+    const timeoutMs = effectiveTimeoutMs(task, limits);
+    const timeout = setTimeout(() => ctrl.abort(new TimeoutError(`Görev süre sınırını aştı (${Math.round(timeoutMs / 1000)} sn)`)), timeoutMs);
     const renew = setInterval(async () => {
       try {
         const r = await q1<{ status: string }>(
@@ -298,17 +302,17 @@ export async function updateProjectStatus(projectId: string) {
 
 // ---------------------------------------------------------------- Model çağrısı (sınır + bütçe + maliyet)
 
-async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, user: string, demoInput: unknown, maxTokens = 16000) {
+async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, user: string, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]) {
   const { task, model, limits } = ctx;
   if (ctx.signal.aborted) throw ctx.signal.reason;
   if (model.unavailableReason) throw new ModelUnavailableError(model.unavailableReason);
   const inc = await q1(`UPDATE projects SET model_calls = model_calls + 1 WHERE id = $1 AND model_calls < $2 RETURNING model_calls`, [task.project_id, limits.maxModelCallsPerProject]);
   if (!inc) throw new ModelCallLimitError(`Proje başına ${limits.maxModelCallsPerProject} model çağrısı sınırına ulaşıldı.`);
   const system = systemPrompt(agent, purpose);
-  const estimate = model.estimateCostUsd({ system, user, maxTokens });
+  const estimate = model.estimateCostUsd({ system, user, maxTokens, imageCount: images?.length ?? 0 });
   await assertBudget({ taskId: task.id, estimateUsd: estimate, service: model.service });
   await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: model.service, kind: "estimated", amountUsd: estimate, note: `${agent}:${purpose} üst sınır tahmini` });
-  const res = await model.generate({ agent, purpose, system, user, schema, maxTokens, signal: ctx.signal, demoInput });
+  const res = await model.generate({ agent, purpose, system, user, schema, maxTokens, signal: ctx.signal, demoInput, ...(images?.length ? { images } : {}) });
   await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: model.service, kind: "actual", amountUsd: res.actualCostUsd, units: res.usage ?? {}, note: res.isDemo ? "DEMO — ücret yok" : `${agent}:${purpose}` });
   return res;
 }
@@ -337,12 +341,31 @@ function cleanKey(s: string, used: Set<string>) {
 }
 
 /** Plan doğrulama: geçerli uzman, döngüsüz bağımlılık (yalnızca önceki görevlere), görev sınırı. */
+/** "Videoyu analiz et / sahne seç" türünde, gerçek medya analizinin yerine geçmeye çalışan metin görevi. */
+export function isVideoAnalysisOnlyTask(t: { agent: string; title: string; instruction: string }) {
+  if (t.agent !== "video") return false;
+  const text = `${t.title} ${t.instruction}`.toLocaleLowerCase("tr");
+  const analysis = /(analiz|analysis|analyse|analyze|sahne seç|scene select|kare çıkar|frame)/.test(text);
+  const production = /(kurgu|render|mp4|montaj|edit plan|edit the|reels? (üret|hazırla|oluştur)|ekran yaz|on-screen|altyazı|subtitle|senaryo|script)/.test(text);
+  return analysis && !production;
+}
+
 export function sanitizePlan(plan: Plan, maxTasks: number) {
   const used = new Set<string>();
   const keyMap = new Map<string, string>();
   const tasks: { key: string; agent: SpecialistId; title: string; instruction: string; depends_on: string[] }[] = [];
   const dropped: string[] = [];
+  // Gerçek video analizi sistem tarafından yapılır: ayrı "video analizi" metin görevi, başka bir video görevi
+  // varsa plandan çıkarılır; ona bağlı görevler onun bağımlılıklarını devralır.
+  const hasProductionVideo = plan.tasks.some((t) => t.agent === "video" && !isVideoAnalysisOnlyTask(t));
+  const replaced = new Map<string, string[]>();
   for (const t of plan.tasks) {
+    if (hasProductionVideo && isVideoAnalysisOnlyTask(t)) {
+      replaced.set(t.key, t.depends_on.flatMap((d) => replaced.get(d) ?? [d]));
+      dropped.push(`${t.title} (video analizi sistem tarafından otomatik yapılır)`);
+      continue;
+    }
+    t.depends_on = [...new Set(t.depends_on.flatMap((d) => replaced.get(d) ?? [d]))];
     if (!isSpecialist(t.agent)) { dropped.push(`${t.title} (geçersiz uzman)`); continue; }
     if (tasks.length >= maxTasks) { dropped.push(`${t.title} (görev sınırı)`); continue; }
     const key = cleanKey(t.key, used);
@@ -407,17 +430,111 @@ async function extraForAgent(agent: SpecialistId, brandId: string): Promise<stri
   return `<cost_records><data>${JSON.stringify(costs)}</data></cost_records>\n<connections><data>${JSON.stringify(statuses)}</data></connections>\n<performance_data><data>No performance source is connected. Do not invent metrics.</data></performance_data>`;
 }
 
+/** Render görevleri (ffmpeg) için ayrı, daha uzun süre sınırı. */
+export function effectiveTimeoutMs(task: Pick<Task, "kind">, limits: Limits) {
+  return task.kind === "render" ? Math.max(limits.taskTimeoutMs, limits.renderTimeoutMs ?? 0) : limits.taskTimeoutMs;
+}
+
+/** Plan dosya üretimi içeriyor mu (kurgu veya AI video)? */
+export function videoNeedsArtifact(content: any) {
+  return (content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new");
+}
+
+// ---------------------------------------------------------------- Video analizi kapısı
+
+const VIDEO_ANALYSIS_MAX_WAIT_MS = 30 * 60_000;
+const VIDEO_ANALYSIS_POLL_MS = 5_000;
+
+type VideoTarget = { id: string; filename: string; requested: boolean; analysis: MediaAnalysis };
+type VideoGate = { hold: boolean; targets: VideoTarget[]; skipped: string[]; images?: GenerateRequest<unknown>["images"] };
+
+/**
+ * Talimatta açıkça istenen videoları bulur (kimlik veya dosya adı; yalnızca bu markanın dosyaları).
+ * Hiçbiri anılmadıysa en yeni 3 gerçek çekim aday olur.
+ */
+export async function resolveVideoTargets(brandId: string, text: string): Promise<{ assets: MediaAsset[]; explicit: boolean }> {
+  const ids = [...new Set((text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []).map((x) => x.toLowerCase()))];
+  const explicit = await q<MediaAsset>(
+    `SELECT * FROM media_assets WHERE brand_id = $1 AND kind = 'video' AND (
+       id = ANY($2::uuid[])
+       OR strpos(lower($3), lower(filename)) > 0
+       OR (length(regexp_replace(filename, '\\.[^.]+$', '')) >= 6 AND strpos(lower($3), lower(regexp_replace(filename, '\\.[^.]+$', ''))) > 0))
+     ORDER BY created_at DESC LIMIT 6`,
+    [brandId, ids, text],
+  );
+  if (explicit.length) return { assets: explicit, explicit: true };
+  const recent = await q<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND kind = 'video' AND origin = 'real_video' ORDER BY created_at DESC LIMIT 3`, [brandId]);
+  return { assets: recent, explicit: false };
+}
+
+/**
+ * Video uzmanı çalışmadan önce: hedef videoların gerçek analizi tamamlanmış olmalı.
+ * Eksikse mevcut analiz hattı başlatılır; küçük dosyalar burada işlenir, büyükler kuyrukta beklenir (görev "Hazır"
+ * durumuna dönüp sonra tekrar dener, deneme hakkı tüketmez). Açıkça istenen bir videonun analizi başarısızsa görev
+ * başarısız olur — sahne uydurulmaz.
+ */
+async function videoAnalysisGate(ctx: RunCtx, workerId: string): Promise<VideoGate> {
+  const { task } = ctx;
+  assertTool("video", "media.read");
+  const project = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [task.project_id, task.brand_id]);
+  const { assets, explicit } = await resolveVideoTargets(task.brand_id, `${task.instruction}\n${project?.instruction ?? ""}`);
+  const targets: VideoTarget[] = [];
+  const pending: string[] = [];
+  const skipped: string[] = [];
+  for (const a of assets) {
+    if (ctx.signal.aborted) throw ctx.signal.reason;
+    const g = await ensureAnalysis(a, { workerId });
+    if (g.state === "completed") targets.push({ id: a.id, filename: a.filename, requested: explicit, analysis: g.analysis });
+    else if (g.state === "pending") pending.push(`${a.filename} (${g.reason})`);
+    else if (explicit) {
+      throw new PermanentError(`Video analizi başarısız: ${a.filename} — ${g.error}. Sahne uydurulmadı; dosyayı kontrol edip medya sayfasında "Yeniden analiz et" deyin.`);
+    } else skipped.push(`${a.filename}: analiz başarısız (${g.error})`);
+  }
+  if (pending.length) {
+    const since = Date.parse(String(task.input_refs?.analysis_wait_since ?? "")) || Date.now();
+    if (Date.now() - since > VIDEO_ANALYSIS_MAX_WAIT_MS) {
+      throw new PermanentError(`Video analizi ${Math.round(VIDEO_ANALYSIS_MAX_WAIT_MS / 60_000)} dakikada tamamlanmadı: ${pending.join("; ")}. İşleyiciyi ve medya sayfasındaki analiz durumunu kontrol edin.`);
+    }
+    await q(`UPDATE tasks SET input_refs = COALESCE(input_refs, '{}'::jsonb) || $2::jsonb WHERE id = $1`, [task.id, JSON.stringify({ analysis_wait_since: new Date(since).toISOString() })]);
+    await finish(task, workerId, { status: "ready", error: `Video analizi bekleniyor: ${pending.join("; ")}`, nextAttemptMs: VIDEO_ANALYSIS_POLL_MS });
+    return { hold: true, targets, skipped };
+  }
+  // Gerçek kareleri modele göstermek ücretlidir: yalnızca sahip ayarı açıksa ve gerçek model bağlıysa
+  let images: VideoGate["images"];
+  if (targets.length && !ctx.model.isDemo && (await getSetting<boolean>("video_agent_frames", false))) {
+    images = [];
+    for (const t of targets) {
+      for (const f of analysisFrames(t.analysis).slice(0, 4)) {
+        if (images.length >= 12) break;
+        images.push({ mediaType: "image/jpeg", base64: (await getStorage().get(f.key)).toString("base64"), label: `${t.filename} · sahne ${f.scene ?? "?"} · ${f.t} sn` });
+      }
+    }
+  }
+  return { hold: false, targets, skipped, images };
+}
+
+function videoTargetsBlock(v: VideoGate) {
+  const list = v.targets.map((t) => ({ asset_id: t.id, filename: t.filename, requested: t.requested, verified_analysis: compactAnalysis(t.analysis) }));
+  return `<video_sources>\n<data>${JSON.stringify({ analysed_videos: list, unusable: v.skipped })}</data>\nOnly these analysed videos may be used for edit_existing segments.\n</video_sources>`;
+}
+
 async function runGenerate(ctx: RunCtx, workerId: string) {
   const { task } = ctx;
   if (!isSpecialist(task.agent)) throw new PermanentError(`Bilinmeyen uzman: ${task.agent}`);
   const agent = task.agent;
   assertTool(agent, "brand.read");
-  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent });
+  // Video: kurgu planından ÖNCE gerçek analiz (kareler, sahneler). Analiz yoksa başlatılır; bitene kadar görev bekler.
+  const video = agent === "video" ? await videoAnalysisGate(ctx, workerId) : null;
+  if (video?.hold) return;
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent, includeAssetIds: video?.targets.map((t) => t.id) });
   const upstream = await upstreamOutputs(task);
   if (upstream.length) assertTool(agent, "outputs.read");
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
-  const user = userPrompt({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra: await extraForAgent(agent, task.brand_id) });
-  const res = await callModel(ctx, agent, "work", schema, user, { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key });
+  const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined].filter(Boolean).join("\n") || undefined;
+  const user = userPrompt({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
+  const res = await callModel(ctx, agent, "work", schema, user,
+    { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [] },
+    16000, video?.images);
 
   await owned(task, workerId, async (c) => {
     let outputId = task.output_id;
@@ -446,7 +563,7 @@ async function runReview(ctx: RunCtx, workerId: string) {
   assertTool("quality", "outputs.read");
   const v = await getCurrentVersion(task.brand_id, task.output_id);
   if (!v) throw new PermanentError("Çıktı sürümü bulunamadı.");
-  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality" });
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality", includeAssetIds: referencedAssetIds(task.agent, v.content) });
   const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo });
 
   const user = userPrompt({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
@@ -460,7 +577,9 @@ async function runReview(ctx: RunCtx, workerId: string) {
     // Takip görevleri, görev "tamamlandı" olmadan ÖNCE oluşturulur; böylece rapor görevi render'ı beklemeden başlayamaz.
     await spawnFollowUps(task, v, brandCtx);
     if (task.agent === "social") await createCalendarEntries(task, v);
-    await finish(task, workerId, { status: task.requires_approval ? "approval_pending" : "completed" });
+    // Video planı: render edilen MP4 doğrulanıp insan onayı verilene kadar "tamamlandı" sayılmaz (onay kapısı outputs.decide içinde)
+    const needsHuman = task.requires_approval || (task.agent === "video" && videoNeedsArtifact(v.content));
+    await finish(task, workerId, { status: needsHuman ? "approval_pending" : "completed" });
     return;
   }
   if (task.regen_count < limits.maxRegenerations) {
@@ -520,7 +639,7 @@ async function runRender(ctx: RunCtx, workerId: string) {
   if (!o) throw new PermanentError(`${task.agent} için render adımı yok.`);
   await assertOwned(task, workerId);
   if (o.produced.length) await attachAssetsToVersion(v.id, o.produced);
-  const summary = { produced: o.produced.length, waiting: o.waiting, in_progress: o.inProgress, failed: o.failed, uncertain: o.uncertain, notes: o.notes };
+  const summary = { produced: o.produced.length, waiting: o.waiting, in_progress: o.inProgress, failed: o.failed, uncertain: o.uncertain, notes: o.notes, artifacts: o.artifacts };
   await q(`UPDATE tasks SET input_refs = input_refs || $2::jsonb WHERE id = $1`, [task.id, JSON.stringify({ result: summary })]);
   const service = task.agent === "design" ? "sharp/openai_images" : "ffmpeg/video_generation";
   const made = o.produced.length ? ` (üretilen dosya: ${o.produced.length})` : "";

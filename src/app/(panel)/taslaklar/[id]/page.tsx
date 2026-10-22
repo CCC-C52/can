@@ -32,7 +32,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
   if (!shown) return <p className="muted">Bu çıktının henüz sürümü yok.</p>;
   const isCurrent = shown.version === current.version;
   const assetIds = [...new Set(versions.flatMap((v) => v.asset_ids))];
-  const [assets, actions, jobs, costs] = await Promise.all([
+  const [assets, actions, jobs, costs, renderTask] = await Promise.all([
     assetIds.length ? q<MediaAsset>(`SELECT * FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) ORDER BY created_at`, [brand.id, assetIds]) : Promise.resolve([] as MediaAsset[]),
     q<ExternalAction & { version: number }>(`SELECT a.*, v.version FROM external_actions a JOIN output_versions v ON v.id = a.output_version_id WHERE v.output_id = $1 AND a.brand_id = $2 ORDER BY a.created_at DESC`, [id, brand.id]),
     q<ProviderJob>(`SELECT j.* FROM provider_jobs j JOIN tasks t ON t.id = j.task_id WHERE t.output_id = $1 AND j.brand_id = $2 ORDER BY j.created_at DESC`, [id, brand.id]),
@@ -40,7 +40,12 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
       `SELECT c.service, SUM(c.amount_usd) FILTER (WHERE c.kind = 'estimated')::float AS est, SUM(c.amount_usd) FILTER (WHERE c.kind = 'actual')::float AS act,
          COUNT(*) FILTER (WHERE c.amount_usd IS NULL)::int AS unknown, COUNT(*)::int AS n
        FROM cost_entries c JOIN tasks t ON t.id = c.task_id WHERE t.output_id = $1 AND c.brand_id = $2 GROUP BY c.service ORDER BY c.service`, [id, brand.id]),
+    q<{ id: string; status: string; error: string | null; input_refs: any }>(
+      `SELECT id, status, error, input_refs FROM tasks WHERE output_id = $1 AND brand_id = $2 AND kind = 'render' ORDER BY created_at DESC LIMIT 1`, [id, brand.id]).then((r) => r[0] ?? null),
   ]);
+  const videoArtifacts: any[] = renderTask?.input_refs?.version_id === current.id ? renderTask.input_refs?.result?.artifacts ?? [] : [];
+  const needsMp4 = out.kind === "video_plan" && (current.content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new");
+  const hasMp4 = assets.some((a) => current.asset_ids.includes(a.id) && a.kind === "video" && (a.generation_method === "ffmpeg_edit" || a.generation_method?.startsWith("ai_video:")));
   const latestDecision = approvals.find((a) => a.output_version_id === current.id && !a.revoked_at);
   const scopes = requiredScopes(out.kind, current.content);
   const containsDemo = current.is_demo || JSON.stringify(current.content).includes("[DEMO]");
@@ -78,6 +83,11 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
           {editable && isCurrent && (
             <section className="card space-y-3">
               <h2 className="h2">Onay</h2>
+              {needsMp4 && !hasMp4 && (
+                <p className="rounded bg-amber-50 p-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                  Bu sürüm için doğrulanmış MP4 henüz yok{renderTask ? ` (render: ${TASK_STATUS_LABEL[renderTask.status as keyof typeof TASK_STATUS_LABEL] ?? renderTask.status}${renderTask.error ? ` — ${renderTask.error.slice(0, 160)}` : ""})` : ""}. Onay MP4 üretilip doğrulandıktan sonra verilebilir; reddedebilir veya revizyon isteyebilirsiniz.
+                </p>
+              )}
               <p className="text-xs text-muted">Onay bu sürümün içerik özetine (hash) bağlanır: <code className="break-all">{current.content_hash.slice(0, 16)}…</code>. İçerik değişirse onay geçersiz olur.</p>
               {latestDecision ? (
                 <div className="text-sm">
@@ -141,6 +151,24 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
                     </form>
                   </span>
                 </div>
+              ))}
+            </section>
+          )}
+
+          {videoArtifacts.length > 0 && (
+            <section className="card space-y-2" aria-labelledby="mp4-h">
+              <h2 id="mp4-h" className="h2">Üretilen MP4</h2>
+              {videoArtifacts.map((a) => (
+                <dl key={a.asset_id} className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+                  <dt className="text-muted">Dosya</dt><dd><Link className="text-brand underline" href={`/medya/${a.asset_id}`}>Aç</Link> · <a className="text-brand underline" href={`/api/media/${a.asset_id}/file?download=1`} download>İndir</a></dd>
+                  <dt className="text-muted">Kodek</dt><dd>{a.codec} (H.264, yuv420p)</dd>
+                  <dt className="text-muted">Çözünürlük</dt><dd>{a.width}×{a.height}</dd>
+                  <dt className="text-muted">Süre</dt><dd>{Number(a.duration_s).toFixed(2)} sn</dd>
+                  <dt className="text-muted">Boyut</dt><dd>{(a.bytes / 1e6).toFixed(1)} MB</dd>
+                  <dt className="text-muted">Bölüm / kaynak</dt><dd>{a.segments} bölüm · {a.sources} kaynak video</dd>
+                  <dt className="text-muted">Ses</dt><dd>{a.audio}</dd>
+                  <dt className="text-muted">Doğrulama</dt><dd>{a.decoded ? "ffprobe + baştan sona çözme başarılı" : "—"}</dd>
+                </dl>
               ))}
             </section>
           )}

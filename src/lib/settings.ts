@@ -5,6 +5,7 @@ export type Limits = {
   maxTasksPerProject: number;      // planın oluşturabileceği en fazla görev
   maxModelCallsPerProject: number; // proje başına model çağrısı sınırı
   taskTimeoutMs: number;           // tek görev çalışma süresi sınırı
+  renderTimeoutMs: number;         // render (ffmpeg/derleme) görevlerinin süre sınırı; küçük CPU'da video kurgusu uzun sürer
   maxAttempts: number;             // geçici hatalarda en fazla deneme
   maxRegenerations: number;        // çıktı başına yeniden üretim sınırı
   perTaskBudgetUsd: number | null; // görev başına harcama sınırı (null = sınırsız)
@@ -19,6 +20,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxTasksPerProject: 12,
   maxModelCallsPerProject: 40,
   taskTimeoutMs: 180_000,
+  renderTimeoutMs: 1_200_000,
   maxAttempts: 3,
   maxRegenerations: 3,
   perTaskBudgetUsd: 1,

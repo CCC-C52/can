@@ -1,10 +1,11 @@
+import { getStorage } from "@/lib/storage";
 import { isUuid } from "@/lib/ids";
 import { q, q1, tx, type Queryable, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { contentHash } from "@/lib/security/crypto";
 import { OUTPUT_SCHEMAS, type SpecialistId } from "@/lib/agents/schemas";
 import { buildBrandContext } from "@/lib/agents/context";
-import { runRuleChecks } from "@/lib/agents/qa-rules";
+import { referencedAssetIds, runRuleChecks } from "@/lib/agents/qa-rules";
 
 export type Output = {
   id: string;
@@ -163,7 +164,7 @@ export async function editOutput(brandId: string, outputId: string, content: unk
     if (!r.success) throw new ValidationError(`İçerik şemaya uymuyor: ${r.error.issues.slice(0, 3).map((i: any) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
     valid = r.data;
   }
-  const ctx = await buildBrandContext(brandId, db);
+  const ctx = await buildBrandContext(brandId, db, { includeAssetIds: referencedAssetIds(out.agent, valid) });
   const qa = out.agent in OUTPUT_SCHEMAS && out.agent !== "quality"
     ? { ...runRuleChecks(out.agent as SpecialistId, valid as any, ctx, { isDemo: false }), sources: ["rules"], note: "Kullanıcı düzenlemesi sonrası kural tabanlı kontrol" }
     : null;
@@ -191,6 +192,18 @@ export async function decide(
     if (!v) throw new ValidationError("Sürüm bulunamadı");
     if (v.version !== v.current_version) throw new ValidationError("Yalnızca en güncel sürüm onaylanabilir veya reddedilebilir.");
     if (contentHashOf(v.content) !== v.content_hash) throw new ValidationError("İçerik bütünlüğü doğrulanamadı.");
+    // Video planı: doğrulanmış bir MP4 üretilmeden onay verilemez (ret her zaman mümkün)
+    if (decision === "approved" && v.kind === "video_plan" && (v.content?.videos ?? []).some((x: any) => x.mode === "edit_existing" || x.mode === "generate_new")) {
+      const mp4 = await q1<{ id: string; storage_key: string }>(
+        `SELECT id, storage_key FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) AND kind = 'video'
+           AND (generation_method = 'ffmpeg_edit' OR generation_method LIKE 'ai_video:%') AND size_bytes > 0 LIMIT 1`,
+        [brandId, v.asset_ids ?? []],
+        c,
+      );
+      if (!mp4 || !(await getStorage().exists(mp4.storage_key))) {
+        throw new ValidationError("Bu sürüm için doğrulanmış bir MP4 henüz yok; video render tamamlanmadan onaylanamaz. Reddedebilir veya revizyon isteyebilirsiniz.");
+      }
+    }
     const allowed = requiredScopes(v.kind, v.content);
     const scopes = decision === "approved" ? (opts.scopes?.length ? opts.scopes.filter((s) => allowed.includes(s)) : allowed) : [];
     if (decision === "approved" && !scopes.includes("content")) scopes.unshift("content");

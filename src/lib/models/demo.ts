@@ -24,6 +24,8 @@ export type DemoInput = {
   feedback?: string | null;
   taskKey?: string;
   target?: { agent: string; content: unknown };
+  /** Video görevi: analizi doğrulanmış hedef video kimlikleri (öncelik sırası). */
+  videoTargets?: string[];
 };
 
 const DEMO_TAG = "[DEMO]";
@@ -139,7 +141,7 @@ export function demoPlan(input: DemoInput): Plan {
   const stratDep = has("marketing") ? ["strategy"] : [];
   if (has("shopify")) tasks.push({ key: "store", agent: "shopify", title: "Ürün sayfası, koleksiyon ve bundle önerileri", instruction: `${products} için ürün açıklaması, koleksiyon ve bundle önerisi hazırla; mevcut ve önerilen değerleri karşılaştır.`, depends_on: stratDep });
   if (has("design")) tasks.push({ key: "visuals", agent: "design", title: "Görsel briefleri", instruction: `Lansman gönderileri, kapak ve reklam görselleri için brief hazırla. Gerçek ürün fotoğrafı ile AI görselini ayır.`, depends_on: stratDep });
-  if (has("video")) tasks.push({ key: "video", agent: "video", title: "Video senaryosu ve kurgu planı", instruction: `Arşivdeki çekimlerden kısa dikey video kurgusu ve altyazı hazırla; çekim yoksa AI üretimini ayrı işlem olarak planla.`, depends_on: stratDep });
+  if (has("video")) tasks.push({ key: "video", agent: "video", title: "Video senaryosu ve kurgu planı", instruction: `Arşivdeki çekimlerden kısa dikey video kurgusu ve altyazı hazırla; çekim yoksa AI üretimini ayrı işlem olarak planla. Sahibin talimatı: ${input.instruction.slice(0, 600)}`, depends_on: stratDep });
   if (has("social")) {
     const deps = [...stratDep, ...(has("design") ? ["visuals"] : []), ...(has("video") ? ["video"] : [])];
     tasks.push({ key: "social", agent: "social", title: "Sosyal medya yayın paketi ve takvim", instruction: `Instagram ve TikTok için açıklamalar, içerik takvimi ve yayın paketi hazırla.`, depends_on: deps });
@@ -322,35 +324,74 @@ export function demoDesign(input: DemoInput): DesignBriefOutput {
   return { summary: `${DEMO_TAG} ${briefs.length} görsel brief hazırlandı.`, briefs, unknowns: brandUnknowns(ctx) };
 }
 
+/** Talimattaki hedef süre: "10-15 saniye" → 12,5; "12 sn" → 12. Bulunamazsa null. */
+export function requestedDurationS(text: string): number | null {
+  const range = /(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:sn|saniye|s\b|sec|seconds?)/i.exec(text);
+  if (range) return Math.min(60, (Number(range[1]) + Number(range[2])) / 2);
+  const one = /(\d{1,2})\s*(?:sn|saniye|seconds?)\b/i.exec(text);
+  return one ? Math.min(60, Number(one[1])) : null;
+}
+
 export function demoVideo(input: DemoInput): VideoPlanOutput {
   const { ctx } = input;
   const t = T[L(ctx.brand.content_language)];
   const products = focusProducts(ctx, input.instruction);
-  const clips = ctx.media.filter((m) => m.kind === "video" && (m.origin === "real_video" || m.origin === "edited")).slice(0, 3);
   const name = products.map((p) => p.title).join(" & ") || ctx.brand.name;
-  if (clips.length) {
-    const per = 4;
-    const duration = per * clips.length;
+  const videos = ctx.media.filter((m) => m.kind === "video");
+  // Yalnızca analizi tamamlanmış videolar; talimatta istenenler önce. Dosya adına göre sahne UYDURULMAZ.
+  const order = input.videoTargets ?? [];
+  const analysed = videos
+    .filter((m) => m.analysis_status === "completed" && (m.analysis as any)?.scenes?.length)
+    .sort((x, y) => (order.indexOf(x.id) + 1 || 99) - (order.indexOf(y.id) + 1 || 99) || Number(!!y.requested) - Number(!!x.requested))
+    .slice(0, 2);
+  if (analysed.length) {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const target = requestedDurationS(input.instruction) ?? 9;
+    const segments: VideoPlanOutput["videos"][number]["segments"] = [];
+    for (const m of analysed) {
+      const scenes = ((m.analysis as any).scenes as { index: number; start: number; end: number }[]).filter((sc) => sc.end - sc.start >= 0.8);
+      const windows = scenes.length >= 2
+        ? scenes.map((sc) => ({ sc, from: sc.start, to: sc.end }))
+        // Tek uzun sahne: aynı sahnenin farklı zaman aralıkları (aynı dosyadan birden çok bölüm)
+        : scenes.flatMap((sc) => { const n = Math.min(3, Math.floor((sc.end - sc.start) / 1.5)); return Array.from({ length: Math.max(1, n) }, (_, i) => ({ sc, from: sc.start + (i * (sc.end - sc.start)) / Math.max(1, n), to: sc.start + ((i + 1) * (sc.end - sc.start)) / Math.max(1, n) })); });
+      const per = Math.max(1.5, target / Math.min(4, Math.max(1, windows.length * analysed.length)));
+      for (const w of windows) {
+        if (segments.length >= 4) break;
+        const len = Math.min(per, w.to - w.from);
+        const start = r2(Math.max(w.sc.start, w.from + (w.to - w.from - len) / 2) + 0.005);
+        const end = r2(Math.min(w.sc.end, start + len) - 0.005);
+        if (end - start < 0.5) continue;
+        segments.push({ asset_id: m.id, scene_index: w.sc.index, source_start: start, source_end: end, on_screen_text: "", purpose: segments.length === 0 ? "açılış" : "ürün görüntüsü" });
+      }
+    }
+    if (segments.length) {
+      segments[0].on_screen_text = `${t.newIn}: ${name}`;
+      if (segments.length > 1) segments[segments.length - 1].on_screen_text = t.cta;
+      const total = r2(segments.reduce((acc, sg) => acc + (sg.source_end - sg.source_start), 0));
+      let at = 0;
+      const script = segments.map((sg) => {
+        const d = sg.source_end - sg.source_start;
+        const row = { t_start: r2(at), t_end: r2(at + d), visual: `Sahne ${sg.scene_index + 1} (${sg.source_start}–${sg.source_end} sn, doğrulanmış analiz)`, voiceover: "", on_screen_text: sg.on_screen_text };
+        at += d;
+        return row;
+      });
+      return {
+        summary: `${DEMO_TAG} ${analysed.length} analiz edilmiş videodan ${segments.length} doğrulanmış sahne bölümüyle ${total} sn'lik dikey kurgu planı.`,
+        videos: [{
+          id: "reel-1", mode: "edit_existing", format: "9:16", duration_s: total,
+          selected_asset_ids: [...new Set(segments.map((sg) => sg.asset_id))],
+          script, subtitles: [], generation_prompt: "", music_note: "Ses kaldırıldı; lisanslı müzik ekleme manuel.",
+          transition: "cut", framing: "fit", intro_text: "", outro_text: "", segments,
+        }],
+        unknowns: brandUnknowns(ctx),
+      };
+    }
+  }
+  if (videos.length) {
     return {
-      summary: `${DEMO_TAG} Arşivdeki ${clips.length} çekimden ${duration} sn'lik dikey kurgu planı.`,
-      videos: [
-        {
-          id: "reel-1",
-          mode: "edit_existing",
-          format: "9:16",
-          duration_s: duration,
-          selected_asset_ids: clips.map((c) => c.id),
-          script: clips.map((c, i) => ({ t_start: i * per, t_end: (i + 1) * per, visual: c.filename, voiceover: "", on_screen_text: i === 0 ? `${t.newIn}: ${name}` : i === clips.length - 1 ? t.cta : "" })),
-          subtitles: clips.map((_, i) => ({ start: i * per, end: (i + 1) * per - 0.2, text: i === 0 ? `${t.newIn}: ${name}` : i === clips.length - 1 ? t.cta : ctx.brand.name })),
-          generation_prompt: "",
-          music_note: "Lisanslı müzik seçilmedi; müzik ekleme manuel.",
-          transition: "fade",
-          framing: "fit",
-          intro_text: ctx.brand.name,
-          outro_text: t.cta,
-        },
-      ],
-      unknowns: brandUnknowns(ctx),
+      summary: `${DEMO_TAG} Arşivde video var ancak analizi tamamlanmış uygun sahne yok; kurgu planı üretilmedi (sahne uydurulmadı).`,
+      videos: [],
+      unknowns: [...brandUnknowns(ctx), "Video analizi tamamlanmadan kurgu yapılamaz."],
     };
   }
   return {
@@ -376,6 +417,7 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
         framing: "fit",
         intro_text: "",
         outro_text: "",
+        segments: [],
       },
     ],
     unknowns: [...brandUnknowns(ctx), "Arşivde ürün videosu yok; gerçek ürün görüntüsü için çekim gerekli."],

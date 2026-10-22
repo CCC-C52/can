@@ -13,7 +13,7 @@ import { SubmitButton } from "@/components/client";
 export default async function Settings({ searchParams }: { searchParams: SP }) {
   const { ok, err, one } = await flash(searchParams);
   const { brand } = await getCurrentBrand();
-  const [limits, paused, visionOnUpload] = await Promise.all([getLimits(), isPaused(), getSetting<boolean>("vision_on_upload", true)]);
+  const [limits, paused, visionOnUpload, videoAgentFrames] = await Promise.all([getLimits(), isPaused(), getSetting<boolean>("vision_on_upload", true), getSetting<boolean>("video_agent_frames", false)]);
   const scope = one("scope") === "all" ? "all" : "brand";
   const logs = await q<{ id: number; actor: string; action: string; message: string; created_at: string; brand_id: string | null }>(
     scope === "all" || !brand ? `SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200` : `SELECT * FROM audit_log WHERE brand_id = $1 OR brand_id IS NULL ORDER BY created_at DESC LIMIT 200`,
@@ -37,6 +37,7 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
             {num("maxTasksPerProject", "Proje başına en fazla görev", limits.maxTasksPerProject)}
             {num("maxModelCallsPerProject", "Proje başına model çağrısı", limits.maxModelCallsPerProject)}
             {num("taskTimeoutMs", "Görev süre sınırı (ms)", limits.taskTimeoutMs)}
+            {num("renderTimeoutMs", "Video/görsel render süre sınırı (ms)", limits.renderTimeoutMs, "Küçük sunucuda (0,5 CPU) video kurgusu birkaç dakika sürebilir.")}
             {num("maxAttempts", "Geçici hatada en fazla deneme", limits.maxAttempts)}
             {num("maxRegenerations", "Çıktı başına yeniden üretim", limits.maxRegenerations)}
             <label className="block"><span className="label">Görev başına bütçe (USD, boş = sınırsız)</span><input name="perTaskBudgetUsd" defaultValue={limits.perTaskBudgetUsd ?? ""} className="input" /></label>
@@ -54,6 +55,7 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
           <h2 className="h2 mb-2">Medya analizi</h2>
           <form action={saveAnalysisSettingsAction} className="space-y-2 text-sm">
             <label className="flex items-start gap-2"><input type="checkbox" name="visionOnUpload" defaultChecked={visionOnUpload} className="mt-1" /> <span>Yüklenen her fotoğraf ve videoyu AI görsel modeliyle de analiz et (ücretli; model gerçek modda çalışır). Kapalıyken yalnızca ücretsiz yerel piksel/kare analizi yapılır; dosya sayfasından tek tek &quot;Yeniden analiz et&quot; denebilir.</span></label>
+            <label className="flex items-start gap-2"><input type="checkbox" name="videoAgentFrames" defaultChecked={videoAgentFrames} className="mt-1" /> <span>Video uzmanına analizdeki gerçek kareleri de göster (görev başına en fazla 12 kare; ücretli, varsayılan kapalı). Kapalıyken uzman yalnızca doğrulanmış sahne analizinin metin özetini görür.</span></label>
             <SubmitButton>Kaydet</SubmitButton>
           </form>
         </section>
