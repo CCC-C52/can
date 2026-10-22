@@ -13,6 +13,10 @@ export type Limits = {
   blockUnknownCost: boolean;       // maliyeti tahmin edilemeyen ücretli işlemler engellensin mi
   paidMediaGeneration: boolean;    // ücretli AI görsel/video üretimine sahip izni (varsayılan kapalı)
   maxVideoGenSeconds: number;      // proje başına AI video saniye sınırı
+  webResearch: boolean;            // ücretli web araştırmasına (Firecrawl) sahip izni (varsayılan kapalı)
+  researchMonthlyCredits: number;  // aylık araştırma kredisi üst sınırı
+  /** Sağlayıcı başına aylık (UTC takvim ayı) harcama sınırı, USD. Anahtar: servis adı (anthropic, openai_images, firecrawl…). */
+  providerMonthlyUsd: Record<string, number>;
 };
 
 export const DEFAULT_LIMITS: Limits = {
@@ -28,6 +32,9 @@ export const DEFAULT_LIMITS: Limits = {
   blockUnknownCost: true,
   paidMediaGeneration: false,
   maxVideoGenSeconds: 16,
+  webResearch: false,
+  researchMonthlyCredits: 100,
+  providerMonthlyUsd: {},
 };
 
 export async function getSetting<T>(key: string, fallback: T, db: Queryable = getPool()): Promise<T> {

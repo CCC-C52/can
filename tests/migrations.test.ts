@@ -27,7 +27,7 @@ describe("Veritabanı geçişleri", () => {
   it("temiz veritabanında uygulanır ve tekrar çalıştırmak bir şey değiştirmez", async () => {
     const pool = await freshDb("aiops_mig_clean");
     const first = await runMigrations(undefined, { pool });
-    expect(first).toEqual(expect.arrayContaining(["001_init.sql", "002_media_jobs_integrity.sql"]));
+    expect(first).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
     expect(await runMigrations(undefined, { pool })).toEqual([]);
     const t = await pool.query(`SELECT to_regclass('media_analyses') AS a, to_regclass('upload_sessions') AS u, to_regclass('provider_jobs') AS p`);
     expect(t.rows[0]).toEqual({ a: "media_analyses", u: "upload_sessions", p: "provider_jobs" });
@@ -51,7 +51,7 @@ describe("Veritabanı geçişleri", () => {
     const counts = async () => (await q(`SELECT (SELECT count(*) FROM brands) b, (SELECT count(*) FROM tasks) t, (SELECT count(*) FROM media_assets) m, (SELECT count(*) FROM outputs) o, (SELECT count(*) FROM output_versions) v, (SELECT count(*) FROM approvals) a`)).rows[0];
     const before = await counts();
 
-    expect(await runMigrations(undefined, { pool })).toEqual(["002_media_jobs_integrity.sql"]);
+    expect(await runMigrations(undefined, { pool })).toEqual(["002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
     expect(await counts()).toEqual(before);
     // Etiket düzeltmesi ve proje ilişkisi
     const media = (await q(`SELECT filename, origin, generation_method, project_id FROM media_assets ORDER BY filename`)).rows;
@@ -72,6 +72,13 @@ describe("Veritabanı geçişleri", () => {
     await q(`UPDATE output_versions SET qa_report = '{"verdict":"pass"}'`);
     // Yeni kısıtlar yeni satırlarda geçerli
     await expect(q(`INSERT INTO approvals (brand_id, output_id, output_version_id, content_hash, decision) VALUES ($1,$2,$3,'h','maybe')`, [b, o, v])).rejects.toThrow(/approvals_decision_check/);
+    // 003: araştırma kaynağı başka markanın çalıştırmasına bağlanamaz (bileşik yabancı anahtar)
+    const b2 = (await q(`INSERT INTO brands (slug, name) VALUES ('other-fixture','Other') RETURNING id`)).rows[0].id;
+    const run = (await q(`INSERT INTO research_runs (brand_id, mode, query, provider) VALUES ($1,'search','q','firecrawl') RETURNING id`, [b])).rows[0].id;
+    await q(`INSERT INTO research_sources (run_id, brand_id, url) VALUES ($1,$2,'https://example.com')`, [run, b]);
+    await expect(q(`INSERT INTO research_sources (run_id, brand_id, url) VALUES ($1,$2,'https://example.com')`, [run, b2])).rejects.toThrow(/foreign key/);
+    await expect(q(`INSERT INTO research_sources (run_id, brand_id, url) VALUES ($1,$2,'javascript:alert(1)')`, [run, b])).rejects.toThrow(/check/);
+    await expect(q(`INSERT INTO brand_memory (brand_id, kind, title, body) VALUES ($1,'secret','t','b')`, [b])).rejects.toThrow(/check/);
     await pool.end();
   });
 });

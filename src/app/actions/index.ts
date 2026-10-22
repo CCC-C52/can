@@ -25,6 +25,10 @@ import { testVeo } from "@/lib/adapters/video-generation";
 import { releaseJob } from "@/lib/services/provider-jobs";
 import { testAnthropic } from "@/lib/models/test";
 import { audit } from "@/lib/audit";
+import { rateLimit } from "@/lib/security/rate-limit";
+import { runResearch, setSourceVerification } from "@/lib/services/research";
+import { addMemory, setMemoryStatus, type MemoryKind, type MemoryStatus } from "@/lib/services/brand-memory";
+import type { AgentId } from "@/lib/agents/schemas";
 
 // ---------------------------------------------------------------- Oturum
 
@@ -475,5 +479,67 @@ export async function saveShopifyDomainAction(fd: FormData) {
     await upsertConnection("shopify", brand.id, { config: { shop: str(fd, "shop") } });
     revalidatePath("/entegrasyonlar");
     return "Mağaza alan adı kaydedildi.";
+  });
+}
+
+// ---------------------------------------------------------------- Marka hafızası
+
+export async function addMemoryAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/hafiza", async () => {
+    const rl = rateLimit(`memory:${brand.id}`, 30, 60_000);
+    if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const m = await addMemory(brand.id, {
+      kind: (str(fd, "kind") || "guideline") as MemoryKind,
+      agent: (str(fd, "agent") || null) as AgentId | null,
+      title: str(fd, "title"),
+      body: str(fd, "body"),
+      status: "active",
+      source: "owner",
+    });
+    await audit({ brandId: brand.id, actor: "user", action: "memory.add", message: `Marka hafızasına eklendi: ${m.title}` });
+    return "Marka hafızasına eklendi; ajanlar bir sonraki görevden itibaren kullanır.";
+  });
+}
+
+export async function setMemoryStatusAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/hafiza", async () => {
+    const status = str(fd, "status");
+    if (!["active", "archived", "proposed"].includes(status)) throw new Error("Geçersiz durum.");
+    const m = await setMemoryStatus(brand.id, str(fd, "id"), status as MemoryStatus);
+    await audit({ brandId: brand.id, actor: "user", action: `memory.${status}`, message: `Marka hafızası kaydı ${status === "active" ? "etkinleştirildi" : status === "archived" ? "arşivlendi" : "öneriye alındı"}: ${m.title}` });
+    return status === "active" ? "Kayıt etkinleştirildi." : status === "archived" ? "Kayıt arşivlendi; ajanlara verilmez." : "Kayıt güncellendi.";
+  });
+}
+
+// ---------------------------------------------------------------- Araştırma Merkezi
+
+export async function runResearchAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/arastirma", async () => {
+    const rl = rateLimit(`research:${brand.id}`, 5, 60_000);
+    if (!rl.ok) throw new Error(`Çok fazla araştırma isteği; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const { run, sources, reused } = await runResearch(brand.id, {
+      mode: str(fd, "mode") === "scrape" ? "scrape" : "search",
+      query: str(fd, "query"),
+      limit: Number(str(fd, "limit")) || 5,
+      idempotencyKey: str(fd, "idem") || null,
+    });
+    if (reused) return "Bu istek zaten işlendi; yeni çağrı yapılmadı.";
+    if (run.status === "blocked") throw new Error(`Araştırma yapılmadı: ${run.error}`);
+    if (run.status === "failed") throw new Error(`Araştırma başarısız: ${run.error}`);
+    return `${sources.length} kaynak bulundu. Kaynaklar doğrulanmamış; ajanlar yalnızca sizin doğruladıklarınızı görür.`;
+  });
+}
+
+export async function verifySourceAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/arastirma", async () => {
+    const v = str(fd, "verification");
+    if (!["verified", "rejected", "unverified"].includes(v)) throw new Error("Geçersiz durum.");
+    const s = await setSourceVerification(brand.id, str(fd, "id"), v as "verified" | "rejected" | "unverified");
+    await audit({ brandId: brand.id, actor: "user", action: `research.source.${v}`, message: `Araştırma kaynağı ${v === "verified" ? "ajan bağlamına alındı" : v === "rejected" ? "reddedildi" : "doğrulanmamışa döndü"}: ${s.url}` });
+    return v === "verified" ? "Kaynak doğrulandı; ajanlar bunu üçüncü taraf bağlamı olarak görebilir." : "Kaynak güncellendi.";
   });
 }

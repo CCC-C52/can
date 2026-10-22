@@ -14,6 +14,17 @@ export async function todaysAiSpend(db: Queryable = getPool()) {
   return { actual: Number(row?.actual ?? 0), unknownCount: row?.unknown_count ?? 0 };
 }
 
+/** Bu takvim ayındaki (UTC) bir servisin gerçekleşen harcaması. */
+export async function monthlyServiceSpend(service: string, db: Queryable = getPool()) {
+  const row = await q1<{ actual: number }>(
+    `SELECT COALESCE(SUM(amount_usd), 0) AS actual FROM cost_entries
+     WHERE service = $1 AND kind = 'actual' AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
+    [service],
+    db,
+  );
+  return Number(row?.actual ?? 0);
+}
+
 export async function taskSpend(taskId: string, db: Queryable = getPool()) {
   const row = await q1<{ actual: number }>(
     `SELECT COALESCE(SUM(amount_usd), 0) AS actual FROM cost_entries WHERE task_id = $1 AND kind = 'actual'`,
@@ -30,8 +41,9 @@ export async function taskSpend(taskId: string, db: Queryable = getPool()) {
 export async function assertBudget(args: { taskId: string | null; estimateUsd: number | null; service: string }, db: Queryable = getPool()) {
   const limits = await getLimits(db);
   if (args.estimateUsd === 0) return;
+  const providerLimit = limits.providerMonthlyUsd?.[args.service];
   if (args.estimateUsd === null) {
-    if (limits.blockUnknownCost && (limits.perTaskBudgetUsd !== null || limits.dailyBudgetUsd !== null)) {
+    if (limits.blockUnknownCost && (limits.perTaskBudgetUsd !== null || limits.dailyBudgetUsd !== null || providerLimit !== undefined)) {
       throw new BudgetExceededError(`${args.service} için maliyet tahmin edilemiyor; harcama sınırı etkin olduğu için işlem durduruldu.`);
     }
     return;
@@ -40,6 +52,12 @@ export async function assertBudget(args: { taskId: string | null; estimateUsd: n
     const spent = await taskSpend(args.taskId, db);
     if (spent + args.estimateUsd > limits.perTaskBudgetUsd) {
       throw new BudgetExceededError(`Görev bütçesi aşılacak: harcanan $${spent.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${limits.perTaskBudgetUsd}`);
+    }
+  }
+  if (providerLimit !== undefined) {
+    const month = await monthlyServiceSpend(args.service, db);
+    if (month + args.estimateUsd > providerLimit) {
+      throw new BudgetExceededError(`${args.service} aylık sınırı aşılacak: bu ay $${month.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${providerLimit}`);
     }
   }
   if (limits.dailyBudgetUsd !== null) {

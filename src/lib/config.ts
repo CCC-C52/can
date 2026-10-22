@@ -67,6 +67,19 @@ export const config = {
       return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
     },
   },
+  firecrawl: {
+    // Web araştırması (ücretli). Anahtar yalnızca sunucu ortamında tutulur.
+    get apiKey() { return str("FIRECRAWL_API_KEY"); },
+    get creditUsd(): number | null {
+      const v = str("FIRECRAWL_CREDIT_USD");
+      return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
+    },
+  },
+  posthog: {
+    // Sunucu tarafı, isteğe bağlı olay/hata telemetrisi. Oturum kaydı ve tarayıcı betiği YOK.
+    get apiKey() { return str("POSTHOG_API_KEY"); },
+    get host() { return str("POSTHOG_HOST") ?? "https://eu.i.posthog.com"; },
+  },
   shopify: {
     get clientId() { return str("SHOPIFY_CLIENT_ID"); },
     get clientSecret() { return str("SHOPIFY_CLIENT_SECRET"); },

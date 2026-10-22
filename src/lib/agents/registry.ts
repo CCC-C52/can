@@ -17,6 +17,7 @@ export const TOOLS = {
   "calendar.write": "Yayın takvimine taslak giriş ekleme",
   "shopify.propose": "Shopify değişiklik önerisi hazırlama (canlı yazma yok)",
   "social.propose": "Yayın paketi hazırlama (canlı yayın yok)",
+  "research.read": "Sahibin doğruladığı web araştırması kaynaklarını okuma (üçüncü taraf içerik; web çağrısı yapamaz)",
 } as const;
 export type ToolId = keyof typeof TOOLS;
 
@@ -49,7 +50,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     requiredInputs: ["Kullanıcı talimatı", "Seçili marka", "Marka profili"],
     outputDescription: "Görev planı (hedefler + bağımlılıklı görev listesi) ve proje raporu",
     // media.read: hangi gerçek medyanın (ve analizlerinin) mevcut olduğunu bilerek plan yapmak için
-    tools: ["brand.read", "products.read", "media.read", "tasks.manage", "outputs.read", "costs.read"],
+    tools: ["brand.read", "products.read", "media.read", "tasks.manage", "outputs.read", "costs.read", "research.read"],
     acceptanceCriteria: [
       "Her görev mevcut bir uzmana atanmış olmalı",
       "Bağımlılıklar döngüsüz olmalı",
@@ -66,7 +67,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     outputDescription: "Kampanya stratejisi (StrategySchema)",
     // outputs.read: yöneticinin bağımlılık olarak verdiği diğer uzman çıktılarını (ör. analiz) okumak için.
     // media.read: kampanya fikirlerini arşivdeki gerçek görsel/video analizlerine dayandırmak için.
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "performance.read"],
+    tools: ["brand.read", "products.read", "media.read", "outputs.read", "performance.read", "research.read"],
     acceptanceCriteria: [
       "Varsayımlar 'assumption' olarak işaretlenmeli",
       "Doğrulanmamış ürün özelliği, satış rakamı, yorum veya bağış oranı içermemeli",
@@ -81,7 +82,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Ürün açıklamaları", "Koleksiyon önerileri", "Mağaza sayfaları", "Bundle önerileri", "Mevcut ve önerilen değer karşılaştırması"],
     requiredInputs: ["Ürün kayıtları (mevcut değerler)", "Doğrulanmış ürün özellikleri", "Gönderim/iade bilgileri"],
     outputDescription: "Shopify değişiklik önerisi (ShopifyProposalSchema)",
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "shopify.propose"],
+    tools: ["brand.read", "products.read", "media.read", "outputs.read", "shopify.propose", "research.read"],
     acceptanceCriteria: [
       "Her değişiklikte mevcut değer kayıttaki değerle aynı olmalı",
       "Fiyat değişikliği ayrıca işaretlenir ve ayrı onay gerektirir",
@@ -126,7 +127,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Platforma özel açıklamalar", "İçerik takvimi", "Yayın paketi", "Yayın durumu takibi"],
     requiredInputs: ["Strateji", "Tasarım briefleri / videolar", "Marka içerik dili"],
     outputDescription: "Sosyal medya yayın paketi (SocialPackageSchema)",
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "calendar.write", "social.propose"],
+    tools: ["brand.read", "products.read", "media.read", "outputs.read", "calendar.write", "social.propose", "research.read"],
     acceptanceCriteria: [
       "Instagram açıklaması 2.200 karakteri, en fazla 30 hashtag'i aşmamalı",
       "TikTok için otomatik yayın yoksa manuel paket hazırlanmalı",
@@ -141,7 +142,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Marka tutarlılığı", "Ürün bilgisi doğruluğu", "Uydurma iddia taraması", "Dil kontrolü", "Maliyet ve performans kontrolü"],
     requiredInputs: ["Kontrol edilecek çıktı sürümü", "Doğrulanmış marka ve ürün bilgileri"],
     outputDescription: "Kalite raporu (QaReviewSchema)",
-    tools: ["brand.read", "products.read", "outputs.read", "costs.read", "media.read"],
+    tools: ["brand.read", "products.read", "outputs.read", "costs.read", "media.read", "research.read"],
     acceptanceCriteria: ["Her kontrol pass/warn/fail ile raporlanmalı", "Başarısız kontrol gerekçesi açık olmalı"],
     producesExternalProposal: false,
   },

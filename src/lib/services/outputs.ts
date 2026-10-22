@@ -5,6 +5,7 @@ import { audit } from "@/lib/audit";
 import { contentHash } from "@/lib/security/crypto";
 import { OUTPUT_SCHEMAS, type SpecialistId } from "@/lib/agents/schemas";
 import { buildBrandContext } from "@/lib/agents/context";
+import { proposeLessonFromRejection } from "./brand-memory";
 import { referencedAssetIds, runRuleChecks } from "@/lib/agents/qa-rules";
 
 export type Output = {
@@ -183,8 +184,8 @@ export async function decide(
   opts: { note?: string; scopes?: string[] } = {},
 ) {
   return tx(async (c) => {
-    const v = await q1<OutputVersion & { kind: string; current_version: number; task_id: string | null; project_id: string | null; title: string }>(
-      `SELECT v.*, o.kind, o.current_version, o.task_id, o.project_id, o.title FROM output_versions v JOIN outputs o ON o.id = v.output_id
+    const v = await q1<OutputVersion & { kind: string; agent: string; current_version: number; task_id: string | null; project_id: string | null; title: string }>(
+      `SELECT v.*, o.kind, o.agent, o.current_version, o.task_id, o.project_id, o.title FROM output_versions v JOIN outputs o ON o.id = v.output_id
        WHERE v.id = $1 AND v.brand_id = $2 FOR UPDATE OF o`,
       [versionId, brandId],
       c,
@@ -212,6 +213,8 @@ export async function decide(
       [brandId, v.output_id, v.id, v.content_hash, decision, scopes, opts.note ?? null],
       c,
     );
+    // Ret notu, sahip onaylarsa kullanılacak bir ders önerisine dönüşür (otomatik etkinleşmez)
+    if (decision === "rejected") await proposeLessonFromRejection(brandId, { approvalId: a!.id, note: opts.note, agent: v.agent, outputTitle: v.title }, c);
     if (v.kind === "social_package") {
       await q(`UPDATE calendar_entries SET status = $3, updated_at = now() WHERE brand_id = $1 AND output_id = $2 AND status IN ('draft','awaiting_approval','approved')`,
         [brandId, v.output_id, decision === "approved" ? "approved" : "draft"], c);
