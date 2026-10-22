@@ -101,7 +101,8 @@ async function main() {
 
     await step("Marka Hafızası: kayıt ekle → etkin listede görünür", async () => {
       await page.goto(`${BASE}/hafiza`);
-      const title = `E2E yönergesi ${Date.now()}`;
+      // Benzersiz ek base36: 13 haneli zaman damgası ~%10 olasılıkla Luhn denetiminden geçer ve kart numarası sayılıp (doğru olarak) reddedilir
+      const title = `E2E yönergesi ${Date.now().toString(36)}`;
       await page.fill("#mem-title", title);
       await page.fill("#mem-body", "Ürün renklerini değiştirme; ekran yazıları kısa olsun.");
       await page.locator('form:has(#mem-title) button[type=submit]').click();
