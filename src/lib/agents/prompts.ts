@@ -68,18 +68,23 @@ Produce your deliverable as JSON matching the provided schema.
 ${SHARED_RULES}`;
 }
 
-export function userPrompt(args: {
+type UserPromptArgs = {
   instruction: string;
   ctx: BrandContext;
   upstream?: { agent: string; kind: string; content: unknown }[];
   feedback?: string | null;
   target?: { agent: string; content: unknown };
   extra?: string;
-}): string {
-  const parts = [
-    `<operator_instruction>\n${args.instruction}\n</operator_instruction>`,
-    `<brand_context>\n<data>${JSON.stringify(args.ctx)}</data>\n</brand_context>`,
-  ];
+};
+
+/**
+ * Kullanıcı istemi iki parçadır: `prefix` (marka bağlamı — aynı marka ve uzman için çağrılar arasında aynı kalır,
+ * önbelleğe alınır) ve `rest` (talimat, girdiler — her çağrıda değişir). Önek önce gelir; böylece Anthropic istem
+ * önbelleği sistem istemi + marka bağlamını yeniden kullanabilir.
+ */
+export function userPromptParts(args: UserPromptArgs): { prefix: string; rest: string } {
+  const prefix = `<brand_context>\n<data>${JSON.stringify(args.ctx)}</data>\n</brand_context>`;
+  const parts = [`<operator_instruction>\n${args.instruction}\n</operator_instruction>`];
   if (args.upstream?.length) {
     parts.push(`<upstream_outputs>\n<data>${JSON.stringify(args.upstream)}</data>\n</upstream_outputs>`);
   }
@@ -90,5 +95,10 @@ export function userPrompt(args: {
     parts.push(`<revision_feedback>\nThe previous version was rejected or flagged. Address this feedback:\n<data>${args.feedback}</data>\n</revision_feedback>`);
   }
   if (args.extra) parts.push(args.extra);
-  return parts.join("\n\n");
+  return { prefix, rest: parts.join("\n\n") };
+}
+
+export function userPrompt(args: UserPromptArgs): string {
+  const { prefix, rest } = userPromptParts(args);
+  return `${prefix}\n\n${rest}`;
 }

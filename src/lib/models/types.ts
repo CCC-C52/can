@@ -6,6 +6,8 @@ export type GenerateRequest<T> = {
   purpose: string;               // plan | work | review | report
   system: string;
   user: string;
+  /** İsteğe bağlı sabit önek (marka bağlamı). Gerçek modelde `user`dan önce, önbellek işaretiyle gönderilir. */
+  userPrefix?: string;
   schema: z.ZodType<T>;
   maxTokens: number;
   signal?: AbortSignal;
@@ -20,7 +22,7 @@ export type GenerateResult<T> = {
   generator: string;      // "demo" | "anthropic:<model>"
   isDemo: boolean;
   model: string;
-  usage: { input_tokens: number; output_tokens: number } | null;
+  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | null;
   /** Gerçekleşen maliyet. null = bilinmiyor. Demo = 0 (ücret yok). */
   actualCostUsd: number | null;
 };
@@ -32,7 +34,7 @@ export interface TextModelAdapter {
   /** Doluysa model kullanılamaz; nedeni burada yazar. */
   readonly unavailableReason?: string;
   /** Çağrıdan önce üst sınır maliyet tahmini; null = tahmin edilemiyor. */
-  estimateCostUsd(req: { system: string; user: string; maxTokens: number; imageCount?: number }): number | null;
+  estimateCostUsd(req: { system: string; user: string; userPrefix?: string; maxTokens: number; imageCount?: number }): number | null;
   generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>>;
 }
 

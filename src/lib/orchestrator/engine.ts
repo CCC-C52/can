@@ -7,7 +7,7 @@ import { ModelUnavailableError, PermanentError, TransientError, type GenerateReq
 import { buildBrandContext, type BrandContext } from "@/lib/agents/context";
 import { AGENTS, agentName, assertTool, isSpecialist, ToolPermissionError } from "@/lib/agents/registry";
 import { OUTPUT_KIND, OUTPUT_SCHEMAS, PlanSchema, QaReviewSchema, type AgentId, type Plan, type ProjectReport, type QaReview, type SpecialistId } from "@/lib/agents/schemas";
-import { systemPrompt, userPrompt } from "@/lib/agents/prompts";
+import { systemPrompt, userPromptParts } from "@/lib/agents/prompts";
 import { mergeReviews, referencedAssetIds, runRuleChecks } from "@/lib/agents/qa-rules";
 import { addVersion, attachAssetsToVersion, createOutput, getCurrentVersion, setVersionQa, type OutputVersion } from "@/lib/services/outputs";
 import { assertBudget, BudgetExceededError, costSummary, recordCost } from "@/lib/services/costs";
@@ -302,17 +302,18 @@ export async function updateProjectStatus(projectId: string) {
 
 // ---------------------------------------------------------------- Model çağrısı (sınır + bütçe + maliyet)
 
-async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, user: string, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]) {
+async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, prompt: { prefix: string; rest: string }, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]) {
   const { task, model, limits } = ctx;
   if (ctx.signal.aborted) throw ctx.signal.reason;
   if (model.unavailableReason) throw new ModelUnavailableError(model.unavailableReason);
   const inc = await q1(`UPDATE projects SET model_calls = model_calls + 1 WHERE id = $1 AND model_calls < $2 RETURNING model_calls`, [task.project_id, limits.maxModelCallsPerProject]);
   if (!inc) throw new ModelCallLimitError(`Proje başına ${limits.maxModelCallsPerProject} model çağrısı sınırına ulaşıldı.`);
   const system = systemPrompt(agent, purpose);
-  const estimate = model.estimateCostUsd({ system, user, maxTokens, imageCount: images?.length ?? 0 });
+  const { prefix: userPrefix, rest: user } = prompt;
+  const estimate = model.estimateCostUsd({ system, user, userPrefix, maxTokens, imageCount: images?.length ?? 0 });
   await assertBudget({ taskId: task.id, estimateUsd: estimate, service: model.service });
   await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: model.service, kind: "estimated", amountUsd: estimate, note: `${agent}:${purpose} üst sınır tahmini` });
-  const res = await model.generate({ agent, purpose, system, user, schema, maxTokens, signal: ctx.signal, demoInput, ...(images?.length ? { images } : {}) });
+  const res = await model.generate({ agent, purpose, system, user, userPrefix, schema, maxTokens, signal: ctx.signal, demoInput, ...(images?.length ? { images } : {}) });
   await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: model.service, kind: "actual", amountUsd: res.actualCostUsd, units: res.usage ?? {}, note: res.isDemo ? "DEMO — ücret yok" : `${agent}:${purpose}` });
   return res;
 }
@@ -381,7 +382,7 @@ async function runPlan(ctx: RunCtx, workerId: string) {
   assertTool("manager", "brand.read");
   assertTool("manager", "tasks.manage");
   const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "manager" });
-  const user = userPrompt({ instruction: task.instruction, ctx: brandCtx, extra: `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>` });
+  const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, extra: `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>` });
   const res = await callModel(ctx, "manager", "plan", PlanSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [] }, 8000);
   const { tasks, dropped } = sanitizePlan(res.data, limits.maxTasksPerProject - 1);
 
@@ -531,7 +532,7 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   if (upstream.length) assertTool(agent, "outputs.read");
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
   const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined].filter(Boolean).join("\n") || undefined;
-  const user = userPrompt({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
+  const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
   const res = await callModel(ctx, agent, "work", schema, user,
     { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [] },
     16000, video?.images);
@@ -566,7 +567,7 @@ async function runReview(ctx: RunCtx, workerId: string) {
   const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality", includeAssetIds: referencedAssetIds(task.agent, v.content) });
   const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo });
 
-  const user = userPrompt({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
+  const user = userPromptParts({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
   const res = await callModel(ctx, "quality", "review", QaReviewSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [], target: { agent: task.agent, content: v.content } }, 6000);
   const merged = mergeReviews(rule, res.data as QaReview, res.isDemo ? "demo" : "model");
   await assertOwned(task, workerId);
