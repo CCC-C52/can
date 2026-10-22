@@ -66,6 +66,9 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://aiops:aiops@127.0.0.1:5432/aiops_test
       TEST_S3_ENDPOINT: http://127.0.0.1:5055
+      # Yedekleme testi pg_dump çalıştırır. pg_dump, sunucudan eski sürümle döküm almayı reddeder; çalıştırıcının
+      # varsayılan pg_dump'ı 16'dır. Canlı imaj gibi (Dockerfile: postgresql-client-17) sunucu sürümüyle aynı istemci.
+      PG_DUMP_PATH: /usr/lib/postgresql/17/bin/pg_dump
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,10 +80,19 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - name: ffmpeg, yazı tipleri, S3 taklidi
+      - name: ffmpeg, yazı tipleri, PostgreSQL 17 istemcisi, S3 taklidi
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core
+          if ! apt-cache show postgresql-client-17 >/dev/null 2>&1; then
+            # Çalıştırıcıda tanımlı değilse PostgreSQL resmi apt deposu (Dockerfile ile aynı anahtar)
+            sudo install -d /etc/apt/keyrings
+            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo tee /etc/apt/keyrings/pgdg.asc >/dev/null
+            echo "deb [signed-by=/etc/apt/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+            sudo apt-get update -qq
+          fi
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core postgresql-client-17
+          "$PG_DUMP_PATH" --version | grep -q "(PostgreSQL) 17\." || { echo "pg_dump 17 bulunamadı: $("$PG_DUMP_PATH" --version 2>&1)"; exit 1; }
+          "$PG_DUMP_PATH" --version
           pip install --quiet "moto[server]==${MOTO_VERSION}"
           nohup moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
           for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:5055/ && break; sleep 1; done
