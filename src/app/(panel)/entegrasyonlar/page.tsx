@@ -59,7 +59,7 @@ export default async function Integrations({ searchParams }: { searchParams: SP 
       <section className="card mt-4">
         <h2 className="h2 mb-1">Değerlendirilen araçlar</h2>
         <p className="muted mb-3 text-xs">Durumlar sunucudaki gerçek yapılandırmadan hesaplanır. Yapılandırılmamış araç “Etkin” gösterilmez.</p>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Değerlendirilen araçlar tablosu">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-xs text-muted"><th className="py-1 pr-2">Araç</th><th className="pr-2">Durum</th><th className="pr-2">Kapsam</th><th>Karar</th></tr></thead>
             <tbody>

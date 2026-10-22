@@ -91,6 +91,10 @@ async function seed() {
   await addVersion({ brandId: B.id, outputId: outB.id, content: { summary: "B gizli strateji" }, createdBy: "user", generator: "user", isDemo: false });
   const outA = await createOutput({ brandId: A.id, projectId: null, taskId: null, agent: "marketing", kind: "strategy", title: "A çıktısı" });
   await addVersion({ brandId: A.id, outputId: outA.id, content: { summary: "A strateji" }, createdBy: "user", generator: "user", isDemo: false });
+  const { addMemory } = await import("@/lib/services/brand-memory");
+  const memB = await addMemory(B.id, { kind: "guideline", title: "B gizli hafıza", body: "B markasının özel yönergesi" });
+  const runB = (await q1<{ id: string }>(`INSERT INTO research_runs (brand_id, mode, query, provider, status) VALUES ($1,'search','B gizli sorgu','firecrawl','completed') RETURNING id`, [B.id]))!;
+  const srcB = (await q1<{ id: string }>(`INSERT INTO research_sources (run_id, brand_id, url, title) VALUES ($1,$2,'https://b-secret.example/x','B gizli kaynak') RETURNING id`, [runB.id, B.id]))!;
   const upB = (await initUpload(B.id, { filename: "b.mp4", size: 1024, clientKey: "b-key" })).session;
   const zipKey = `brands/${B.id}/exports/x.zip`;
   await s3.send(new PutObjectCommand({ Bucket: "aiops-httptest", Key: zipKey, Body: Buffer.from("PK\x03\x04") }));
@@ -101,7 +105,7 @@ async function seed() {
   ))!;
   const { closePool } = await import("@/lib/db/pool");
   await closePool();
-  return { A, B, mediaA, mediaB, projectB, taskB, outA, outB, upB, exportB };
+  return { A, B, mediaA, mediaB, projectB, taskB, outA, outB, upB, exportB, memB, srcB };
 }
 
 async function startServer(): Promise<ChildProcess> {
@@ -136,6 +140,12 @@ async function main() {
       const r = await fetch(`${BASE}/taslaklar/${s.outB.id}`, { redirect: "manual" });
       expect(r.status === 307 || r.status === 302, `durum ${r.status}`);
       expect((r.headers.get("location") ?? "").includes("/login"), "login'e gitmedi");
+    });
+    await check("oturumsuz: yeni bölümler (hafıza, araştırma, maliyet, stüdyolar, kampanyalar) giriş ister", async () => {
+      for (const u of ["/hafiza", "/arastirma", "/maliyet", "/studyo/video", "/studyo/gorsel", "/projeler"]) {
+        const r = await fetch(BASE + u, { redirect: "manual" });
+        expect((r.status === 307 || r.status === 302) && (r.headers.get("location") ?? "").includes("/login"), `${u} durum ${r.status}`);
+      }
     });
     for (const [name, url, method] of [
       ["medya dosyası", `/api/media/${s.mediaA.id}/file`, "GET"],
@@ -232,8 +242,46 @@ async function main() {
         expect(!(await page.content()).includes("B gizli strateji"), "B içeriği sızdı");
       });
     }
+    await check("A'nın Marka Hafızası ve Araştırma Merkezi'nde B kaydı görünmez", async () => {
+      for (const url of ["/hafiza", "/arastirma"]) {
+        await page.goto(BASE + url);
+        const html = await page.content();
+        for (const needle of ["B gizli hafıza", "B gizli sorgu", "B gizli kaynak", "b-secret.example", s.memB.id, s.srcB.id]) expect(!html.includes(needle), `${url} ${needle} içeriyor`);
+      }
+    });
+    await check("sunucu eylemi: A'dan B'nin hafıza kaydı ve araştırma kaynağı değiştirilemez", async () => {
+      await page.goto(`${BASE}/hafiza`);
+      const { q1 } = await import("@/lib/db/pool");
+      // Yeni bir A kaydı oluşturup formdaki kimliği B'ninkiyle değiştir
+      await page.fill("#mem-title", "A kaydı");
+      await page.fill("#mem-body", "A yönergesi");
+      await page.locator('form:has(#mem-title) button[type=submit]').click();
+      await page.waitForURL(/ok=/);
+      const swapped = await page.evaluate((id) => {
+        const input = document.querySelector<HTMLInputElement>('form input[name="status"][value="archived"]')?.form?.querySelector<HTMLInputElement>('input[name="id"]');
+        if (!input) return false;
+        input.value = id;
+        return true;
+      }, s.memB.id);
+      expect(swapped, "arşivle formu bulunamadı");
+      await page.locator('form:has(input[name="status"][value="archived"]) button').first().click();
+      await page.waitForLoadState("networkidle");
+      expect((await q1<{ status: string }>(`SELECT status FROM brand_memory WHERE id = $1`, [s.memB.id]))!.status === "active", "B'nin hafıza kaydı değişti");
+      expect(decodeURIComponent(page.url()).includes("bulunamadı"), `hata mesajı yok: ${page.url()}`);
+    });
+    await check("Araştırma Merkezi: anahtar yokken 'gerekli' durumu, düğme pasif, entegrasyonlarda 'Etkin' değil", async () => {
+      await page.goto(`${BASE}/arastirma`);
+      const html = await page.content();
+      expect(html.includes("FIRECRAWL_API_KEY") && html.includes("Kullanılamıyor"), "engelli durum gösterilmedi");
+      expect(await page.locator('form:has(textarea[name="query"]) button[type=submit]').isDisabled(), "Araştır düğmesi aktif");
+      await page.goto(`${BASE}/entegrasyonlar`);
+      for (const t of ["firecrawl", "posthog", "composio", "remotion", "omniroute"]) {
+        const st = await page.locator(`tr[data-tool="${t}"]`).getAttribute("data-state");
+        expect(st && st !== "active", `${t} durumu ${st}`);
+      }
+    });
     await check("A'nın listelerinde B kaydı görünmez", async () => {
-      for (const url of ["/taslaklar", "/medya", "/gorevler", "/projeler"]) {
+      for (const url of ["/taslaklar", "/medya", "/gorevler", "/projeler", "/studyo/video", "/studyo/gorsel"]) {
         await page.goto(BASE + url);
         const html = await page.content();
         expect(!html.includes(s.outB.id) && !html.includes(s.mediaB.id) && !html.includes(s.projectB.id), `${url} B kimliği içeriyor`);
@@ -284,7 +332,7 @@ async function main() {
         }
       };
       await walk(path.resolve(".next/static"));
-      const needles = [/sk-ant-[A-Za-z0-9]/, /AIza[0-9A-Za-z_-]{20}/, /S3_SECRET_ACCESS_KEY/, /SESSION_SECRET/, /ENCRYPTION_KEY/, /ADMIN_PASSWORD/, /AIOPS_ANTHROPIC_API_KEY/, /GEMINI_API_KEY/, /OPENAI_API_KEY/];
+      const needles = [/sk-ant-[A-Za-z0-9]/, /AIza[0-9A-Za-z_-]{20}/, /S3_SECRET_ACCESS_KEY/, /SESSION_SECRET/, /ENCRYPTION_KEY/, /ADMIN_PASSWORD/, /AIOPS_ANTHROPIC_API_KEY/, /GEMINI_API_KEY/, /OPENAI_API_KEY/, /FIRECRAWL_API_KEY/, /POSTHOG_API_KEY/, /phc_[A-Za-z0-9]{10}/];
       for (const f of files) {
         const txt = await fs.readFile(f, "utf8");
         for (const n of needles) expect(!n.test(txt), `${path.relative(".", f)} içinde ${n}`);

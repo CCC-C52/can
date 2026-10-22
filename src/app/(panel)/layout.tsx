@@ -69,7 +69,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
       )}
       <div className="mx-auto flex max-w-7xl gap-6 px-4 py-5">
         <aside className="hidden w-52 shrink-0 md:block">
-          <nav className="sticky top-20"><NavLinks /></nav>
+          <nav aria-label="Ana menü" className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto pb-4"><NavLinks /></nav>
         </aside>
         <main className="min-w-0 flex-1">
           {!brand ? (

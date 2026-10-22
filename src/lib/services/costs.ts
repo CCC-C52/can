@@ -3,6 +3,33 @@ import { getLimits } from "@/lib/settings";
 
 export class BudgetExceededError extends Error {}
 
+/** Ücretli sağlayıcılar (cost_entries.service adları) ve paneldeki adları. */
+export const COST_PROVIDERS = ["anthropic", "openai_images", "video_generation", "firecrawl"] as const;
+export const COST_PROVIDER_LABEL: Record<(typeof COST_PROVIDERS)[number], string> = {
+  anthropic: "Anthropic (metin modeli)",
+  openai_images: "OpenAI Images (AI görsel)",
+  video_generation: "Google Veo (AI video)",
+  firecrawl: "Firecrawl (web araştırması)",
+};
+
+/** Bu ayın sağlayıcı bazında gerçekleşen harcaması ve önbellek token toplamları. */
+export async function monthlyProviderSummary(db: Queryable = getPool()) {
+  return q<{ service: string; actual: number | null; unknown_count: number; entries: number; cache_read: number; cache_write: number; input: number }>(
+    `SELECT service,
+       SUM(amount_usd) AS actual,
+       COUNT(*) FILTER (WHERE amount_usd IS NULL)::int AS unknown_count,
+       COUNT(*)::int AS entries,
+       COALESCE(SUM((units->>'cache_read_input_tokens')::bigint), 0)::bigint AS cache_read,
+       COALESCE(SUM((units->>'cache_creation_input_tokens')::bigint), 0)::bigint AS cache_write,
+       COALESCE(SUM((units->>'input_tokens')::bigint), 0)::bigint AS input
+     FROM cost_entries
+     WHERE kind = 'actual' AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+     GROUP BY service ORDER BY service`,
+    [],
+    db,
+  );
+}
+
 /** Bugünkü (UTC) AI üretim harcaması: gerçekleşen + gerçekleşeni henüz olmayan tahminler. */
 export async function todaysAiSpend(db: Queryable = getPool()) {
   const row = await q1<{ actual: number | null; unknown_count: number }>(

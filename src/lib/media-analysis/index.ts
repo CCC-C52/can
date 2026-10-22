@@ -140,9 +140,12 @@ export function compactAnalysis(a: MediaAnalysis | null) {
   const r = a.result;
   const local = r.local ?? {};
   const v = r.vision ?? null;
+  // Görsel model analizi yoksa içerik anlama ENGELLİDİR: yalnızca piksel/sahne ölçümleri vardır.
+  const visual_understanding = v ? ("vision_model" as const) : ("blocked_no_vision_model" as const);
   if (a.kind === "image") {
     return {
       level: a.level,
+      visual_understanding,
       orientation: local.orientation,
       aspect: local.aspect,
       dominant_colors: (local.dominant_colors ?? []).slice(0, 4).map((c: any) => c.name),
@@ -152,6 +155,7 @@ export function compactAnalysis(a: MediaAnalysis | null) {
   }
   return {
     level: a.level,
+    visual_understanding,
     duration_s: local.probe?.duration,
     orientation: local.probe?.orientation,
     resolution: local.probe ? `${local.probe.display_width}x${local.probe.display_height}` : undefined,

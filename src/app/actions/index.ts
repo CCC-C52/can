@@ -27,6 +27,7 @@ import { testAnthropic } from "@/lib/models/test";
 import { audit } from "@/lib/audit";
 import { rateLimit } from "@/lib/security/rate-limit";
 import { runResearch, setSourceVerification } from "@/lib/services/research";
+import { COST_PROVIDERS } from "@/lib/services/costs";
 import { addMemory, setMemoryStatus, type MemoryKind, type MemoryStatus } from "@/lib/services/brand-memory";
 import type { AgentId } from "@/lib/agents/schemas";
 
@@ -541,5 +542,85 @@ export async function verifySourceAction(fd: FormData) {
     const s = await setSourceVerification(brand.id, str(fd, "id"), v as "verified" | "rejected" | "unverified");
     await audit({ brandId: brand.id, actor: "user", action: `research.source.${v}`, message: `Araştırma kaynağı ${v === "verified" ? "ajan bağlamına alındı" : v === "rejected" ? "reddedildi" : "doğrulanmamışa döndü"}: ${s.url}` });
     return v === "verified" ? "Kaynak doğrulandı; ajanlar bunu üçüncü taraf bağlamı olarak görebilir." : "Kaynak güncellendi.";
+  });
+}
+
+// ---------------------------------------------------------------- Maliyet Yönetimi
+
+export async function saveCostControlsAction(fd: FormData) {
+  await act("/maliyet", async () => {
+    const cur = await getLimits();
+    const providerMonthlyUsd: Record<string, number> = {};
+    for (const p of COST_PROVIDERS) {
+      const raw = str(fd, `monthly_${p}`).trim();
+      if (raw === "") continue;
+      const v = Number(raw.replace(",", "."));
+      if (!Number.isFinite(v) || v < 0 || v > 100_000) throw new Error(`${p}: geçersiz aylık sınır.`);
+      providerMonthlyUsd[p] = v;
+    }
+    const credits = Number(str(fd, "researchMonthlyCredits"));
+    if (!Number.isInteger(credits) || credits < 0 || credits > 100_000) throw new Error("Aylık araştırma kredisi 0–100000 arası tam sayı olmalı.");
+    const next: Limits = { ...cur, providerMonthlyUsd, webResearch: str(fd, "webResearch") === "on", researchMonthlyCredits: credits };
+    await setSetting("limits", next);
+    await audit({ actor: "user", action: "settings.cost_controls", message: "Maliyet kontrolleri güncellendi", data: { providerMonthlyUsd, webResearch: next.webResearch, researchMonthlyCredits: credits } });
+    return "Maliyet kontrolleri kaydedildi.";
+  });
+}
+
+// ---------------------------------------------------------------- Görsel / Video Stüdyosu
+// Stüdyolar yeni bir yol açmaz: seçimleri Ana Yönetici'ye net bir talimat olarak gönderir. Planlama, kalite kontrolü,
+// render doğrulaması ve insan onayı aynen uygulanır. Dosya kimlikleri yalnızca seçili markada aranır.
+
+async function brandAssets(brandId: string, ids: string[], kind: "video" | "photo") {
+  const out = [];
+  for (const id of [...new Set(ids)].slice(0, 12)) {
+    const m = await getMedia(brandId, id);
+    if (!m) throw new Error("Seçilen dosya bu markanın arşivinde değil.");
+    if (kind === "video" ? m.kind !== "video" : !["photo", "logo"].includes(m.kind)) throw new Error(`${m.filename}: ${kind === "video" ? "video" : "fotoğraf"} değil.`);
+    out.push(m);
+  }
+  return out;
+}
+
+export async function videoStudioAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/studyo/video", async () => {
+    const rl = rateLimit(`studio:${brand.id}`, 10, 60_000);
+    if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const videos = await brandAssets(brand.id, fd.getAll("assetIds").map(String), "video");
+    if (!videos.length) throw new Error("En az bir video seçin.");
+    const min = Number(str(fd, "minSeconds")), max = Number(str(fd, "maxSeconds"));
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 3 || max > 90 || min > max) throw new Error("Süre 3–90 sn arasında olmalı ve en az ≤ en çok.");
+    const platform = str(fd, "platform") === "tiktok" ? "TikTok (9:16)" : "Instagram Reels (9:16)";
+    const transition = str(fd, "transition") === "fade" ? "yumuşak geçiş" : "kesme";
+    const goal = str(fd, "goal").trim().slice(0, 1500);
+    const instruction = [
+      `Video Stüdyosu talebi: ${videos.map((v) => v.filename).join(", ")} dosyalarından ${min}-${max} saniyelik ${platform} videosu hazırla.`,
+      `Yalnızca bu gerçek çekimleri ve doğrulanmış sahne analizini kullan; geçiş türü: ${transition}. Ürünün rengini ve görünümünü değiştirme.`,
+      goal ? `Amaç ve notlar: ${goal}` : "",
+      "Ekran yazıları ve altyazı marka içerik dilinde olsun. Yayınlama; onay için hazırla.",
+    ].filter(Boolean).join("\n");
+    const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
+    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : "Video talebi Ana Yönetici'ye gönderildi.", to: `/projeler/${r.project.id}` };
+  });
+}
+
+export async function imageStudioAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/studyo/gorsel", async () => {
+    const rl = rateLimit(`studio:${brand.id}`, 10, 60_000);
+    if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const photos = await brandAssets(brand.id, fd.getAll("assetIds").map(String), "photo");
+    const format = ({ post: "Instagram gönderisi (1:1)", portrait: "Instagram dikey gönderi (4:5)", story: "Story (9:16)" } as Record<string, string>)[str(fd, "format")] ?? "Instagram gönderisi (1:1)";
+    const count = Math.max(1, Math.min(6, Number(str(fd, "count")) || 1));
+    const goal = str(fd, "goal").trim().slice(0, 1500);
+    const instruction = [
+      `Görsel Stüdyosu talebi: ${count} adet ${format} görseli hazırla.`,
+      photos.length ? `Gerçek ürün fotoğrafları olarak yalnızca şunları kullan: ${photos.map((p) => p.filename).join(", ")}. Ürünün rengini ve görünümünü değiştirme.` : "Arşivdeki gerçek ürün fotoğraflarından uygun olanları seç.",
+      goal ? `Amaç ve notlar: ${goal}` : "",
+      "Metinler marka içerik dilinde olsun. Yayınlama; onay için hazırla.",
+    ].filter(Boolean).join("\n");
+    const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
+    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : "Görsel talebi Ana Yönetici'ye gönderildi.", to: `/projeler/${r.project.id}` };
   });
 }

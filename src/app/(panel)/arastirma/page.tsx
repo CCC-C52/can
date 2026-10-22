@@ -80,6 +80,7 @@ export default async function ResearchPage({ searchParams }: { searchParams: SP 
           <section className="card">
             <h2 className="h2 mb-2">Geçmiş</h2>
             {runs.length === 0 ? <Empty>Henüz araştırma yapılmadı.</Empty> : (
+              <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Araştırma geçmişi tablosu">
               <table className="w-full text-sm">
                 <thead><tr className="text-left text-xs text-muted"><th className="py-1">Tarih</th><th>Tür</th><th>Sorgu</th><th>Durum</th><th>Kredi</th></tr></thead>
                 <tbody>
@@ -94,6 +95,7 @@ export default async function ResearchPage({ searchParams }: { searchParams: SP 
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </section>
         </div>

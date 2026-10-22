@@ -17,7 +17,8 @@
     "acceptance": "tsx --tsconfig tsconfig.json scripts/acceptance.ts",
     "test:live": "tsx --tsconfig tsconfig.json tests/live/live.ts",
     "db:restore": "tsx --tsconfig tsconfig.json scripts/restore.ts",
-    "db:check": "tsx --tsconfig tsconfig.json scripts/db-check.ts"
+    "db:check": "tsx --tsconfig tsconfig.json scripts/db-check.ts",
+    "test:e2e": "tsx --tsconfig tsconfig.json tests/e2e/studio-flow.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

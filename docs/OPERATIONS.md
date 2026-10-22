@@ -35,6 +35,8 @@ Tam liste ve açıklamalar `.env.example` içindedir. Gizli değerler yalnızca 
 | AI görsel | `OPENAI_API_KEY`, `OPENAI_IMAGE_MODEL` (vars. `gpt-image-1`), `OPENAI_IMAGE_COST_USD` | isteğe bağlı |
 | AI video | `GEMINI_API_KEY`, `VEO_MODEL` (vars. `veo-3.1-fast-generate-preview`), `VEO_COST_PER_SECOND_USD` | isteğe bağlı |
 | Mağaza/sosyal | `SHOPIFY_CLIENT_ID/SECRET`, `SHOPIFY_API_VERSION`, `INSTAGRAM_APP_ID/SECRET`, `INSTAGRAM_GRAPH_VERSION`, `PUBLIC_BASE_URL` | isteğe bağlı |
+| Web araştırması | `FIRECRAWL_API_KEY`, `FIRECRAWL_CREDIT_USD` | isteğe bağlı, ücretli; ayrıca Maliyet Yönetimi'nde açılmalı |
+| Telemetri | `POSTHOG_API_KEY`, `POSTHOG_HOST` (vars. `https://eu.i.posthog.com`) | isteğe bağlı; boşsa hiçbir veri gönderilmez |
 | Yedekleme | `BACKUP_S3_BUCKET`, `BACKUP_HOUR_UTC`, `BACKUP_RETENTION_DAYS` | canlıda önerilir |
 | İşletim | `FFMPEG_PATH`, `FFPROBE_PATH`, `FFMPEG_THREADS` (vars. 2), `WORKER_POLL_MS`, `LOG_LEVEL` (`debug`) | — |
 
@@ -55,6 +57,8 @@ Birim fiyat girilmeyen ücretli servis, bütçe sınırı etkinken **çalıştı
 
 - Geçişler: `migrations/*.sql`, `npm run db:migrate`. `schema_migrations` tablosu ve danışma kilidiyle tek seferde uygulanır; işleyici de başlarken eksikleri uygular.
 - `002_media_jobs_integrity.sql` yalnızca **ekleme** yapar (tablo, sütun, indeks, `NOT VALID` kısıtlar, tetikleyiciler) ve türetilmiş medya için köken/yöntem/proje sütunlarını doldurur. Mevcut satır silinmez. Temiz ve 001 fikstürlü veritabanında test edilir (`tests/migrations.test.ts`).
+- `003_brand_memory_research.sql` yalnızca **ekleme** yapar: `brand_memory`, `research_runs`, `research_sources` tabloları (araştırma kaynağı bileşik yabancı anahtarla yalnızca kendi markasının çalıştırmasına bağlanır). Mevcut tablo ve veri değişmez.
+- **Dikkat:** Render'da `preDeployCommand: npm run db:migrate` ve işleyicinin başlangıcı eksik geçişleri **otomatik uygular**. Yani 003 içeren bir commit'in Manual Deploy'u, canlı veritabanına 003'ü uygular. Web servisi geçiş uygulanmadan çalışırsa Marka Hafızası, Araştırma Merkezi ve Maliyet Yönetimi sayfaları hata verir.
 - Bütünlük denetimi (salt okunur): `npm run db:check` — markalar arası ilişki, sahipsiz kayıt, takılı kiralama vb.
 - Onay kayıtları değiştirilemez (tetikleyici): yalnızca `revoked_at` bir kez doldurulabilir.
 
@@ -102,9 +106,10 @@ Hata sınıfları ve önerilen eylem her görevde gösterilir: geçici, süre a�
 
 | Komut | Ne yapar | Gereken |
 |---|---|---|
-| `npm test` | 85 test: izinler, geçişler, analiz, yükleme, derleme, sağlayıcı sahteleri, işler/kurtarma, kabul akışı (24 adım, fikstür), güvenlik | PostgreSQL `aiops_test`; S3 testleri için `TEST_S3_ENDPOINT` (ör. moto/MinIO) |
-| `npm run test:http` | Üretim derlemesine karşı 34 HTTP güvenlik kontrolü | `npm run build`, PostgreSQL, `TEST_S3_ENDPOINT`, Chromium |
+| `npm test` | Birim + entegrasyon (izinler, geçişler, analiz, yükleme, derleme, video hattı + gerçek MP4, sağlayıcı sahteleri, istem önbelleği, marka hafızası, araştırma, telemetri, kabul akışı, güvenlik) | PostgreSQL `aiops_test`; S3 testleri için `TEST_S3_ENDPOINT` (ör. moto/MinIO) |
+| `npm run test:http` | Üretim derlemesine karşı HTTP güvenlik kontrolleri (oturum, markalar arası erişim, sunucu eylemi kurcalama, istemci paketinde gizli değer) | `npm run build`, PostgreSQL, `TEST_S3_ENDPOINT`, Chromium |
 | `npm run test:a11y` | axe-core WCAG 2.1 A/AA taraması, masaüstü + telefon, yatay taşma | Çalışan panel (`A11Y_BASE`), Chromium |
+| `npm run test:e2e` | Tarayıcıdan uçtan uca: menü, Marka Hafızası, Araştırma durumu, Video Stüdyosu → işleyici → ffmpeg MP4 → indirme + ffprobe → onay | Çalışan panel (`E2E_BASE`), **yerel** veritabanı, ffmpeg; işleyiciyi betik başlatır. Model anahtarı yoksa DEMO üretici |
 | `npm run acceptance -- --brand <slug>` | 24 adımlık kabul akışı gerçek marka verisinde | Yalnızca yetkili **kopya** veritabanı; `ACCEPTANCE_CONFIRM_COPY=yes`; `APP_MODE≠production` |
 | `npm run test:live` | Sağlayıcı başına tek ücretli canlı çağrı | Aşağıya bakın |
 | `npm run typecheck` | TypeScript | — |
@@ -152,6 +157,8 @@ Geçişler geri alınmaz (aşağı geçiş yok); 002 ekleme yaptığı için ger
 - Tahmini ve gerçekleşen tutarlar ayrı kaydedilir; bilinmeyen tutar "bilinmiyor" gösterilir, 0 sayılmaz. Çıktı sayfasında servis başına maliyet tablosu vardır.
 - AI görsel/video üretimi ayrıca sahip iznine bağlıdır (varsayılan kapalı) ve proje başına video saniyesi sınırlıdır.
 - Sonucu belirsiz ücretli gönderim otomatik tekrarlanmaz; sahip "Yeniden gönder" demeden yeni ücret oluşmaz.
+- **Maliyet Yönetimi** (`/maliyet`): sağlayıcı başına aylık (UTC takvim ayı) USD sınırı (`anthropic`, `openai_images`, `video_generation`, `firecrawl`); aşılacaksa çağrı yapılmaz. Web araştırması izni ve aylık kredi sınırı da buradadır.
+- Anthropic istem önbelleği: sistem istemi + marka bağlamı önbellekten okunduğunda giriş maliyeti düşer; `cost_entries.units` içinde `cache_read_input_tokens` / `cache_creation_input_tokens` kaydedilir ve Maliyet Yönetimi'nde isabet oranı gösterilir.
 - Gerçekleşen tutarlar sağlayıcı faturasıyla doğrulanmaz (sağlayıcının bildirdiği kullanım × fiyat tablosu veya girilen birim fiyat).
 
 ## 14. Marka ekleme
