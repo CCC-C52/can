@@ -4,15 +4,24 @@ import { getPool } from "./pool";
 import { config } from "@/lib/config";
 import { classifySql, loadPolicy, sha256 } from "./migration-safety";
 
+/** Sahibin canlıya ilk uygulama için onayladığı geçişler (Render'da aiops-web ortam değişkeni, virgülle ayrılmış dosya adları). */
+export function authorizedMigrationsFromEnv(value = process.env.AIOPS_AUTHORIZED_MIGRATIONS): string[] {
+  return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 /**
  * Üretimde geçiş uygulanmadan önce politika denetimi (dağıtım iş akışından bağımsız ikinci savunma hattı):
- * kayıtlı geçişin içeriği değişmişse veya kayıtsız geçiş "additive" değilse uygulama başlamaz; mevcut sürüm canlı kalır.
+ * kayıtlı geçişin içeriği değişmişse, sahip onayı gerektiren geçiş onaylanmamışsa veya kayıtsız geçiş "additive"
+ * değilse uygulama başlamaz; mevcut sürüm canlı kalır. Render panelinden yapılan elle dağıtımlar da bu denetimden geçer.
  */
-export function assertMigrationAllowed(dir: string, file: string, sql: string) {
+export function assertMigrationAllowed(dir: string, file: string, sql: string, authorized: string[] = authorizedMigrationsFromEnv()) {
   const policy = loadPolicy(dir);
   const entry = policy.migrations[file];
   if (entry) {
     if (entry.sha256 !== sha256(sql)) throw new Error(`Geçiş politikası: ${file} içeriği onaylı kayıtla eşleşmiyor; uygulanmadı.`);
+    if (entry.firstProductionRollout === "requires_owner_authorization" && !authorized.includes(file)) {
+      throw new Error(`Geçiş politikası: ${file} canlıya ilk uygulama için sahip onayı gerektirir (AIOPS_AUTHORIZED_MIGRATIONS); uygulanmadı.`);
+    }
     return;
   }
   const c = classifySql(sql);
@@ -22,7 +31,7 @@ export function assertMigrationAllowed(dir: string, file: string, sql: string) {
 }
 
 /** migrations/ klasöründeki .sql dosyalarını sırayla ve bir kez uygular. */
-export async function runMigrations(dir = path.resolve(process.cwd(), "migrations"), opts: { until?: string; pool?: import("pg").Pool; enforcePolicy?: boolean } = {}): Promise<string[]> {
+export async function runMigrations(dir = path.resolve(process.cwd(), "migrations"), opts: { until?: string; pool?: import("pg").Pool; enforcePolicy?: boolean; authorizedMigrations?: string[] } = {}): Promise<string[]> {
   const enforce = opts.enforcePolicy ?? config.appMode === "production";
   const pool = opts.pool ?? getPool();
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
@@ -32,7 +41,7 @@ export async function runMigrations(dir = path.resolve(process.cwd(), "migration
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = await fs.readFile(path.join(dir, file), "utf8");
-    if (enforce) assertMigrationAllowed(dir, file, sql);
+    if (enforce) assertMigrationAllowed(dir, file, sql, opts.authorizedMigrations ?? authorizedMigrationsFromEnv());
     const client = await pool.connect();
     try {
       await client.query("BEGIN");

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { checkPolicy, classifySql, evaluatePending, sha256 } from "@/lib/db/migration-safety";
-import { runMigrations } from "@/lib/db/migrate";
+import { authorizedMigrationsFromEnv, runMigrations } from "@/lib/db/migrate";
 
 const REPO = path.resolve(process.cwd(), "migrations");
 
@@ -139,7 +139,7 @@ describe("Üretimde geçiş uygulama koruması (runMigrations)", () => {
   it("yıkıcı kayıtsız geçiş uygulanmaz; önceki geçişler uygulanmış kalır", async () => {
     const dir = tempMigrations((d) => fs.writeFileSync(path.join(d, "004_drop.sql"), "DROP TABLE brand_memory;\n"));
     const pool = await fresh();
-    await expect(runMigrations(dir, { pool, enforcePolicy: true })).rejects.toThrow(/004_drop\.sql 'destructive'/);
+    await expect(runMigrations(dir, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).rejects.toThrow(/004_drop\.sql 'destructive'/);
     const applied = (await pool.query(`SELECT name FROM schema_migrations ORDER BY name`)).rows.map((r) => r.name);
     expect(applied).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
     expect((await pool.query(`SELECT to_regclass('brand_memory') AS t`)).rows[0].t).toBe("brand_memory");
@@ -150,15 +150,32 @@ describe("Üretimde geçiş uygulama koruması (runMigrations)", () => {
     const dir = tempMigrations((d) => fs.appendFileSync(path.join(d, "003_brand_memory_research.sql"), "\nCREATE TABLE IF NOT EXISTS extra (id int);\n"));
     expect(policyOf(dir).migrations["003_brand_memory_research.sql"].sha256).not.toBe(sha256(fs.readFileSync(path.join(dir, "003_brand_memory_research.sql"))));
     const pool = await fresh();
-    await expect(runMigrations(dir, { pool, enforcePolicy: true })).rejects.toThrow(/003_brand_memory_research\.sql içeriği onaylı kayıtla eşleşmiyor/);
+    await expect(runMigrations(dir, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).rejects.toThrow(/003_brand_memory_research\.sql içeriği onaylı kayıtla eşleşmiyor/);
     expect((await pool.query(`SELECT to_regclass('extra') AS t`)).rows[0].t).toBeNull();
     await pool.end();
   });
 
+  it("sahip onayı gerektiren geçiş (003) onaysız uygulanmaz; elle Render dağıtımı da canlıya 003 uygulayamaz", async () => {
+    const pool = await fresh();
+    await expect(runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: [] })).rejects.toThrow(/003_brand_memory_research\.sql canlıya ilk uygulama için sahip onayı gerektirir/);
+    const applied = (await pool.query(`SELECT name FROM schema_migrations ORDER BY name`)).rows.map((r) => r.name);
+    expect(applied).toEqual(["001_init.sql", "002_media_jobs_integrity.sql"]);
+    expect((await pool.query(`SELECT to_regclass('brand_memory') AS t`)).rows[0].t).toBeNull();
+    // Başka bir geçişin onayı 003'ü açmaz
+    await expect(runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: ["004_other.sql"] })).rejects.toThrow(/sahip onayı gerektirir/);
+    await pool.end();
+  });
+
+  it("onay ortam değişkeninden okunur (virgülle, boşluklar yok sayılır)", () => {
+    expect(authorizedMigrationsFromEnv(undefined)).toEqual([]);
+    expect(authorizedMigrationsFromEnv(" 003_brand_memory_research.sql , ,004_x.sql")).toEqual(["003_brand_memory_research.sql", "004_x.sql"]);
+  });
+
   it("onaylı geçişler koruma açıkken uygulanır ve ikinci çalıştırma bir şey yapmaz (idempotent)", async () => {
     const pool = await fresh();
-    expect(await runMigrations(REPO, { pool, enforcePolicy: true })).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
-    expect(await runMigrations(REPO, { pool, enforcePolicy: true })).toEqual([]);
+    expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
+    // 003 uygulandıktan sonra onay kaldırılsa da sonraki dağıtımlar takılmaz
+    expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: [] })).toEqual([]);
     await pool.end();
   });
 });

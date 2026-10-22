@@ -137,7 +137,7 @@ export async function runRelease(input: ReleaseInput, deps: Deps): Promise<Relea
       block("prod_status", "Durum ucu belirteci reddetti: GitHub'daki RELEASE_STATUS_TOKEN ile Render'daki değer aynı olmalı.");
       applied = [];
     } else if (st.kind === "disabled") {
-      // Canlıdaki sürüm durum ucundan önceki bir sürüm (ilk etkinleştirme) veya belirteç Render'da tanımlı değil.
+      // Canlıdaki sürüm durum ucundan önceki bir sürüm (ilk etkinleştirme; uç yok veya oturum isteyen 401) ya da belirteç Render'da tanımlı değil.
       if (!input.legacyAppliedMigrations) block("prod_status", "Canlı sürümde durum ucu yok (ilk etkinleştirme veya RELEASE_STATUS_TOKEN Render'da tanımlı değil). İlk etkinleştirmede canlıda uygulanmış geçişleri legacy_applied_migrations girdisiyle bildirin.");
       applied = input.legacyAppliedMigrations!;
       report.migrations.source = "legacy_input";
@@ -153,7 +153,7 @@ export async function runRelease(input: ReleaseInput, deps: Deps): Promise<Relea
     report.migrations.pending = dec.pending;
     report.migrations.authorizedUsed = dec.authorizedUsed;
     if (!dec.allowed) block("migrations", dec.blocked.map((b) => b.reason).join(" | "));
-    check("migrations", "pass", dec.pending.length ? `Bekleyen geçiş: ${dec.pending.join(", ")} (politika uygun${dec.authorizedUsed.length ? `; sahip onayı: ${dec.authorizedUsed.join(", ")}` : ""}).` : "Bekleyen geçiş yok.");
+    check("migrations", "pass", dec.pending.length ? `Bekleyen geçiş: ${dec.pending.join(", ")} (politika uygun${dec.authorizedUsed.length ? `; sahip onayı: ${dec.authorizedUsed.join(", ")}. Uygulamanın kendi koruması için Render'da aiops-web ortamında AIOPS_AUTHORIZED_MIGRATIONS bu adları içermeli; yoksa ön dağıtım başarısız olur ve önceki sürüm canlı kalır` : ""}).` : "Bekleyen geçiş yok.");
 
     // 7 — kurtarma noktası
     report.backup.required = dec.pending.length > 0;

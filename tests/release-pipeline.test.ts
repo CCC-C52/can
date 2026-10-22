@@ -26,7 +26,7 @@ const S: {
   failNext: Record<string, number>;
   recovery: { recoveryStatus: string; startsAt?: string } | null;
   createdButFail: boolean;
-  app: { legacy: boolean; healthy: boolean; webCommit: string; applied: string[]; workerCommit: string | null; workerStuck: boolean; webCommitStuck: boolean; backupAt: string | null; releases: { releaseId: string; sha: string; outcome: string }[]; events: any[] };
+  app: { legacy: false | "session401" | "missing404"; healthy: boolean; webCommit: string; applied: string[]; workerCommit: string | null; workerStuck: boolean; webCommitStuck: boolean; backupAt: string | null; releases: { releaseId: string; sha: string; outcome: string }[]; events: any[] };
 } = {} as any;
 
 function reset() {
@@ -43,7 +43,8 @@ function reset() {
     failNext: {},
     recovery: { recoveryStatus: "AVAILABLE", startsAt: "2026-10-15T00:00:00Z" },
     createdButFail: false,
-    app: { legacy: true, healthy: true, webCommit: OLD, applied: ["001_init.sql", "002_media_jobs_integrity.sql"], workerCommit: OLD, workerStuck: false, webCommitStuck: false, backupAt: null, releases: [], events: [] },
+    // Canlıdaki 9cb052e: /api/release/* yok; oturumsuz /api/* isteğine ara katman 401 {"error":"Oturum gerekli"} döner
+    app: { legacy: "session401", healthy: true, webCommit: OLD, applied: ["001_init.sql", "002_media_jobs_integrity.sql"], workerCommit: OLD, workerStuck: false, webCommitStuck: false, backupAt: null, releases: [], events: [] },
   });
 }
 
@@ -101,7 +102,8 @@ beforeAll(async () => {
   app = http.createServer(async (req, res) => {
     const body = await readBody(req);
     if (req.url === "/api/health") return S.app.healthy ? json(res, 200, { ok: true }) : json(res, 503, { ok: false });
-    if (S.app.legacy) return json(res, 404, undefined);
+    if (S.app.legacy === "session401") return json(res, 401, { error: "Oturum gerekli" });
+    if (S.app.legacy === "missing404") return json(res, 404, undefined);
     if (req.headers.authorization !== `Bearer ${TOKEN}`) return json(res, 401, { error: "unauthorized" });
     if (req.url === "/api/release/status") {
       const all = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"];
@@ -185,6 +187,28 @@ describe("Sürüm hattı — ilk etkinleştirme (canlıda durum ucu yok, 003 bek
   it("durum ucu yok ve uygulanmış geçiş girdisi verilmemişse engellenir", async () => {
     const r = await run({ legacyAppliedMigrations: null });
     expect(r).toMatchObject({ outcome: "blocked", failedStep: "prod_status" });
+    expect(r.error).toMatch(/legacy_applied_migrations/);
+  });
+
+  it("durum ucu 404 dönen eski sürümde de ilk etkinleştirme yapılır", async () => {
+    S.app.legacy = "missing404";
+    const r = await run();
+    expect(r.outcome).toBe("succeeded");
+    expect(r.migrations.source).toBe("legacy_input");
+  });
+
+  it("yeni sürümde belirteç reddedilirse (gövde 'unauthorized') engellenir; eski sürüm sayılmaz", async () => {
+    S.app.legacy = false;
+    const r = await runRelease(input(), {
+      render: new RenderApi({ apiKey: API_KEY, baseUrl: renderUrl, sleep: async () => {} }),
+      app: new AppApi({ baseUrl: appUrl, token: "wrong-token-wrong-token-wrong-token-xx" }),
+      sleep: async (ms) => { clock += ms; },
+      now: () => Date.UTC(2026, 9, 22) + clock,
+      log: () => {},
+    });
+    expect(r).toMatchObject({ outcome: "blocked", failedStep: "prod_status" });
+    expect(r.error).toMatch(/belirteci reddetti/);
+    expect(posts()).toEqual([]);
   });
 });
 

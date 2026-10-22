@@ -86,6 +86,8 @@ geliştirme commit'i ──push──▶ GitHub
 ### Render
 
 - aiops-web → Environment: `RELEASE_STATUS_TOKEN` (GitHub'dakiyle aynı).
+- İlk sürümden önce, yalnızca o sürüm için: aiops-web → Environment: `AIOPS_AUTHORIZED_MIGRATIONS` = `003_brand_memory_research.sql` (bölüm 3).
+- **Ortam değişkeni eklerken veya değiştirirken yalnızca "Save only" seçin.** "Save, rebuild, and deploy" ve "Save and deploy" seçenekleri hemen bir Render dağıtımı başlatır. Böyle bir dağıtım hattın kapılarından (testler, kurtarma noktası, sıralı web → işleyici) geçmez ve izlenen dalın son commit'ini canlıya alır.
 - aiops-web ve aiops-worker → Settings → Auto-Deploy: **Off** (değişmez). Blueprint → Auto Sync: **Off** (değişmez).
 - Servislerin bağlı dalı: `claude/amazing-goodall-qkxupd` (mevcut durum).
 
@@ -99,7 +101,10 @@ geliştirme commit'i ──push──▶ GitHub
   - **review**: UPDATE/INSERT, DO bloğu, fonksiyon/tetikleyici, NOT NULL ekleme, mevcut satırları doğrulayan kısıt, CONCURRENTLY, tanınmayan ifade → insan incelemesi ve politika kaydı gerekir;
   - **additive**: `CREATE TABLE/INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS` (NOT NULL ise varsayılanlı), `NOT VALID` kısıt, `COMMENT` → politika uygunsa **otomatik**.
 - `003_brand_memory_research.sql`: sınıflandırma **additive**. Yalnızca üç yeni tablo ve indeksler ekler (`brand_memory`, `research_runs`, `research_sources`); mevcut tablo veya veri değişmez. `IF NOT EXISTS` ile tekrar çalıştırılabilir, tek işlem (transaction) içinde uygulanır. Eski sürüm (9cb052e) bu tabloları bilmez ve etkilenmez, yani dağıtım sırasında eski ve yeni kod aynı şemayla çalışabilir.
-- **003'ün ilk canlı uygulaması** politikada `requires_owner_authorization` olarak işaretli. İş akışı ancak `authorize_migrations=003_brand_memory_research.sql` girdisi **ve** doğrulanmış kurtarma noktası varsa ilerler.
+- **003'ün ilk canlı uygulaması** politikada `requires_owner_authorization` olarak işaretli. İki ayrı onay gerekir:
+  - **Hat:** `authorize_migrations=003_brand_memory_research.sql` girdisi **ve** doğrulanmış kurtarma noktası olmadan dağıtım başlamaz.
+  - **Uygulama:** üretimde geçiş uygulayan kod (`preDeployCommand` ve işleyici başlangıcı) 003'ü yalnızca Render'da `AIOPS_AUTHORIZED_MIGRATIONS` bu adı içeriyorsa uygular. Değişken yoksa ön dağıtım başarısız olur, 003 uygulanmaz ve Render önceki sürümü canlı tutar. Bu koruma Render panelinden yapılan elle dağıtımlarda (Manual Deploy, "Save, rebuild, and deploy", Blueprint Manual Sync) da geçerlidir.
+  - 003 uygulandıktan sonra değişken silinebilir; uygulanmış geçiş tekrar denetlenmez.
 - Sonraki **additive** geçişler: sahip onayı gerekmeden, yalnızca kurtarma noktası kanıtıyla otomatik ilerler. Diğer sınıflar engellenir.
 - Geri alma sınırı: geçişler geri alınmaz (aşağı geçiş yok). Ekleme yapan geçişlerde uygulama geri alınsa bile şema yerinde kalır ve eski kod çalışır. Yıkıcı değişiklik otomatik hatta hiç yer almaz.
 
@@ -152,7 +157,8 @@ geliştirme commit'i ──push──▶ GitHub
 
 ## 7. İlk etkinleştirme (bir kerelik, sahip onayıyla)
 
-1. Bölüm 2'deki GitHub ortamı, gizli değerler ve değişkenler (`AUTO_DEPLOY_ENABLED` boş), Render'da `RELEASE_STATUS_TOKEN`.
+1. Bölüm 2'deki GitHub ortamı, gizli değerler ve değişkenler (`AUTO_DEPLOY_ENABLED` boş). Render'da aiops-web için `RELEASE_STATUS_TOKEN` ve `AIOPS_AUTHORIZED_MIGRATIONS=003_brand_memory_research.sql`, ikisi de **"Save only"** ile.
+   - Canlıdaki eski sürüm (9cb052e) durum ucunu bilmez; oturumsuz isteğe 401 `{"error":"Oturum gerekli"}` döner. Hat bunu "durum ucu yok" olarak tanır ve uygulanmış geçişleri `legacy_applied_migrations` girdisinden alır. Belirteç uyuşmazlığı (yeni sürümde 401 `{"error":"unauthorized"}`) ise hattı durdurur.
 2. Yetkili push: `bcba507` + Premium commit'leri + bu hat (force yok). Release iş akışı çalışır; testler koşar; karar adımı "otomatik dağıtım etkin değil" der ve **dağıtmaz**.
 3. **Kuru çalıştırma:** Actions → Release → Run workflow:
    - `dry_run=true`
@@ -166,6 +172,7 @@ geliştirme commit'i ──push──▶ GitHub
    - işleyiciyi dağıtır ve doğrular;
    - raporlar.
 5. Başarıdan sonra `AUTO_DEPLOY_ENABLED=true`. Hat bundan sonra **canlıda doğrulanmış** sayılır.
+6. (İsteğe bağlı) Render'da `AIOPS_AUTHORIZED_MIGRATIONS` değişkenini **"Save only"** ile silin.
 
 ## 8. Sonraki sürümler (tam otomatik)
 

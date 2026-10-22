@@ -31,6 +31,8 @@ const secrets = {
 };
 const env: Record<string, string> = {
   APP_MODE: "production",
+  // Boş test veritabanı: sahip onayı gerektiren geçiş bu yalıtılmış ortam için onaylı (canlıda Render ortam değişkeni)
+  AIOPS_AUTHORIZED_MIGRATIONS: "003_brand_memory_research.sql",
   DATABASE_URL: DB,
   STORAGE_DRIVER: "s3",
   S3_BUCKET: "aiops-httptest",

@@ -160,8 +160,12 @@ export class AppApi {
     try {
       const r = await this.fetchImpl(`${this.baseUrl}/api/release/status`, { headers: { authorization: `Bearer ${this.o.token}` }, signal: AbortSignal.timeout(this.o.timeoutMs ?? 15_000) });
       if (r.status === 404) return { kind: "disabled" };
-      if (r.status === 401) return { kind: "unauthorized" };
       const data = (await r.json().catch(() => null)) as AppStatus | null;
+      if (r.status === 401) {
+        // Durum ucu belirteci reddettiğinde gövde {"error":"unauthorized"} döner. Başka bir 401 (ör. durum ucundan önceki
+        // sürümlerde oturum isteyen ara katman: {"error":"Oturum gerekli"}) ucun canlıda olmadığı anlamına gelir.
+        return (data as { error?: unknown } | null)?.error === "unauthorized" ? { kind: "unauthorized" } : { kind: "disabled" };
+      }
       if (!data) return { kind: "error", detail: `durum ${r.status}` };
       return { kind: "ok", data };
     } catch (err) {
