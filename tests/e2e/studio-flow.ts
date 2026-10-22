@@ -58,7 +58,10 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms: n
 
 async function main() {
   expect(await fetch(`${BASE}/api/health`).then((r) => r.ok, () => false), `${BASE} çalışmıyor`);
-  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" }).catch(() => chromium.launch());
+  // E2E_BROWSER_CHANNEL=chrome: H.264 çözücüsü olan Google Chrome (GitHub Ubuntu çalıştırıcılarında kurulu) — oynatma gerçekten test edilir
+  const browser = process.env.E2E_BROWSER_CHANNEL
+    ? await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL })
+    : await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" }).catch(() => chromium.launch());
   const ctx = await browser.newContext({ acceptDownloads: true });
   const page: Page = await ctx.newPage();
   const worker = startWorker();

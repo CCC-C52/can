@@ -129,7 +129,9 @@ Koşullar: sahibin açık ücretli test izni, yalıtılmış veritabanı (adı `
 
 ## 11. Dağıtım
 
-Ayrıntılı ilk kurulum: `DEPLOY.md`. Güncellemeler için kontrol listesi:
+**Otomatik sürüm hattı:** canlıya alma GitHub Actions "Release" iş akışıyla yapılır — mimari, gerekli gizli değerler, geçiş/yedek kapıları, ilk etkinleştirme ve elle kurtarma: [`RELEASE.md`](RELEASE.md). Hat etkinleştirilene kadar (veya istisnai durumda) aşağıdaki elle süreç geçerlidir.
+
+Ayrıntılı ilk kurulum: `DEPLOY.md`. Elle güncelleme kontrol listesi:
 
 1. **Otomatik dağıtım kapalı mı?** Render → `aiops-web` ve `aiops-worker` → Settings → Auto-Deploy = **Off**; Blueprint → Auto Sync = **Off**. (`render.yaml`'da `autoDeployTrigger: off` vardır; Render'ın bilinen bir sorunu nedeniyle panel ayarı da kapatılmalıdır.)
 2. Yerelde: `npm run typecheck && npm test && npm run build && npm run test:http`.

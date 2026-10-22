@@ -27,6 +27,7 @@ const secrets = {
   SESSION_SECRET: crypto.randomBytes(32).toString("hex"),
   ENCRYPTION_KEY: crypto.randomBytes(32).toString("hex"),
   S3_SECRET_ACCESS_KEY: crypto.randomBytes(20).toString("hex"),
+  RELEASE_STATUS_TOKEN: crypto.randomBytes(32).toString("base64url"),
 };
 const env: Record<string, string> = {
   APP_MODE: "production",
@@ -38,6 +39,7 @@ const env: Record<string, string> = {
   S3_ACCESS_KEY_ID: "test",
   S3_FORCE_PATH_STYLE: "true",
   PORT: String(PORT),
+  AIOPS_RELEASE_COMMIT: "c0ffee0000000000000000000000000000000001",
   LOG_SILENT: "1",
   ...secrets,
 };
@@ -163,6 +165,25 @@ async function main() {
       const forged = `${Math.floor(Date.now() / 1000) + 3600}.abcd.${"A".repeat(43)}`;
       const r = await fetch(`${BASE}/api/diagnostics`, { headers: { cookie: `__Host-aiops_session=${forged}` } });
       expect(r.status === 401, `durum ${r.status}`);
+    });
+    await check("sürüm durum ucu: belirteçsiz/yanlış belirteç 401; doğru belirteçle commit, geçişler ve işleyici; gizli değer yok", async () => {
+      const url = `${BASE}/api/release/status`;
+      expect((await fetch(url)).status === 401, "belirteçsiz");
+      expect((await fetch(url, { headers: { authorization: "Bearer wrong-token-wrong-token-wrong-token-xx" } })).status === 401, "yanlış belirteç");
+      const r = await fetch(url, { headers: { authorization: `Bearer ${secrets.RELEASE_STATUS_TOKEN}` } });
+      expect(r.status === 200, `durum ${r.status}`);
+      const txt = await r.text();
+      const body = JSON.parse(txt);
+      expect(body.commit === env.AIOPS_RELEASE_COMMIT, `commit ${body.commit}`);
+      expect(body.migrations.applied.includes("003_brand_memory_research.sql") && body.migrations.pending.length === 0, JSON.stringify(body.migrations));
+      for (const [k, v] of Object.entries(secrets)) expect(!txt.includes(v), `${k} yanıtta`);
+      expect(!txt.includes("postgres://"), "bağlantı adresi yanıtta");
+      const ev = await fetch(`${BASE}/api/release/events`, { method: "POST", headers: { authorization: `Bearer ${secrets.RELEASE_STATUS_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ releaseId: "http-test-1", sha: "c".repeat(40), phase: "started" }) });
+      expect(ev.status === 200, `olay ${ev.status}`);
+      const noAuth = await fetch(`${BASE}/api/release/events`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      expect(noAuth.status === 401, `belirteçsiz olay ${noAuth.status}`);
+      const bad = await fetch(`${BASE}/api/release/events`, { method: "POST", headers: { authorization: `Bearer ${secrets.RELEASE_STATUS_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ releaseId: "x", sha: "zz", phase: "started" }) });
+      expect(bad.status === 400, `geçersiz olay ${bad.status}`);
     });
     await check("sağlık kontrolü yalnızca {ok} döndürür", async () => {
       const r = await fetch(`${BASE}/api/health`);
@@ -332,7 +353,7 @@ async function main() {
         }
       };
       await walk(path.resolve(".next/static"));
-      const needles = [/sk-ant-[A-Za-z0-9]/, /AIza[0-9A-Za-z_-]{20}/, /S3_SECRET_ACCESS_KEY/, /SESSION_SECRET/, /ENCRYPTION_KEY/, /ADMIN_PASSWORD/, /AIOPS_ANTHROPIC_API_KEY/, /GEMINI_API_KEY/, /OPENAI_API_KEY/, /FIRECRAWL_API_KEY/, /POSTHOG_API_KEY/, /phc_[A-Za-z0-9]{10}/];
+      const needles = [/sk-ant-[A-Za-z0-9]/, /AIza[0-9A-Za-z_-]{20}/, /S3_SECRET_ACCESS_KEY/, /SESSION_SECRET/, /ENCRYPTION_KEY/, /ADMIN_PASSWORD/, /AIOPS_ANTHROPIC_API_KEY/, /GEMINI_API_KEY/, /OPENAI_API_KEY/, /FIRECRAWL_API_KEY/, /POSTHOG_API_KEY/, /phc_[A-Za-z0-9]{10}/, /RELEASE_STATUS_TOKEN/, /RENDER_API_KEY/];
       for (const f of files) {
         const txt = await fs.readFile(f, "utf8");
         for (const n of needles) expect(!n.test(txt), `${path.relative(".", f)} içinde ${n}`);

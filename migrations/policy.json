@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "migrations": {
+    "001_init.sql": {
+      "sha256": "cd886b3c02d65ac309f618716447e6357ff6dcc30833f0c3b3f86dddc57246b0",
+      "class": "baseline",
+      "note": "İlk şema. Canlıda uygulanmış."
+    },
+    "002_media_jobs_integrity.sql": {
+      "sha256": "597ea3fc5ee64a44a0fcea8f07a028e4658868ac95cf0919ecf87cd44ba79e7c",
+      "class": "reviewed",
+      "note": "UPDATE, DO bloğu ve tetikleyici içerir; insan incelemesinden geçti. Canlıda uygulanmış (sahip /tanilama'da 2/2 doğruladı)."
+    },
+    "003_brand_memory_research.sql": {
+      "sha256": "60a2698edc4e7a0be5fb01dd7d58e57b0bbc3c68cccb48ac5e0c8bcce5cf2bc6",
+      "class": "additive",
+      "firstProductionRollout": "requires_owner_authorization",
+      "note": "Yalnızca yeni tablolar ve indeksler (brand_memory, research_runs, research_sources). Mevcut tablo/veri değişmez. İlk canlı uygulaması sahibin bir kerelik onayı ve doğrulanmış kurtarma noktasıyla."
+    }
+  }
+}

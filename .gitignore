@@ -9,3 +9,4 @@ data/
 coverage/
 test-results/
 scripts/.tmp/
+release-report.json

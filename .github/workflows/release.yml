@@ -1,0 +1,144 @@
+# Üretim sürümü: CI → karar → Render web dağıtımı → web doğrulaması → Render işleyici dağıtımı → işleyici doğrulaması → rapor.
+#
+# Güvenlik:
+#  - Yalnızca üretim dalı (vars.PRODUCTION_BRANCH) dağıtılır. Diğer dallar ve PR'lar bu iş akışını tetiklemez.
+#  - Üretim gizli değerleri yalnızca "production" ortamındadır ve yalnızca deploy işi görür. Ortamın dağıtım dalı
+#    kuralı GitHub ayarlarında üretim dalıyla sınırlandırılmalıdır.
+#  - Push ile otomatik dağıtım yalnızca vars.AUTO_DEPLOY_ENABLED == 'true' iken yapılır (ilk etkinleştirmeden sonra).
+#    İlk etkinleştirme ve bilinçli tekrarlar Actions → Release → "Run workflow" ile yapılır.
+#  - Aynı anda tek üretim dağıtımı (concurrency); çalışan dağıtım iptal edilmez.
+#  - Testler geçmezse dağıtım başlamaz. Veritabanı hiçbir zaman otomatik geri yüklenmez.
+name: Release
+
+on:
+  push:
+    branches:
+      - claude/amazing-goodall-qkxupd
+  workflow_dispatch:
+    inputs:
+      authorize_migrations:
+        description: "Canlıya ilk kez uygulanacak, sahip onayı gerektiren geçişler (virgülle; ör. 003_brand_memory_research.sql)"
+        type: string
+        default: ""
+      legacy_applied_migrations:
+        description: "Yalnızca ilk etkinleştirme: canlıda uygulanmış geçişler (ör. 001_init.sql,002_media_jobs_integrity.sql)"
+        type: string
+        default: ""
+      allow_redeploy_of_failed:
+        description: "Daha önce başarısız olmuş bu commit'i bilinçli olarak tekrar dağıt"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Kuru çalıştırma: tüm kapıları denetle, dağıtım yapma"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/_checks.yml
+
+  gate:
+    name: Dağıtım kararı
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.decide.outputs.deploy }}
+    steps:
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          PRODUCTION_BRANCH: ${{ vars.PRODUCTION_BRANCH }}
+          AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
+        run: |
+          deploy=false
+          if [ -z "$PRODUCTION_BRANCH" ]; then
+            reason="PRODUCTION_BRANCH depo değişkeni tanımlı değil (Settings → Secrets and variables → Actions → Variables)."
+          elif [ "$REF_NAME" != "$PRODUCTION_BRANCH" ]; then
+            reason="Bu dal ($REF_NAME) üretim dalı değil ($PRODUCTION_BRANCH)."
+          elif [ "$EVENT" = "push" ] && [ "$AUTO_DEPLOY_ENABLED" != "true" ]; then
+            reason="Otomatik dağıtım henüz etkin değil (AUTO_DEPLOY_ENABLED != true). Testler geçti; ilk etkinleştirme Actions → Release → Run workflow ile yapılır."
+          else
+            deploy=true
+            reason="Testler geçti; $EVENT ile üretim dağıtımı başlatılıyor."
+          fi
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+          { echo "## Dağıtım kararı: $([ "$deploy" = true ] && echo 'DAĞIT' || echo 'DAĞITMA')"; echo; echo "$reason"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "$reason"
+
+  deploy:
+    name: Render dağıtımı (web → işleyici) ve doğrulama
+    needs: [checks, gate]
+    if: needs.gate.outputs.deploy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Bağımlılıklar (yalnızca çalışma zamanı, betik çalıştırmadan)
+        run: npm ci --omit=dev --ignore-scripts
+      - name: Sürüm orkestrasyonu
+        env:
+          CI_RESULT: ${{ needs.checks.result }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+          PRODUCTION_BRANCH: ${{ vars.PRODUCTION_BRANCH }}
+          AUTO_ROLLBACK: ${{ vars.AUTO_ROLLBACK }}
+          AUTHORIZE_MIGRATIONS: ${{ inputs.authorize_migrations }}
+          LEGACY_APPLIED_MIGRATIONS: ${{ inputs.legacy_applied_migrations }}
+          ALLOW_REDEPLOY_OF_FAILED: ${{ inputs.allow_redeploy_of_failed }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_WEB_SERVICE_ID: ${{ secrets.RENDER_WEB_SERVICE_ID }}
+          RENDER_WORKER_SERVICE_ID: ${{ secrets.RENDER_WORKER_SERVICE_ID }}
+          RENDER_POSTGRES_ID: ${{ secrets.RENDER_POSTGRES_ID }}
+          PROD_BASE_URL: ${{ secrets.PROD_BASE_URL }}
+          RELEASE_STATUS_TOKEN: ${{ secrets.RELEASE_STATUS_TOKEN }}
+        run: npx tsx --tsconfig tsconfig.json scripts/release/deploy.ts
+      - name: Sürüm raporu
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-report.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  alert:
+    name: Başarısız sürüm bildirimi
+    needs: deploy
+    if: always() && needs.deploy.result == 'failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Sorun kaydı aç
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="Üretim sürümü başarısız oldu veya engellendi.
+
+          - Commit: ${SHA}
+          - Çalıştırma: ${RUN_URL}
+          - Ayrıntı: çalıştırma özetindeki adım tablosu ve release-report.json.
+
+          Render başarısız dağıtımda önceki canlı sürümü korur. Veritabanı otomatik geri yüklenmez.
+          Kurtarma: docs/RELEASE.md → 'Elle kurtarma'."
+          gh issue create --title "Sürüm başarısız: ${SHA:0:7}" --body "$body"

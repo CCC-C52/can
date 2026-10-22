@@ -1,0 +1,176 @@
+# Ortak doğrulama işleri. Hem CI (PR / geliştirme dalları) hem Release (üretim dalı) bu iş akışını çağırır.
+# Hiçbir gizli değer kullanmaz; üretim kimlik bilgilerine erişimi yoktur.
+name: Checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  MOTO_VERSION: "5.2.4"
+
+jobs:
+  static:
+    name: Statik denetimler (tip, geçiş politikası, gizli değer taraması, iş akışı sözdizimi)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Geçiş güvenlik politikası
+        run: npm run migrations:check
+      - name: Gizli değer taraması (gitleaks, tüm geçmiş)
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          mkdir -p /tmp/gitleaks && tar -xzf /tmp/gitleaks.tgz -C /tmp/gitleaks gitleaks
+          /tmp/gitleaks/gitleaks git --redact --no-banner --exit-code 1 .
+      - name: İş akışı sözdizimi (actionlint)
+        run: |
+          curl -sSfL -o /tmp/actionlint.tgz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          mkdir -p /tmp/actionlint && tar -xzf /tmp/actionlint.tgz -C /tmp/actionlint actionlint
+          /tmp/actionlint/actionlint -color
+
+  unit:
+    name: Birim ve entegrasyon testleri (PostgreSQL 17, S3 taklidi, ffmpeg)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: aiops
+          POSTGRES_PASSWORD: aiops
+          POSTGRES_DB: aiops
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aiops"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgres://aiops:aiops@127.0.0.1:5432/aiops_test
+      TEST_S3_ENDPOINT: http://127.0.0.1:5055
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: ffmpeg, yazı tipleri, S3 taklidi
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core
+          pip install --quiet "moto[server]==${MOTO_VERSION}"
+          nohup moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:5055/ && break; sleep 1; done
+      - name: Test veritabanı
+        run: docker exec "${{ job.services.postgres.id }}" psql -U aiops -d aiops -c "CREATE DATABASE aiops_test"
+      - run: npm ci
+      - name: vitest
+        run: npm test
+
+  browser:
+    name: Üretim derlemesi, HTTP güvenlik, erişilebilirlik ve uçtan uca tarayıcı testleri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: aiops
+          POSTGRES_PASSWORD: aiops
+          POSTGRES_DB: aiops
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aiops"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      TEST_S3_ENDPOINT: http://127.0.0.1:5055
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: ffmpeg, yazı tipleri, S3 taklidi
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core
+          pip install --quiet "moto[server]==${MOTO_VERSION}"
+          nohup moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:5055/ && break; sleep 1; done
+      - run: npm ci
+      - name: Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Üretim derlemesi (next build)
+        run: npm run build
+      - name: HTTP güvenlik testleri
+        run: npm run test:http
+      - name: Uçtan uca ortamı (örnek marka, gerçek ffmpeg videoları)
+        env:
+          DATABASE_URL: postgres://aiops:aiops@127.0.0.1:5432/aiops_e2e
+          APP_MODE: local
+          LOCAL_STORAGE_DIR: /tmp/aiops-e2e-storage
+        run: |
+          docker exec "${{ job.services.postgres.id }}" psql -U aiops -d aiops -c "CREATE DATABASE aiops_e2e"
+          npm run db:seed-demo
+          nohup npx next start -H 127.0.0.1 -p 3000 > /tmp/next-e2e.log 2>&1 &
+          for _ in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:3000/api/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/api/health
+      - name: Erişilebilirlik (axe, masaüstü + telefon)
+        env:
+          A11Y_BASE: http://127.0.0.1:3000
+        run: npm run test:a11y
+      - name: Uçtan uca akış (Video Stüdyosu → işleyici → MP4 → onay; H.264 oynatma Google Chrome ile)
+        env:
+          E2E_BASE: http://127.0.0.1:3000
+          E2E_BROWSER_CHANNEL: chrome
+          DATABASE_URL: postgres://aiops:aiops@127.0.0.1:5432/aiops_e2e
+          APP_MODE: local
+          LOCAL_STORAGE_DIR: /tmp/aiops-e2e-storage
+        run: npm run test:e2e
+      - name: Sunucu günlüğü (hata durumunda)
+        if: failure()
+        run: tail -n 200 /tmp/next-e2e.log || true
+
+  docker:
+    name: Docker imajı (Render ile aynı Dockerfile) + imaj içinde medya duman testi
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: docker build (yayınlanmaz)
+        run: docker build --pull -t aiops-ci:${{ github.sha }} .
+      - name: İmaj içeriği (tests/ yok, derleme var, geçiş politikası var)
+        run: |
+          docker run --rm --entrypoint sh "aiops-ci:${{ github.sha }}" -c 'test ! -d tests && test -f .next/BUILD_ID && test -f migrations/policy.json && ffmpeg -version | head -1 && node --version'
+      - name: İmajdaki ffmpeg ile gerçek MP4 kurgusu
+        run: docker run --rm "aiops-ci:${{ github.sha }}" npx tsx --tsconfig tsconfig.json scripts/release/smoke-media.ts

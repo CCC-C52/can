@@ -1,6 +1,7 @@
 import { q, q1, tx, getPool, type Queryable } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { capture } from "@/lib/telemetry";
+import { releaseCommit } from "@/lib/release";
 import { log } from "@/lib/log";
 import { getLimits, getSetting, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
@@ -77,7 +78,8 @@ export class Engine {
     await q(
       `INSERT INTO worker_heartbeats (worker_id, started_at, last_seen, info) VALUES ($1, now(), now(), $2)
        ON CONFLICT (worker_id) DO UPDATE SET last_seen = now(), info = EXCLUDED.info`,
-      [this.workerId, JSON.stringify({ active: this.inflight.size, pid: process.pid })],
+      // commit: dağıtım hattı işleyicinin yeni sürümle çalıştığını buradan doğrular
+      [this.workerId, JSON.stringify({ active: this.inflight.size, pid: process.pid, commit: releaseCommit() })],
     );
   }
 
