@@ -1,4 +1,5 @@
 import { redact } from "@/lib/security/crypto";
+import { capture } from "@/lib/telemetry";
 
 // Yapılandırılmış günlük: her satır tek bir JSON nesnesi (Render günlük ekranında aranabilir).
 // Gizli değerler yazılmadan önce maskelenir; müşteri içerikleri (metin, dosya) günlüğe yazılmaz.
@@ -26,6 +27,8 @@ export function log(level: LogLevel, event: string, fields: LogFields = {}) {
   const line = JSON.stringify({ ts: new Date().toISOString(), level, event, ...(clean(fields) as object) });
   if (level === "error" || level === "warn") console.error(line);
   else console.log(line);
+  // İsteğe bağlı telemetri: yalnızca hatalar (PostHog yapılandırılmışsa; izinli alanlarla)
+  if (level === "error") capture(event, fields, { error: fields.error ?? new Error(event) });
 }
 
 /** İstek kimliği: barındırıcının verdiği x-request-id (biçimi geçerliyse) ya da yeni bir kimlik. */

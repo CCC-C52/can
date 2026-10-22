@@ -1,5 +1,6 @@
 import { q, q1, tx, getPool, type Queryable } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
+import { capture } from "@/lib/telemetry";
 import { log } from "@/lib/log";
 import { getLimits, getSetting, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
@@ -178,6 +179,8 @@ export class Engine {
         taskId: task.id, projectId: task.project_id, brandId: task.brand_id, agent: task.agent, kind: task.kind, phase: task.phase,
         attempt: task.attempts, outcome, durationMs: Date.now() - startedAt, workerId: this.workerId, error: errMsg ?? undefined,
       });
+      // Telemetri (yapılandırılmışsa): hata metni ve içerik gönderilmez, yalnızca sınıf bilgisi
+      if (outcome === "failed" || outcome === "budget_blocked") capture("task_failed", { agent: task.agent, kind: task.kind, attempt: task.attempts, status: outcome });
     }
   }
 }
