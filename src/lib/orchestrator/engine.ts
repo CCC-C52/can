@@ -19,7 +19,8 @@ import { analysisFrames, compactAnalysis, ensureAnalysis, type MediaAnalysis } f
 import type { MediaAsset } from "@/lib/services/media";
 import { getStorage } from "@/lib/storage";
 import { textModelMode } from "@/lib/models";
-import type { Task } from "./projects";
+import { createPlanTasks, type Task } from "./projects";
+import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation } from "./conversation";
 
 const LEASE_MS = 60_000;
 
@@ -387,38 +388,37 @@ async function runPlan(ctx: RunCtx, workerId: string) {
   assertTool("manager", "brand.read");
   assertTool("manager", "tasks.manage");
   const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "manager" });
-  const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, extra: `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>` });
+  // Konuşmanın devamı: önceki mesajlar, onay bekleyen öneri ve kayıt sayımı (yönetici bilinen bilgiyi tekrar sormasın)
+  const [conversation, pending] = await Promise.all([recentConversation(task.brand_id, task.project_id), pendingProposal(task.brand_id)]);
+  const catalog = catalogCheck(brandCtx);
+  const extra = [
+    `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>`,
+    `<catalog_check>\n<data>${JSON.stringify(catalog)}</data>\n</catalog_check>`,
+    conversation.length ? `<conversation>\n<data>${JSON.stringify(conversation)}</data>\n</conversation>` : "",
+    pending && pending.projectId !== task.project_id
+      ? `<pending_proposal>\n<data>${JSON.stringify({ title: pending.title, instruction: pending.instruction, reply: pending.reply, goals: pending.goals, tasks: pending.tasks })}</data>\n</pending_proposal>`
+      : "",
+  ].filter(Boolean).join("\n\n");
+  const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, extra });
   const res = await callModel(ctx, "manager", "plan", PlanSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [] }, 8000);
   const { tasks, dropped } = sanitizePlan(res.data, limits.maxTasksPerProject - 1);
+  // Sahip planı önce görmek istediyse görevler öneri olarak saklanır; "onaylıyorum" gibi kısa bir onayla başlar.
+  const awaiting = res.data.awaiting_approval === true && tasks.length > 0;
+  // Ürün kaydı varken "katalogda ürün yok" denmez; böyle bir soru düşürülür, yanıt düzeltilir.
+  const catalogNote = contradictsCatalog(res.data.reply, catalog.product_count)
+    ? `\nNot: Katalogda ${catalog.product_count} ürün kaydı var (${catalog.product_titles.slice(0, 5).join(", ")}).`
+    : "";
 
   await owned(task, workerId, async (c) => {
-    const ids = new Map<string, string>();
-    for (const t of tasks) {
-      const row = await q1<{ id: string }>(
-        `INSERT INTO tasks (brand_id, project_id, key, agent, kind, title, instruction, status, requires_approval, max_attempts)
-         VALUES ($1,$2,$3,$4,'work',$5,$6,'planned',$7,$8) RETURNING id`,
-        [task.brand_id, task.project_id, t.key, t.agent, t.title, t.instruction, AGENTS[t.agent].producesExternalProposal, limits.maxAttempts],
-        c,
-      );
-      ids.set(t.key, row!.id);
-      for (const d of t.depends_on) await q(`INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1,$2)`, [row!.id, ids.get(d)], c);
-    }
-    if (tasks.length) {
-      const rep = await q1<{ id: string }>(
-        `INSERT INTO tasks (brand_id, project_id, key, agent, kind, title, instruction, status, dep_mode, max_attempts)
-         VALUES ($1,$2,'report','manager','report','Sonuçları raporla','Proje sonuçlarını özetle','planned','settled',$3) RETURNING id`,
-        [task.brand_id, task.project_id, limits.maxAttempts],
-        c,
-      );
-      for (const id of ids.values()) await q(`INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1,$2)`, [rep!.id, id], c);
-    }
+    if (!awaiting) await createPlanTasks(c, { brandId: task.brand_id, projectId: task.project_id, tasks, maxAttempts: limits.maxAttempts });
 
-    const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "plan", title: "Görev planı" }, c);
-    await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo }, c);
+    const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "plan", title: awaiting ? "Plan önerisi (onay bekliyor)" : "Görev planı" }, c);
+    await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, awaiting_approval: awaiting, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo }, c);
     const lines = tasks.map((t, i) => `${i + 1}. ${agentName(t.agent)} — ${t.title}${t.depends_on.length ? ` (önce: ${t.depends_on.join(", ")})` : ""}`);
-    const questions = (res.data.questions_for_owner ?? []).filter((x) => x.trim()).slice(0, 10);
+    const questions = (res.data.questions_for_owner ?? []).filter((x) => x.trim() && !contradictsCatalog(x, catalog.product_count)).slice(0, 10);
+    if (awaiting) questions.push("Bu planı onaylıyor musunuz? Başlatmak için “onaylıyorum” yazmanız yeterli.");
     await q(`UPDATE projects SET questions = $2 WHERE id = $1`, [task.project_id, JSON.stringify(questions)], c);
-    const msg = [res.data.reply, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\nGörevler:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
+    const msg = [res.data.reply + catalogNote, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\n${awaiting ? "Önerilen görevler (onayınızı bekliyor)" : "Görevler"}:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
     await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, msg.trim(), JSON.stringify({ isDemo: res.isDemo, generator: res.generator })], c);
     await finish(task, workerId, { status: "completed", outputId: out.id, model: res.model, service: ctx.model.service }, c);
   });

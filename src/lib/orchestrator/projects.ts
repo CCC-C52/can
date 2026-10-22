@@ -3,6 +3,8 @@ import { q, q1, tx, type Queryable, getPool } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { getLimits, setSetting } from "@/lib/settings";
 import type { TaskStatus } from "@/lib/labels";
+import { AGENTS } from "@/lib/agents/registry";
+import { isShortConfirmation, pendingProposal, type PlanTask } from "./conversation";
 
 export type Project = {
   id: string;
@@ -57,9 +59,36 @@ export type Task = {
 
 export class InputError extends Error {}
 
+/** Plan görevlerini (bağımlılıklarıyla) ve rapor görevini oluşturur. Yönetici planı ve onaylanan öneri aynı yolu kullanır. */
+export async function createPlanTasks(c: Queryable, args: { brandId: string; projectId: string; tasks: PlanTask[]; maxAttempts: number }) {
+  const ids = new Map<string, string>();
+  for (const t of args.tasks) {
+    const row = await q1<{ id: string }>(
+      `INSERT INTO tasks (brand_id, project_id, key, agent, kind, title, instruction, status, requires_approval, max_attempts)
+       VALUES ($1,$2,$3,$4,'work',$5,$6,'planned',$7,$8) RETURNING id`,
+      [args.brandId, args.projectId, t.key, t.agent, t.title, t.instruction, AGENTS[t.agent].producesExternalProposal, args.maxAttempts],
+      c,
+    );
+    ids.set(t.key, row!.id);
+    for (const d of t.depends_on) if (ids.has(d)) await q(`INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1,$2)`, [row!.id, ids.get(d)], c);
+  }
+  if (args.tasks.length) {
+    const rep = await q1<{ id: string }>(
+      `INSERT INTO tasks (brand_id, project_id, key, agent, kind, title, instruction, status, dep_mode, max_attempts)
+       VALUES ($1,$2,'report','manager','report','Sonuçları raporla','Proje sonuçlarını özetle','planned','settled',$3) RETURNING id`,
+      [args.brandId, args.projectId, args.maxAttempts],
+      c,
+    );
+    for (const id of ids.values()) await q(`INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1,$2)`, [rep!.id, id], c);
+  }
+  return ids;
+}
+
 /**
  * Kullanıcı talimatı → proje + yönetici planlama görevi.
  * Aynı idempotency anahtarıyla tekrar gönderilirse yeni proje oluşturulmaz.
+ * Mesaj kısa bir onaysa ("onaylıyorum", "devam et") ve onay bekleyen bir plan önerisi varsa, onay o plana
+ * bağlanır ve önerideki görevler aynı projede başlatılır (yeni proje ve yeni planlama yapılmaz).
  */
 export async function submitInstruction(args: { brandId: string; instruction: string; idempotencyKey: string }) {
   const instruction = args.instruction.trim();
@@ -69,6 +98,20 @@ export async function submitInstruction(args: { brandId: string; instruction: st
   return tx(async (c) => {
     const brand = await q1(`SELECT 1 FROM brands WHERE id = $1`, [args.brandId], c);
     if (!brand) throw new InputError("Marka bulunamadı.");
+    // Aynı onay iki kez gönderildiyse (çift tıklama) ikinci kez görev açılmaz
+    const sameConfirm = await q1<{ project_id: string }>(
+      `SELECT project_id FROM chat_messages WHERE brand_id = $1 AND role = 'user' AND data->>'idempotencyKey' = $2`,
+      [args.brandId, args.idempotencyKey],
+      c,
+    );
+    if (sameConfirm) {
+      const p = await q1<Project>(`SELECT * FROM projects WHERE id = $1 AND brand_id = $2`, [sameConfirm.project_id, args.brandId], c);
+      if (p) return { project: p, duplicate: true, confirmedProposal: true };
+    }
+    if (isShortConfirmation(instruction)) {
+      const pending = await pendingProposal(args.brandId, c, { forUpdate: true });
+      if (pending) return { ...(await approveProposal(c, args.brandId, pending, instruction, args.idempotencyKey)), duplicate: false, confirmedProposal: true };
+    }
     const title = instruction.split("\n")[0].slice(0, 90);
     const inserted = await q1<Project>(
       `INSERT INTO projects (brand_id, title, instruction, idempotency_key) VALUES ($1,$2,$3,$4)
@@ -92,6 +135,25 @@ export async function submitInstruction(args: { brandId: string; instruction: st
     await audit({ brandId: args.brandId, projectId: inserted.id, actor: "user", action: "project.create", message: `Yeni talimat: ${title}` }, c);
     return { project: inserted, duplicate: false };
   });
+}
+
+async function approveProposal(c: Queryable, brandId: string, pending: NonNullable<Awaited<ReturnType<typeof pendingProposal>>>, text: string, idempotencyKey: string) {
+  const limits = await getLimits(c);
+  await q(
+    `INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'user',$3,$4)`,
+    [brandId, pending.projectId, text, JSON.stringify({ idempotencyKey, confirms: pending.projectId })],
+    c,
+  );
+  await createPlanTasks(c, { brandId, projectId: pending.projectId, tasks: pending.tasks, maxAttempts: limits.maxAttempts });
+  const project = (await q1<Project>(`UPDATE projects SET questions = '[]', status = 'running', updated_at = now() WHERE id = $1 AND brand_id = $2 RETURNING *`, [pending.projectId, brandId], c))!;
+  const lines = pending.tasks.map((t, i) => `${i + 1}. ${AGENTS[t.agent].name} — ${t.title}`);
+  await q(
+    `INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`,
+    [brandId, pending.projectId, `Onayınızı "${pending.title}" planına uyguladım; ${pending.tasks.length} görev başlatıldı:\n${lines.join("\n")}`, JSON.stringify({ approvedProposal: true })],
+    c,
+  );
+  await audit({ brandId, projectId: pending.projectId, actor: "user", action: "project.plan_approved", message: `Plan önerisi onaylandı (“${text.slice(0, 60)}”): ${pending.title}` }, c);
+  return { project };
 }
 
 export async function getProject(brandId: string, id: string, db: Queryable = getPool()) {

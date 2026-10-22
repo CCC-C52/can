@@ -123,6 +123,19 @@ const RULES: { agent: SpecialistId; words: string[] }[] = [
   { agent: "quality", words: ["analiz", "performans", "denetle", "kontrol et", "audit", "performance"] },
 ];
 const LAUNCH = ["lansman", "launch", "tanıtım", "yeni ürün", "yeni koleksiyon", "çıkış"];
+// Yalnızca planın kendisini önce görmek isteyen ifadeler ("ürün sayfası önerisi" gibi çıktı adları değil)
+const PROPOSE = ["planı öner", "plan öner", "planını öner", "planı göster", "önce planı", "onayıma sun", "propose a plan"];
+
+/** Bilgi marka hafızasında, doğrulanmış bilgilerde veya ürün kaydında varsa tekrar sorulmaz. */
+function answeredInContext(ctx: BrandContext, words: string[], product?: BrandContext["products"][number]) {
+  const texts = [...ctx.brand.memory.map((m) => `${m.title} ${m.body}`), ...ctx.brand.verified_facts].map((t) => t.toLocaleLowerCase("tr"));
+  const hit = (t: string) => words.some((w) => t.includes(w)) && (!product || t.includes(product.title.toLocaleLowerCase("tr")));
+  return texts.some(hit);
+}
+
+function priceKnown(ctx: BrandContext, p: BrandContext["products"][number]) {
+  return known(p.price) || p.variants.some((v) => known(v.price)) || p.verified_facts.some((f) => /fiyat|price/i.test(f.attribute)) || answeredInContext(ctx, ["fiyat", "price", "₺", " tl", "try"], p);
+}
 
 export function demoPlan(input: DemoInput): Plan {
   const low = input.instruction.toLocaleLowerCase("tr");
@@ -156,11 +169,12 @@ export function demoPlan(input: DemoInput): Plan {
       "Dış işlemleri yalnızca onaydan sonra yürütmek",
     ],
     questions_for_owner: [
-      ...(!known(input.ctx.brand.target_audience) ? ["Hedef kitleniz kim (yaş, şehir, ilgi alanları)?"] : []),
-      ...(has("shopify") && !known(input.ctx.brand.shipping_info) ? ["Gönderim süresi ve ücreti nedir? (bilinmediği için vaat verilmedi)"] : []),
-      ...focusProducts(input.ctx, input.instruction).filter((p) => !known(p.price)).map((p) => `"${p.title}" ürününün fiyatı nedir?`),
+      ...(!known(input.ctx.brand.target_audience) && !answeredInContext(input.ctx, ["hedef kitle", "audience"]) ? ["Hedef kitleniz kim (yaş, şehir, ilgi alanları)?"] : []),
+      ...(has("shopify") && !known(input.ctx.brand.shipping_info) && !answeredInContext(input.ctx, ["gönderim", "kargo", "shipping"]) ? ["Gönderim süresi ve ücreti nedir? (bilinmediği için vaat verilmedi)"] : []),
+      ...focusProducts(input.ctx, input.instruction).filter((p) => !priceKnown(input.ctx, p)).map((p) => `"${p.title}" ürününün fiyatı nedir?`),
     ],
     tasks,
+    awaiting_approval: PROPOSE.some((w) => low.includes(w)),
   };
 }
 

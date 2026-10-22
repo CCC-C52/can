@@ -198,7 +198,8 @@ export async function sendInstructionAction(fd: FormData) {
   const brand = await requireBrand();
   await act("/sohbet", async () => {
     const r = await submitInstruction({ brandId: brand.id, instruction: str(fd, "instruction"), idempotencyKey: str(fd, "idempotencyKey") });
-    return r.duplicate ? "Bu talimat zaten alınmıştı (çift gönderim engellendi)." : "Talimat ana yöneticiye iletildi.";
+    if (r.duplicate) return "Bu talimat zaten alınmıştı (çift gönderim engellendi).";
+    return r.confirmedProposal ? `Onayınız “${r.project.title}” planına uygulandı; görevler başlatıldı.` : "Talimat ana yöneticiye iletildi.";
   });
 }
 

@@ -24,6 +24,10 @@ export const PlanSchema = z.object({
       }),
     )
     .describe("Görevler; bağımsız olanlar paralel çalışır"),
+  awaiting_approval: z
+    .boolean()
+    .optional()
+    .describe("true: sahip planı önce görmek/onaylamak istedi. Görevler öneri olarak saklanır; sahip onaylayınca başlar. Aksi halde false."),
 });
 export type Plan = z.infer<typeof PlanSchema>;
 
