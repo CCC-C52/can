@@ -625,3 +625,37 @@ export async function imageStudioAction(fd: FormData) {
     return { ok: r.duplicate ? "Bu talep zaten gönderildi." : "Görsel talebi Ana Yönetici'ye gönderildi.", to: `/projeler/${r.project.id}` };
   });
 }
+
+export async function cinematicVideoAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/studyo/video", async () => {
+    const rl = rateLimit(`studio:${brand.id}`, 10, 60_000);
+    if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const photos = await brandAssets(brand.id, fd.getAll("assetIds").map(String), "photo");
+    if (!photos.length) throw new Error("En az bir gerçek ürün fotoğrafı seçin.");
+    const { buildCommercialBrief } = await import("@/lib/cinematic-video");
+    const style = str(fd, "style");
+    if (!["cinematic", "futuristic", "anime", "luxury"].includes(style)) throw new Error("Geçersiz reklam stili.");
+    const duration = Number(str(fd, "durationSeconds"));
+    if (duration !== 15 && duration !== 30) throw new Error("Video süresi 15 veya 30 saniye olmalı.");
+    const collection = str(fd, "collection").trim().slice(0, 100);
+    const brief = buildCommercialBrief({
+      collection,
+      style: style as "cinematic" | "futuristic" | "anime" | "luxury",
+      aspectRatio: str(fd, "aspectRatio") === "16:9" ? "16:9" : "9:16",
+      durationSeconds: duration,
+      referenceAssetIds: photos.map(p => p.id),
+      licensedAudioConfirmed: false,
+    });
+    const instruction = [
+      `FriBee Cinematic Video Studio: ${brief.title}. ${brief.durationSeconds} saniyelik ${brief.format} reklam taslağı hazırla.`,
+      `Gerçek ürün fotoğrafları: ${photos.map(p => p.filename).join(", ")}. Bunları ürün referansı olarak kullan.`,
+      ...brief.scenes.map(s => `Sahne ${s.index} (${s.durationSeconds} sn): ${s.direction} Kamera: ${s.camera}. Işık: ${s.lighting}. Kurgu: ${s.pacing}.`),
+      "Baskı, FriBee logosu, renk ve oversized kalıbı koru. Ürün değişmiş görünüyorsa çıktıyı kalite incelemesine gönder.",
+      "Lisansı doğrulanmamış müzik ekleme. Her sahneyi insan onayına sun; otomatik yayınlama.",
+      "Ücretli AI üretimi için mevcut sahip izni ve bütçe kapılarını kesinlikle atlama. Sağlayıcı kullanılamıyorsa gerekçeyi açıkça bildir.",
+    ].join("\n");
+    const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
+    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : "Cinematic reklam talebi Ana Yönetici'ye gönderildi.", to: `/projeler/${r.project.id}` };
+  });
+}
