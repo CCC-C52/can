@@ -8,6 +8,7 @@ import { videoStudioAction } from "@/app/actions";
 import { Badge, Empty, Flash, PageHeader, dt } from "@/components/ui";
 import { SubmitButton } from "@/components/client";
 import { VisionStatus } from "../vision-status";
+import { CinematicCampaignForm } from "./cinematic-campaign-form";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +17,14 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
   const { ok, err } = await flash(searchParams);
   const videos = (await listMedia(brand.id, { kind: "video" })).filter((m) => m.origin === "real_video").slice(0, 60);
   const analyses = await Promise.all(videos.map((v) => latestAnalysis(brand.id, v.id)));
+  const photos = (await listMedia(brand.id, { kind: "photo" })).filter(m => m.origin !== "ai_generated").slice(0, 60);
   const outputs = (await listOutputs(brand.id, { limit: 50 })).filter((o) => o.kind === "video_plan").slice(0, 10);
   return (
     <div>
       <PageHeader title="Video Stüdyosu" subtitle="Arşivdeki gerçek çekimlerden Reels/TikTok videosu. Talep Ana Yönetici'ye gider; sahne analizi, kalite kontrolü, MP4 doğrulaması ve onayınız olmadan hiçbir şey yayınlanmaz." />
       <Flash ok={ok} err={err} />
       <VisionStatus />
+      <CinematicCampaignForm photos={photos.map(p => ({ id: p.id, filename: p.filename }))} />
       <div className="grid gap-4 lg:grid-cols-3">
         <form action={videoStudioAction} className="card space-y-3 lg:col-span-2">
           <input type="hidden" name="idempotencyKey" value={randomUUID()} />
