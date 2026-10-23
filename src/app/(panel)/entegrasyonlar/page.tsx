@@ -14,7 +14,7 @@ export default async function Integrations({ searchParams }: { searchParams: SP 
   const brand = await requireBrand();
   const rows = await Promise.all(PROVIDERS.map(async (p) => ({ p, s: await effectiveStatus(p.id, brand.id), env: envConfigured(p.id) })));
   const waiting = await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM tasks WHERE brand_id = $1 AND status = 'waiting_connection'`, [brand.id]);
-  const testable = new Set(["anthropic", "openai_images", "shopify", "instagram"]);
+  const testable = new Set(["anthropic", "openai_images", "video_generation", "shopify", "instagram"]);
   const tools = await toolCatalog();
   return (
     <div>
