@@ -7,7 +7,7 @@ import { renderEdit, type EditClip } from "@/lib/adapters/video-edit";
 import { FfmpegError } from "@/lib/adapters/ffmpeg";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
-import { getVideoGenerator, veoAspect, veoDuration } from "@/lib/adapters/video-generation";
+import { getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
 import { assertTool } from "@/lib/agents/registry";
 import { PermanentError, TransientError } from "@/lib/models/types";
@@ -309,7 +309,7 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     const blocked = await paidAllowed(ctx, "video_generation");
     if (blocked || !gen) { o.waiting.push(`${vid.id}: AI video üretimi — ${blocked ?? "sağlayıcı yapılandırılmamış"}`); return; }
     assertTool("video", "video.generate");
-    const seconds = veoDuration(vid.duration_s);
+    const seconds = omniDuration(vid.duration_s);
     const used = await q1<{ s: number }>(
       `SELECT COALESCE(SUM((request->'parameters'->>'durationSeconds')::numeric), 0)::float AS s FROM provider_jobs
        WHERE project_id = $1 AND kind = 'video_generation' AND status NOT IN ('failed','cancelled')`,
@@ -319,16 +319,17 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       o.waiting.push(`${vid.id}: proje AI video sınırı (${ctx.limits.maxVideoGenSeconds} sn) aşılacak; Ayarlar'dan sahip artırabilir`);
       return;
     }
-    // Gerçek ürün fotoğrafı varsa ilk kare olarak kullanılır (ürün görünümü korunur)
-    let image: { base64: string; mimeType: string } | undefined;
+    // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur)
+    const images: { base64: string; mimeType: string }[] = [];
     for (const id of vid.selected_asset_ids ?? []) {
+      if (images.length >= MAX_REFERENCE_IMAGES) break;
       const m = await getMedia(task.brand_id, id);
-      if (m && m.kind === "photo" && RASTER.has(m.mime_type)) { image = { base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type }; break; }
+      if (m && m.kind === "photo" && RASTER.has(m.mime_type)) images.push({ base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type });
     }
     const est = gen.estimateCostUsd(seconds);
     const prompt = clean(vid.generation_prompt);
     const { job, created } = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "video_generation", itemRef: vid.id, key, estimateUsd: est,
-      request: { model: gen.model, prompt, parameters: { aspectRatio: veoAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: !!image } });
+      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length } });
     if (!created) { reportExisting(job, vid.id, o); return; }
     try {
       await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
@@ -338,7 +339,7 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     }
     await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "estimated", amountUsd: est, units: { seconds }, providerJobId: job.id });
     try {
-      const sub = await gen.submit({ prompt, durationS: seconds, aspectRatio: veoAspect(vid.format), image });
+      const sub = await gen.submit({ prompt, durationS: seconds, aspectRatio: omniAspect(vid.format), images });
       await updateJob(job.id, { status: "submitted", external_id: sub.externalId, next_poll_ms: VIDEO_POLL_MS });
       o.inProgress.push(`${vid.id}: AI video sağlayıcıya gönderildi`);
     } catch (err) {
@@ -405,7 +406,8 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
       generationMethod: "ffmpeg_thumbnail", sourceAssetIds: [asset.id], taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video kapak karesi", source: "system" }],
     });
-    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height } });
+    // Ses varsa korunur (dosya olduğu gibi saklanır); kayıtta yalnızca var/yok bilgisi tutulur
+    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio } });
     await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, providerJobId: job.id, note: "Yapılandırılmış saniye fiyatı; sağlayıcı faturasıyla doğrulanmadı" });
     o.produced.push(asset.id, thumb.id);
   } catch (err) {

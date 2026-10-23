@@ -8,7 +8,7 @@
  *  - LIVE_TESTS=1 ve LIVE_BILLABLE_AUTHORIZED=yes (sahibin açık ücretli test izni)
  *  - Yalıtılmış veritabanı: LIVE_DATABASE_URL adı "live" veya "test" içermeli; APP_MODE=production olamaz
  *  - İlgili sağlayıcı anahtarı (AIOPS_ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY) ve birim fiyatı
- *    (OPENAI_IMAGE_COST_USD / VEO_COST_PER_SECOND_USD) tanımlı olmalı; tahmini toplam LIVE_MAX_USD'yi aşamaz
+ *    (OPENAI_IMAGE_COST_USD / GEMINI_VIDEO_COST_PER_SECOND_USD) tanımlı olmalı; tahmini toplam LIVE_MAX_USD'yi aşamaz
  * Her sağlayıcı için tek kontrollü çağrı yapılır. Sonuç: data/live-results/<zaman>.json (gizli değer içermez).
  * Temizlik: test markası "Canlı Test <zaman>" adıyla oluşturulur; dosyalar o markanın depolama önekindedir ve
  * `--cleanup` ile marka ve dosyaları silinir. Sahte (mock) sonuç asla "canlı başarı" olarak yazılmaz.
@@ -111,10 +111,10 @@ async function main() {
   }
 
   if (which.has("video")) {
-    const { VeoGenerator } = await import("@/lib/adapters/video-generation");
+    const { GeminiOmniVideoGenerator } = await import("@/lib/adapters/video-generation");
     const { probeVideo } = await import("@/lib/media-analysis/video");
-    const g = new VeoGenerator(config.gemini.apiKey ?? "", config.gemini.veoModel, config.gemini.costPerSecondUsd);
-    const r: LiveResult = { provider: "google_veo", model: g.model, requested_at: now(), job_id: null, response_status: "", output_id: null, cost_estimate_usd: est.video, cost_reported_usd: null, verification: "", ok: false };
+    const g = new GeminiOmniVideoGenerator(config.gemini.apiKey ?? "", config.gemini.videoModel, config.gemini.costPerSecondUsd);
+    const r: LiveResult = { provider: "google_gemini_omni_video", model: g.model, requested_at: now(), job_id: null, response_status: "", output_id: null, cost_estimate_usd: est.video, cost_reported_usd: null, verification: "", ok: false };
     try {
       if (!config.gemini.apiKey) throw new Error("GEMINI_API_KEY yok");
       const sub = await g.submit({ prompt: "Slow camera pan across a plain white t-shirt on a hanger, soft daylight.", durationS: 4, aspectRatio: "9:16" });

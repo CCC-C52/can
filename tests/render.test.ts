@@ -237,22 +237,22 @@ describe("AI görsel üretimi (sahte sağlayıcı)", () => {
   });
 });
 
-describe("AI video üretimi (sahte Veo)", () => {
+describe("AI video üretimi (sahte Gemini Omni Video)", () => {
   class FakeVeo implements VideoGenerator {
     readonly service = "video_generation";
-    readonly model = "veo-fake";
+    readonly model = "gemini-omni-fake";
     submits: VideoGenRequest[] = [];
     polls = 0;
     constructor(private video: Buffer, private runningPolls = 2, private fail = false) {}
     estimateCostUsd(s: number) { return 0.1 * s; }
     async submit(req: VideoGenRequest) {
       this.submits.push(req);
-      return { externalId: `models/veo-fake/operations/op${this.submits.length}`, request: {} };
+      return { externalId: `v1_fake${this.submits.length}`, request: {} };
     }
     async poll() {
       this.polls++;
       if (this.polls <= this.runningPolls) return { state: "running" as const };
-      return this.fail ? { state: "failed" as const, error: "content filtered" } : { state: "succeeded" as const, videoUri: "https://generativelanguage.googleapis.com/v1beta/files/x:download" };
+      return this.fail ? { state: "failed" as const, error: "content filtered" } : { state: "succeeded" as const, videoUri: "interaction:v1_fake1" };
     }
     async download() { return this.video; }
   }
@@ -264,7 +264,7 @@ describe("AI video üretimi (sahte Veo)", () => {
     process.env.GEMINI_API_KEY = "test-key";
     await upsertConnection("video_generation", null, { status: "connected" });
     await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true });
-    const veo = new FakeVeo(await colorScenesVideo([{ color: "green", seconds: 2 }]));
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "green", seconds: 2 }], { audio: true }));
     setVideoGeneratorOverride(veo);
     setTextModelOverride(new ScriptedModel(videoPlan, { video: genVideo() }));
     const { project } = await submitInstruction({ brandId, instruction: "AI video", idempotencyKey: key() });
@@ -278,7 +278,7 @@ describe("AI video üretimi (sahte Veo)", () => {
     }
     expect(veo.submits).toHaveLength(1);
     expect(veo.submits[0]).toMatchObject({ aspectRatio: "9:16", durationS: 6 });
-    expect(veo.submits[0].image?.mimeType).toBe("image/jpeg"); // gerçek ürün fotoğrafı ilk kare
+    expect(veo.submits[0].images?.map((i) => i.mimeType)).toEqual(["image/jpeg"]); // gerçek ürün fotoğrafı ilk kare (image_to_video)
     const mid = (await listTasks(brandId, { projectId: project.id })).find((t) => t.kind === "render")!;
     expect(mid.status).toBe("ready");
     expect(mid.error).toMatch(/Sürüyor/);
@@ -296,6 +296,61 @@ describe("AI video üretimi (sahte Veo)", () => {
     const assets = await q<any>(`SELECT * FROM media_assets WHERE source_task_id = $1 ORDER BY kind`, [render.id]);
     expect(assets.map((a) => [a.kind, a.origin])).toEqual([["photo", "ai_generated"], ["video", "ai_generated"]]);
     expect(Number(job.cost_actual_usd)).toBeCloseTo(0.6);
+    expect(job.request).toMatchObject({ mode: "image_to_video", reference_images: 1, parameters: { durationSeconds: 6, aspectRatio: "9:16", resolution: "720p" } });
+    // Başarılı MP4: ses korunur, dosya oynatılabilir
+    expect(job.response).toMatchObject({ has_audio: true });
+    const vidAsset = assets.find((a) => a.kind === "video")!;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omni-"));
+    const f = path.join(dir, "v.mp4");
+    await fs.writeFile(f, await (await import("@/lib/storage")).getStorage().get(vidAsset.storage_key));
+    const pr = await probeVideo(f);
+    await fs.rm(dir, { recursive: true, force: true });
+    expect(pr.has_audio).toBe(true);
+    expect(pr.duration).toBeGreaterThan(1.5);
+
+    // İdempotent tekrar: aynı iş yeniden işlense de sağlayıcıya ikinci kez gönderilmez
+    await q(`UPDATE tasks SET status = 'ready', updated_at = now() WHERE id = $1`, [render.id]);
+    await drive(new Engine("veo-w2b"));
+    expect(veo.submits).toHaveLength(1);
+    expect((await q<any>(`SELECT id FROM provider_jobs WHERE task_id = $1`, [render.id]))).toHaveLength(1);
+  });
+
+  it("ücretli üretim izni yoksa sağlayıcıya hiçbir şey gönderilmez", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    await upsertConnection("video_generation", null, { status: "connected" });
+    await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: false });
+    const veo = new FakeVeo(Buffer.alloc(0));
+    setVideoGeneratorOverride(veo);
+    setTextModelOverride(new ScriptedModel(videoPlan, { video: genVideo() }));
+    const { project } = await submitInstruction({ brandId, instruction: "AI video izinsiz", idempotencyKey: key() });
+    await drive(new Engine("veo-w5"));
+    const render = (await listTasks(brandId, { projectId: project.id })).find((t) => t.kind === "render")!;
+    expect(render.status).toBe("waiting_connection");
+    expect(veo.submits).toHaveLength(0);
+    expect(await q1(`SELECT 1 FROM provider_jobs WHERE task_id = $1`, [render.id])).toBeNull();
+    expect(await q1(`SELECT 1 FROM cost_entries WHERE task_id = $1`, [render.id])).toBeNull();
+  });
+
+  it("birden çok ürün fotoğrafı reference_to_video olarak gönderilir (en fazla 3)", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    await upsertConnection("video_generation", null, { status: "connected" });
+    await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true });
+    const extra: string[] = [];
+    for (const c of ["#f97316", "#111827", "#f5f5f5"]) extra.push((await uploadMedia(brandId, { buffer: await productPhoto(c), filename: `ref-${c.slice(1)}.jpg` })).asset.id);
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "orange", seconds: 2 }]), 0);
+    setVideoGeneratorOverride(veo);
+    const plan = genVideo();
+    plan.videos[0].selected_asset_ids = [photoId, ...extra];
+    setTextModelOverride(new ScriptedModel(videoPlan, { video: plan }));
+    const { project } = await submitInstruction({ brandId, instruction: "AI video referans", idempotencyKey: key() });
+    await drive(new Engine("veo-w6"));
+    expect(veo.submits).toHaveLength(1);
+    expect(veo.submits[0].images).toHaveLength(3);
+    const render = (await listTasks(brandId, { projectId: project.id })).find((t) => t.kind === "render")!;
+    const job = await q1<any>(`SELECT * FROM provider_jobs WHERE task_id = $1`, [render.id]);
+    expect(job.request).toMatchObject({ mode: "reference_to_video", reference_images: 3 });
+    expect(JSON.stringify(job.request)).not.toMatch(/base64|\/9j\//); // fotoğraf baytı kayda yazılmaz
+    expect(render.status).toBe("completed");
   });
 
   it("sağlayıcı reddi kesin başarısızlıktır; yeniden gönderilmez", async () => {

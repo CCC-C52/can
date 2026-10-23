@@ -59,11 +59,14 @@ export const config = {
     },
   },
   gemini: {
-    // Google Veo (Gemini API) — AI video üretimi. Birim fiyat sahibin belirlediği değerdir; uydurulmaz.
+    // Google Gemini Omni Flash (Gemini API, Interactions API) — AI video üretimi. Birim fiyat sahibin belirlediği değerdir; uydurulmaz.
+    // Eski VEO_MODEL / VEO_COST_PER_SECOND_USD bilinçli olarak okunmaz: başka bir modelin adı ve fiyatı yeni modelde yanlış olur.
     get apiKey() { return str("GEMINI_API_KEY"); },
-    get veoModel() { return str("VEO_MODEL") ?? "veo-3.1-fast-generate-preview"; },
+    get videoModel() { return str("GEMINI_VIDEO_MODEL") ?? "gemini-omni-1.1-flash"; },
+    /** Eski ad (uyumluluk). */
+    get veoModel() { return this.videoModel; },
     get costPerSecondUsd(): number | null {
-      const v = str("VEO_COST_PER_SECOND_USD");
+      const v = str("GEMINI_VIDEO_COST_PER_SECOND_USD");
       return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
     },
   },

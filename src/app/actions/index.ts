@@ -21,7 +21,7 @@ import { disconnect, type ProviderId, upsertConnection } from "@/lib/services/co
 import { testShopify, syncShopifyProducts } from "@/lib/adapters/shopify";
 import { testInstagram } from "@/lib/adapters/instagram";
 import { testOpenAIImages } from "@/lib/adapters/images";
-import { testVeo } from "@/lib/adapters/video-generation";
+import { testGeminiOmniVideo } from "@/lib/adapters/video-generation";
 import { releaseJob } from "@/lib/services/provider-jobs";
 import { testAnthropic } from "@/lib/models/test";
 import { audit } from "@/lib/audit";
@@ -388,7 +388,7 @@ export async function testConnectionAction(fd: FormData) {
     let r: { ok: boolean; detail: string };
     if (provider === "anthropic") r = await testAnthropic();
     else if (provider === "openai_images") r = await testOpenAIImages();
-    else if (provider === "video_generation") r = await testVeo();
+    else if (provider === "video_generation") r = await testGeminiOmniVideo();
     else if (provider === "shopify") r = await testShopify(brand.id, str(fd, "shop"));
     else if (provider === "instagram") r = await testInstagram(brand.id);
     else throw new Error("Bu sağlayıcı için test yok.");

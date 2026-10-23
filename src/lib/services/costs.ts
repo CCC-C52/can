@@ -8,7 +8,7 @@ export const COST_PROVIDERS = ["anthropic", "openai_images", "video_generation",
 export const COST_PROVIDER_LABEL: Record<(typeof COST_PROVIDERS)[number], string> = {
   anthropic: "Anthropic (metin modeli)",
   openai_images: "OpenAI Images (AI görsel)",
-  video_generation: "Google Veo (AI video)",
+  video_generation: "Google Gemini Omni Video (AI video)",
   firecrawl: "Firecrawl (web araştırması)",
 };
 

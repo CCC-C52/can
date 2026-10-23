@@ -33,7 +33,7 @@ Tam liste ve açıklamalar `.env.example` içindedir. Gizli değerler yalnızca 
 | Yükleme | `MAX_UPLOAD_MB` (vars. 2048), `UPLOAD_DIRECT` (`true` = tarayıcıdan doğrudan S3/R2'ye imzalı parça; kovada CORS gerekir) | — |
 | Metin modeli | `AIOPS_ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (vars. `claude-opus-5-5`), `ANTHROPIC_EFFORT` | yoksa yerelde DEMO, canlıda "Bağlantı bekliyor" |
 | AI görsel | `OPENAI_API_KEY`, `OPENAI_IMAGE_MODEL` (vars. `gpt-image-1`), `OPENAI_IMAGE_COST_USD` | isteğe bağlı |
-| AI video | `GEMINI_API_KEY`, `VEO_MODEL` (vars. `veo-3.1-fast-generate-preview`), `VEO_COST_PER_SECOND_USD` | isteğe bağlı |
+| AI video | `GEMINI_API_KEY`, `GEMINI_VIDEO_MODEL` (vars. `gemini-omni-1.1-flash`), `GEMINI_VIDEO_COST_PER_SECOND_USD` | isteğe bağlı |
 | Mağaza/sosyal | `SHOPIFY_CLIENT_ID/SECRET`, `SHOPIFY_API_VERSION`, `INSTAGRAM_APP_ID/SECRET`, `INSTAGRAM_GRAPH_VERSION`, `PUBLIC_BASE_URL` | isteğe bağlı |
 | Web araştırması | `FIRECRAWL_API_KEY`, `FIRECRAWL_CREDIT_USD` | isteğe bağlı, ücretli; ayrıca Maliyet Yönetimi'nde açılmalı |
 | Telemetri | `POSTHOG_API_KEY`, `POSTHOG_HOST` (vars. `https://eu.i.posthog.com`) | isteğe bağlı; boşsa hiçbir veri gönderilmez |
@@ -48,7 +48,7 @@ Anahtarlar sohbete, koda veya panele yazılmaz; sağlayıcının konsolunda üre
 |---|---|---|
 | Anthropic | console.anthropic.com → API Keys | Konsolda aylık harcama sınırı koyun |
 | OpenAI Images | platform.openai.com → API keys | Görsel başına güncel fiyatı `OPENAI_IMAGE_COST_USD` olarak girin |
-| Google Veo | aistudio.google.com → API keys (Gemini API, faturalandırma açık proje) | Saniye fiyatını `VEO_COST_PER_SECOND_USD` olarak girin; üretilen video sağlayıcıda kısa süre tutulur, uygulama hemen indirir |
+| Google Gemini Omni Video | aistudio.google.com → API keys (Gemini API, faturalandırma açık proje) | Saniye fiyatını `GEMINI_VIDEO_COST_PER_SECOND_USD` olarak girin; üretilen video sağlayıcıda kısa süre tutulur, uygulama hemen indirir |
 | Cloudflare R2 | R2 → Manage API tokens (yalnızca ilgili kovalar, Object Read & Write) | |
 
 Birim fiyat girilmeyen ücretli servis, bütçe sınırı etkinken **çalıştırılmaz** (maliyet bilinmiyor ≠ 0).
@@ -171,7 +171,7 @@ README'deki "FriBee'yi sisteme ekleme" bölümüne bakın. Özet: yalnızca doğ
 
 - **Anthropic:** model ve fiyat `src/lib/models/anthropic.ts`; görüntü girdisi en uzun kenar 1568 px'e küçültülür.
 - **OpenAI Images:** referanslı üretim `/v1/images/edits` (en fazla 4 referans; `input_fidelity=high`). Ürünün birebir korunması garanti edilmez; AI görseli "gerçek ürün fotoğrafı değil" etiketiyle kaydedilir.
-- **Google Veo:** video başına 4–8 sn, 720p, 9:16 veya 16:9; uzun süren işlem (dakikalar). İçerik filtresi reddi kesin başarısızlıktır. Sağlayıcıdaki dosya kısa süre tutulur.
+- **Google Gemini Omni Video** (`gemini-omni-1.1-flash`, Interactions API, arka planda çalışan etkileşim): video başına 3–10 sn, 720p, 9:16 veya 16:9; metinden, ürün fotoğrafından (ilk kare) veya 2–3 ürün referansından. Ses varsa korunur. İçerik filtresi reddi kesin başarısızlıktır. Sağlayıcıdaki sonuç kısa süre tutulur. Eski `VEO_MODEL` / `VEO_COST_PER_SECOND_USD` artık okunmaz.
 - **OpenAI Sora/Videos API** kapatıldığı için kullanılmadı.
 - **TikTok:** otomatik yayın yok (manuel paket). **Meta reklam/performans:** yok.
 
