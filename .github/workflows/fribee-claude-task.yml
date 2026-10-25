@@ -47,8 +47,8 @@ jobs:
           # Explicitly allow source inspection/editing and bounded, local test commands.
           # Never grant blanket Bash or deployment/secret-management shell access.
           claude_args: |
-            --max-turns 40
-            --allowedTools "Read,Glob,Grep,Edit,Write,Replace,Bash(npm run typecheck),Bash(npm test),Bash(npm run migrations:check)"
+            --max-turns 60
+            --allowedTools "Read,Glob,Grep,Edit,Write,Replace,Bash(git status:*),Bash(git diff:*),Bash(npm ci),Bash(npm run typecheck),Bash(npm test),Bash(npm run migrations:check)"
           prompt: |
             You are implementing an owner-authorized FriBee development task.
             Read the issue #${{ github.event.issue.number }} from this repository.
@@ -58,7 +58,37 @@ jobs:
             publish marketing content, or call billable video/image providers.
             Do not alter release pipelines or weaken approval/budget controls.
             Run relevant tests and report outcomes and remaining limitations in the PR.
+            Prioritize the smallest testable change first; commit and push an incremental
+            branch before the turn budget runs out. If full scope is too large, open
+            an honest partial-work review PR listing unfinished acceptance gates.
+            Do not repeatedly retry denied commands; leave CI execution to the PR.
             Include "Relates to #${{ github.event.issue.number }}" in the PR body.
+      # Claude's issue-mode action pushes a branch and offers a compare URL;
+      # it does not reliably create a pull request by itself. Create a
+      # draft PR with the scoped Actions token only after a successful push.
+      - name: Open an owner-review PR for actual code changes
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_BRANCH: ${{ steps.claude.outputs.branch_name }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          expected_prefix="claude/issue-${ISSUE_NUMBER}-"
+          if [[ -z "$REVIEW_BRANCH" || "$REVIEW_BRANCH" != "$expected_prefix"* ]]; then
+            echo "::error::Expected a pushed Claude branch for this issue; refusing unexpected branch."
+            exit 1
+          fi
+          existing="$(gh pr list --state open --head "$REVIEW_BRANCH" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            # GitHub rejects a PR without committed differences, so no phantom success.
+            gh pr create \
+              --draft \
+              --head "$REVIEW_BRANCH" \
+              --base "$BASE_BRANCH" \
+              --title "WIP: FriBee Issue #${ISSUE_NUMBER} Claude changes (owner review)" \
+              --body "Relates to #${ISSUE_NUMBER}. AI-generated development work. Review source changes, CI checks, credentials, safety gates, and completion evidence before merging. This PR does not deploy or start billable generation."
+          fi
       - name: Assert a review pull request exists
         if: success()
         env:
