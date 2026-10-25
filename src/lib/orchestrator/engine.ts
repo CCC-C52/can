@@ -43,7 +43,7 @@ export function classifyFailure(err: unknown): FailureClass {
 /** Hata sınıfına göre yöneticinin önerdiği eylem (rapor ve panelde gösterilir). */
 export const FAILURE_ACTION: Record<FailureClass, { label: string; action: string; blocks: boolean }> = {
   transient: { label: "Geçici hata", action: "Güvenle tekrar denenebilir.", blocks: false },
-  timeout: { label: "Süre aşımı", action: "Görev süre sınırını artırıp tekrar deneyin veya işi küçültün.", blocks: false },
+  timeout: { label: "Süre aşımı", action: "Önce görev aşaması ve sağlayıcı iş durumunu inceleyin. Ücretli gönderimi tekrar başlatmadan sorunu giderin.", blocks: false },
   permanent: { label: "Kalıcı hata", action: "Hata kaydını inceleyin; talimatı veya verileri düzeltip tekrar deneyin.", blocks: true },
   permission: { label: "Yetki hatası", action: "Ajan izin yapılandırması hatalı; geliştiriciye bildirin. Tekrar denemek sonucu değiştirmez.", blocks: true },
   budget: { label: "Bütçe/sınır", action: "Ayarlar'dan bütçe veya model çağrısı sınırını sahip olarak artırın, sonra tekrar deneyin.", blocks: true },
@@ -135,6 +135,7 @@ export class Engine {
     let outcome = "succeeded";
     let errMsg: string | null = null;
     const startedAt = Date.now();
+    log("info", "task.phase.started", { taskId: task.id, projectId: task.project_id, kind: task.kind, agent: task.agent, phase: task.phase, timeoutMs });
     try {
       const ctx: RunCtx = { task, signal: ctrl.signal, limits, model: getTextModel() };
       await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: `agent:${task.agent}`, action: "task.start", message: `${agentName(task.agent)} başladı: ${task.title}${task.phase === "review" ? " (kalite kontrol)" : ""}` });
@@ -147,6 +148,9 @@ export class Engine {
       const reason = ctrl.signal.aborted && ctrl.signal.reason instanceof Error ? ctrl.signal.reason : e;
       const err = reason as Error;
       errMsg = err.message;
+      if (err instanceof TimeoutError) {
+        log("warn", "task.phase.timeout", { taskId: task.id, projectId: task.project_id, kind: task.kind, agent: task.agent, phase: task.phase, timeoutMs, elapsedMs: Date.now() - startedAt });
+      }
       if (err instanceof PausedError) {
         outcome = "paused";
         await q(
@@ -530,7 +534,10 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   const agent = task.agent;
   assertTool(agent, "brand.read");
   // Video: kurgu planından ÖNCE gerçek analiz (kareler, sahneler). Analiz yoksa başlatılır; bitene kadar görev bekler.
+  const videoGateStarted = Date.now();
+  if (agent === "video") log("info", "video.stage.start", { taskId: task.id, projectId: task.project_id, stage: "analysis_gate" });
   const video = agent === "video" ? await videoAnalysisGate(ctx, workerId) : null;
+  if (agent === "video") log("info", "video.stage.finish", { taskId: task.id, projectId: task.project_id, stage: "analysis_gate", elapsedMs: Date.now() - videoGateStarted, waiting: !!video?.hold });
   if (video?.hold) return;
   const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent, includeAssetIds: video?.targets.map((t) => t.id) });
   const upstream = await upstreamOutputs(task);
@@ -538,9 +545,12 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
   const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined].filter(Boolean).join("\n") || undefined;
   const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
+  const modelStarted = Date.now();
+  if (agent === "video") log("info", "video.stage.start", { taskId: task.id, projectId: task.project_id, stage: "model_call" });
   const res = await callModel(ctx, agent, "work", schema, user,
     { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [] },
     16000, video?.images);
+  if (agent === "video") log("info", "video.stage.finish", { taskId: task.id, projectId: task.project_id, stage: "model_call", elapsedMs: Date.now() - modelStarted });
 
   await owned(task, workerId, async (c) => {
     let outputId = task.output_id;
