@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
       return reply({ section, items: rows.slice(0, limit).map(t => ({
         id: t.id, projectId: t.project_id, title: t.title, agent: t.agent, kind: t.kind,
         status: t.status, phase: t.phase, attempts: t.attempts, maxAttempts: t.max_attempts,
-        failureClass: t.failure_class, error: t.error, updatedAt: t.updated_at,
+        failureClass: t.failure_class, hasError: !!t.error, updatedAt: t.updated_at,
       })) });
     }
     if (section === "outputs") {
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
           filename: a.filename, kind: a.kind, origin: a.origin, durationSeconds: a.duration_s,
           width: a.width, height: a.height, rightsStatus: a.rights_status,
           analysis: analysis ? { status: analysis.status, level: analysis.level,
-            summary: compactAnalysis(analysis), error: analysis.error } : null,
+            summary: compactAnalysis(analysis), hasError: !!analysis.error } : null,
         };
       })) });
     }
