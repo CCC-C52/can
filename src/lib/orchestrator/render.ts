@@ -330,6 +330,7 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     // Doğrulanamayan referans sessizce düşürülmez: öğe reddedilir (aksi halde metinden video ürünü uydurabilir).
     const requested: string[] = (vid.selected_asset_ids ?? []).map(String);
     if (requested.length > MAX_REFERENCE_IMAGES) { o.failed.push(`${vid.id}: en fazla ${MAX_REFERENCE_IMAGES} referans fotoğraf gönderilebilir (${requested.length} seçildi)`); return; }
+    if (!clean(vid.product_theme).trim()) { o.failed.push(`${vid.id}: premium ürün videosu için sahipçe doğrulanmış ürün teması gerekli`); return; }
     const found = new Map<string, MediaAsset | null>();
     for (const id of requested) found.set(id, await getMedia(task.brand_id, id)); // marka kapsamı
     const productIds = new Set([...found.values()].map((m) => m?.product_id ?? null));
@@ -413,9 +414,10 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
       throw new PermanentError(`İndirilen dosya geçerli bir video değil: ${(err as Error).message}`);
     }
     const est = job.cost_estimated_usd === null ? null : Number(job.cost_estimated_usd);
-    // MP4 kalite kapısı: kapsayıcı, kodek, süre ve en-boy; ses yalnızca raporlanır (sağlayıcı sesi garanti etmez)
+    // Premium MP4 kalite kapısı: kapsayıcı, kodek, süre, tam en-boy oranı ve ses izi zorunlu.
+    // Audio track presence is necessary but not proof of non-silent playback; owner approval remains required.
     const params = job.request?.parameters ?? {};
-    const check = verifyMp4(buf, probe, { durationS: Number(params.durationSeconds ?? vid.duration_s), aspectRatio: params.aspectRatio === "16:9" ? "16:9" : "9:16" });
+    const check = verifyMp4(buf, probe, { durationS: Number(params.durationSeconds ?? vid.duration_s), aspectRatio: params.aspectRatio === "16:9" ? "16:9" : "9:16", requireAudio: true });
     if (check.ok) {
       // Tam çözme: başlık doğru olsa da bozuk kareler oynatmada hata verir
       try { await assertDecodes(file); } catch (err) { if (!(err instanceof FfmpegError)) throw err; check.ok = false; check.problems.push(`tam çözme başarısız: ${err.message}`); }

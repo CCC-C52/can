@@ -70,7 +70,7 @@ beforeAll(async () => {
   await q(`UPDATE brands SET colors = $2 WHERE id = $1`, [brandId, JSON.stringify([{ name: "primary", hex: "#7c2d12" }, { name: "bg", hex: "#f5efe6" }])]);
   const p = await createProduct(brandId, { title: "Render Shirt", price: "50", currency: "USD" });
   productId = p.id;
-  photoId = (await uploadMedia(brandId, { buffer: await productPhoto("#2563eb"), filename: "shirt.jpg" }, { productId: p.id })).asset.id;
+  photoId = (await uploadMedia(brandId, { buffer: await productPhoto("#2563eb"), filename: "shirt.jpg" }, { productId: p.id, themes: ["Space Alien"] })).asset.id;
   const logo = await sharp({ create: { width: 300, height: 100, channels: 4, background: "#111111" } }).png().toBuffer();
   await uploadMedia(brandId, { buffer: logo, filename: "logo.png" }, { kind: "logo" });
   clipIds = [
@@ -259,7 +259,7 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     async download() { return this.video; }
   }
   const genVideo = () => ({ summary: "s", unknowns: [], videos: [{
-    id: "gv", mode: "generate_new", format: "9:16", duration_s: 6, selected_asset_ids: [photoId], script: [], subtitles: [], generation_prompt: "Slow pan over the shirt", music_note: "",
+    id: "gv", mode: "generate_new", format: "9:16", duration_s: 6, product_theme: "Space Alien", selected_asset_ids: [photoId], script: [], subtitles: [], generation_prompt: "Slow pan over the shirt", music_note: "",
   }] });
 
   it("gönder → sorgula (görev kuyruğa döner) → indir → doğrula → arşive kaydet; işleyici değişse de tek gönderim", async () => {
@@ -341,8 +341,8 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     await upsertConnection("video_generation", null, { status: "connected" });
     await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true });
     const extra: string[] = [];
-    for (const c of ["#f97316", "#111827"]) extra.push((await uploadMedia(brandId, { buffer: await productPhoto(c), filename: `ref-${c.slice(1)}.jpg` }, { productId })).asset.id);
-    const veo = new FakeVeo(await colorScenesVideo([{ color: "orange", seconds: 6 }]), 0);
+    for (const c of ["#f97316", "#111827"]) extra.push((await uploadMedia(brandId, { buffer: await productPhoto(c), filename: `ref-${c.slice(1)}.jpg` }, { productId, themes: ["Space Alien"] })).asset.id);
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "orange", seconds: 6 }], { audio: true }), 0);
     setVideoGeneratorOverride(veo);
     const plan = genVideo();
     plan.videos[0].selected_asset_ids = [photoId, ...extra];
@@ -421,7 +421,7 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     expect(jobs).toHaveLength(0);
     expect(render.error).toMatch(/tema uyuşmuyor \(music ≠ space_alien\)/);
 
-    const veo2 = new FakeVeo(await colorScenesVideo([{ color: "black", seconds: 7 }]), 0);
+    const veo2 = new FakeVeo(await colorScenesVideo([{ color: "black", seconds: 7 }], { audio: true }), 0);
     const ok = await runGen("gen-theme-ok", veo2, (v) => { v.selected_asset_ids = [alien]; v.product_theme = "Space Alien"; v.duration_s = 7; });
     expect(veo2.submits).toHaveLength(1);
     expect(ok.render.status).toBe("completed");
@@ -446,7 +446,7 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
   });
 
   it("sadakat hatası: istenen süreyi/oranı tutmayan MP4 arşive alınmaz, iş başarısız olur ve tekrar gönderilmez", async () => {
-    const veo = new FakeVeo(await colorScenesVideo([{ color: "purple", seconds: 2 }], { size: "1280x720" }), 0);
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "purple", seconds: 2 }], { size: "1280x720", audio: true }), 0);
     const { render, jobs } = await runGen("gen-fidelity", veo, () => {});
     expect(veo.submits).toHaveLength(1);
     expect(jobs[0].status).toBe("failed");

@@ -53,6 +53,10 @@ export function verifyReferences(
   found: Map<string, RefCandidate | null>,
   expected: { productId: string | null; theme?: string | null },
 ): RefCheck {
+  // A missing reference is not a text-to-video fallback for an owned physical product.
+  if (requestedIds.length === 0) {
+    return { accepted: [], rejected: [{ id: "(none)", reason: "en az bir doğrulanmış gerçek ürün fotoğrafı gerekli" }] };
+  }
   const res: RefCheck = { accepted: [], rejected: [] };
   const theme = expected.theme ? canonicalTheme(expected.theme) : null;
   for (const id of requestedIds) {
@@ -137,7 +141,12 @@ export function verifyMp4(buf: Buffer, probe: VideoProbe, expect: Mp4Expect): Mp
   if (!looksLikeMp4(buf)) problems.push("dosya MP4 (ISO-BMFF ftyp) değil");
   if (!probe.video_codec || !VIDEO_CODECS.has(probe.video_codec)) problems.push(`video kodeki desteklenmiyor (${probe.video_codec ?? "yok"})`);
   if (!(w > 0 && h > 0)) problems.push("görüntü boyutu yok");
-  else if ((expect.aspectRatio === "9:16") !== (h > w)) problems.push(`en-boy oranı beklenen ${expect.aspectRatio} değil (${w}x${h})`);
+  else {
+    const expectedRatio = expect.aspectRatio === "9:16" ? 9 / 16 : 16 / 9;
+    // Portrait/landscape direction alone is insufficient (e.g. 900x1280 is not 9:16).
+    const relativeError = Math.abs(w / h - expectedRatio) / expectedRatio;
+    if (relativeError > 0.01) problems.push(`en-boy oranı beklenen ${expect.aspectRatio} değil (${w}x${h})`);
+  }
   const tol = expect.toleranceS ?? 1;
   if (!(probe.duration > 0.5)) problems.push("süre geçersiz");
   else if (Math.abs(probe.duration - expect.durationS) > tol) problems.push(`süre ${probe.duration.toFixed(2)} sn, beklenen ${expect.durationS} sn`);
