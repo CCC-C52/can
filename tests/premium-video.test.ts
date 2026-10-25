@@ -10,6 +10,12 @@ const photo = (o: Partial<RefCandidate> & { id: string }): RefCandidate => ({
 const map = (...xs: RefCandidate[]) => new Map<string, RefCandidate | null>(xs.map((x) => [x.id, x]));
 
 describe("verifyReferences", () => {
+  it("sıfır referansla metinden uydurma ürün videosuna izin vermez", () => {
+    const r = verifyReferences([], new Map(), { productId: null, theme: "Space Alien" });
+    expect(r.accepted).toEqual([]);
+    expect(r.rejected).toEqual([{ id: "(none)", reason: expect.stringMatching(/en az bir.*ürün fotoğrafı/) }]);
+  });
+
   it("aynı ürüne ait gerçek fotoğrafları kabul eder", () => {
     const r = verifyReferences(["a", "b"], map(photo({ id: "a" }), photo({ id: "b", mime_type: "image/png" })), { productId: "p1" });
     expect(r).toEqual({ accepted: ["a", "b"], rejected: [] });
@@ -109,6 +115,18 @@ describe("verifyMp4", () => {
       { durationS: 6, aspectRatio: "9:16", requireAudio: true });
     expect(r.ok).toBe(false);
     expect(r.problems.join(" | ")).toMatch(/ftyp.*kodeki.*en-boy.*süre.*ses izi/);
+  });
+
+  it("yalnızca dikeylik değil, doğru 9:16 oranı gerekir", () => {
+    const r = verifyMp4(mp4, probe({ display_width: 900, display_height: 1280 }), { durationS: 6, aspectRatio: "9:16" });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" | ")).toMatch(/en-boy oranı/);
+  });
+
+  it("premium videoda ses izi yoksa reddedilir", () => {
+    const r = verifyMp4(mp4, probe({ has_audio: false, audio_codec: null }), { durationS: 6, aspectRatio: "9:16", requireAudio: true });
+    expect(r.ok).toBe(false);
+    expect(r.problems).toContain("ses izi yok");
   });
 
   it("ses istenmiyorsa sessiz video kabul edilir ama meta veride raporlanır", () => {
