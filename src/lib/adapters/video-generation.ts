@@ -254,6 +254,14 @@ export async function testGeminiOmniVideo() {
   try {
     const info = await fetchJson(`${GEMINI_API}/v1beta/models/${encodeURIComponent(model)}`, { headers: { "x-goog-api-key": config.gemini.apiKey } });
     const actualName = typeof info?.name === "string" ? info.name : null;
+    // Return only model metadata, never credentials. This helps identify whether
+    // the selected model explicitly advertises any supported generation methods.
+    const advertisedMethods = Array.isArray(info?.supportedGenerationMethods)
+      ? info.supportedGenerationMethods.filter((v: unknown): v is string => typeof v === "string")
+      : [];
+    const methodsDetail = advertisedMethods.length
+      ? ` Modelin bildirdiği yöntemler: ${advertisedMethods.join(", ").slice(0, 300)}.`
+      : " Model metadata yanıtında supportedGenerationMethods bulunmuyor.";
     if (actualName !== `models/${model}`) {
       const detail = `Model kimliği doğrulanmadı (beklenen: models/${model}, alınan: ${actualName ?? "boş"}). Ücretli üretim engellendi.`;
       await upsertConnection("video_generation", null, { status: "error", lastError: detail });
@@ -261,7 +269,7 @@ export async function testGeminiOmniVideo() {
     }
     // GET /models cannot establish support for Interactions video generation.
     // Never persist a misleading "connected" video capability based on this read-only probe.
-    const detail = `API anahtarı model metadata uç noktasına erişiyor: ${actualName}. Ancak video üretimi ve Interactions sözleşmesi doğrulanmadı. Ücretli video üretimi hazır kabul edilmeyecek.${!config.gemini.contractVerified ? " GEMINI_VIDEO_CONTRACT_VERIFIED=false." : ""}${config.gemini.costPerSecondUsd === null ? " GEMINI_VIDEO_COST_PER_SECOND_USD eksik." : ""}`;
+    const detail = `API anahtarı model metadata uç noktasına erişiyor: ${actualName}.${methodsDetail} Ancak video üretimi ve Interactions sözleşmesi doğrulanmadı. Ücretli video üretimi hazır kabul edilmeyecek.${!config.gemini.contractVerified ? " GEMINI_VIDEO_CONTRACT_VERIFIED=false." : ""}${config.gemini.costPerSecondUsd === null ? " GEMINI_VIDEO_COST_PER_SECOND_USD eksik." : ""}`;
     await upsertConnection("video_generation", null, { status: "not_connected", lastError: detail });
     return { ok: false, detail };
   } catch (err) {
