@@ -53,6 +53,39 @@ Video seçimi → Analiz kapısı → Doğrulanmış sahneler → Kurgu planı (
    - Ret → revizyon (not, uzmana geri bildirim olur) → yeni sürüm → yeni render → onay. Geçmiş değiştirilemez.
    - Otomatik yayın yoktur.
 
+## AI video üretimi (Gemini, `generate_new`)
+
+`src/lib/adapters/video-generation.ts` → `generateVideo`/`pollVideo` (`src/lib/orchestrator/render.ts`).
+
+1. **Gönderim öncesi kapılar** (hiçbiri geçmezse sağlayıcıya istek gitmez):
+   - Ayarlar'da ücretli AI medya üretimi açık (sahip izni) ve bağlantı hazır;
+   - proje AI video saniye sınırı (`maxVideoGenSeconds`);
+   - **birim fiyat tanımlı** (`GEMINI_VIDEO_COST_PER_SECOND_USD`); bilinmiyorsa bütçe sınırı kapalı olsa bile gönderilmez;
+   - görev/günlük/sağlayıcı bütçesi (`assertBudget`).
+2. **İdempotentlik.** `provider_jobs.idempotency_key = vid:<sürüm>:<video>`; tekrar işleme, işleyici değişimi ve yeniden deneme yeni gönderim yapmaz. Ağ hatasıyla belirsiz kalan gönderim `unknown` olur, otomatik tekrar edilmez.
+3. **Kalite kapısı** (indirilen dosya, `generatedVideoIssues`):
+   - ffprobe: video akışı, süre (istenen ±1 sn), yön (9:16 dikey), kısa kenar ≥ 720 px;
+   - baştan sona hatasız çözme (`assertDecodes`);
+   - **duyulabilir ses**: ses akışı var ve ortalama seviye ≥ −50 dB (`volumedetect`).
+   - Kapıdan geçmeyen dosya arşive kaydedilir (ücreti ödenmiş olabilir) ama sürüme bağlanmaz; onay "MP4 yok" hatasıyla reddedilir. Tekrar işlemede de bağlanmaz ve yeniden gönderilmez.
+4. **Köken.** Referans ürün fotoğrafları `media_lineage` ile, ürün kimliği `product_id` ile kaydedilir.
+
+### Sağlayıcı sözleşmesi: doğrulanmamış noktalar
+
+Bu depoda ve CI'da gerçek Gemini çağrısı yapılmadı. Bu nedenle aşağıdakiler **doğrulanmamış varsayımdır**. İlk ücretli pilotta (sahip onayıyla) kontrol edilmelidir:
+
+- `GEMINI_VIDEO_MODEL` (varsayılan `gemini-omni-1.1-flash`) modelinin Interactions API üzerinden video üretip üretmediği. Ücretsiz kontrol: `GET /v1beta/models/<model>` (Entegrasyonlar → test). Bu yalnızca erişimi gösterir, video yeteneğini göstermez.
+- `response_format.duration` biçimi (`"6s"`), izin verilen süreler (adaptör 3–10 sn varsayar), `resolution: "720p"`.
+- Görsel girdi biçimi (`{ type: "image", data, mime_type }`) ve 1 / 2–3 fotoğrafın ilk kare / referans olarak yorumlanması.
+- Çıktıda ses olup olmadığı. Ses yoksa kalite kapısı videoyu reddeder.
+- Saniye fiyatı: sahip resmî fiyat sayfasından doğrulayıp tanımlamalıdır.
+
+### FriBee pilot ve final
+
+- **6–8 sn pilot:** tek üretim isteğiyle yapılabilir (sağlayıcı sınırı varsayımı 3–10 sn).
+- **15 sn final:** tek istekle yapılamaz (`omniDuration(15) = 10`). İki üretim ve ffmpeg birleştirme gerekir. Bu birleştirme henüz yok. Mevcut kurgu hattı sesi bilinçli olarak kaldırır; sesli final için ses korunarak birleştirme eklenmelidir.
+- **Ürün sınıflandırması:** bu depoda baskı/koleksiyon sınıflandırması yoktur ("Music mandala", "Space Alien" geçmez). Referans fotoğraflar yalnızca planda açıkça seçilen `selected_asset_ids` ile gönderilir. Doğru baskı sahip tarafından seçilmelidir; sistem baskı adı tahmin etmez.
+
 ## Ayarlar
 
 | Ayar | Varsayılan | Not |
@@ -83,7 +116,7 @@ Karşılaştırma: önceki tek aşamalı hatta 5 bölümlük geçişli kurgu ffm
 ## Bilinen sınırlamalar
 
 - ffmpeg sahne skoru ağırlıklı olarak parlaklık farkına dayanır. Parlaklığı benzer iki farklı renkli sahne arasındaki kesme kaçırılabilir; iki sahne tek sahne sayılır. Plan yine o sahnenin içinde kalır, uydurma sahne üretilmez.
-- Ses korunmaz (bilinçli sessiz çıktı); müzik ve seslendirme eklenmez.
+- ffmpeg kurgusunda ses korunmaz (bilinçli sessiz çıktı); müzik ve seslendirme eklenmez. AI üretiminde ses korunur ve zorunludur.
 - En fazla 12 bölüm.
 - Docker imajındaki ffmpeg 5.1'dir; testler ffmpeg 6.1 ile yapıldı. Kullanılan filtre ve seçenekler (xfade, subtitles, concat demuxer, `-filter_complex_threads`, `-x264-params`) 5.1'de mevcuttur, ancak 5.1 ile çalıştırılmadı.
 - Gerçek FriBee videosu bu ortamda test edilmedi (erişim ve yetki yok). Kabul testi aynı özelliklerde (14,68 sn, 1080x1920, sesli) sentetik bir MP4 kullanır.

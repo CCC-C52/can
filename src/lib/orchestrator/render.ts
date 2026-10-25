@@ -4,10 +4,10 @@ import path from "node:path";
 import { q1 } from "@/lib/db/pool";
 import { composeDesign } from "@/lib/adapters/compose";
 import { renderEdit, type EditClip } from "@/lib/adapters/video-edit";
-import { FfmpegError } from "@/lib/adapters/ffmpeg";
+import { assertDecodes, FfmpegError } from "@/lib/adapters/ffmpeg";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
-import { getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
+import { generatedVideoIssues, getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
 import { assertTool } from "@/lib/agents/registry";
 import { PermanentError, TransientError } from "@/lib/models/types";
@@ -15,7 +15,7 @@ import { capabilityReady } from "@/lib/services/connections";
 import { assertBudget, recordCost } from "@/lib/services/costs";
 import { getMedia, readMediaFile, saveDerivedAsset, type MediaAsset } from "@/lib/services/media";
 import { claimJob, discardJob, updateJob, type ProviderJob } from "@/lib/services/provider-jobs";
-import { probeVideo, extractFrame } from "@/lib/media-analysis/video";
+import { audioLevels, probeVideo, extractFrame } from "@/lib/media-analysis/video";
 import { getStorage } from "@/lib/storage";
 import type { Limits } from "@/lib/settings";
 import type { Task } from "./projects";
@@ -166,7 +166,9 @@ async function generateImage(ctx: RenderCtx, b: any, o: RenderOutcome) {
 }
 
 function reportExisting(job: ProviderJob, ref: string, o: RenderOutcome) {
-  if (job.status === "succeeded" && job.result_asset_id) o.produced.push(job.result_asset_id);
+  const issues: string[] = Array.isArray(job.response?.quality_issues) ? job.response.quality_issues : [];
+  if (job.status === "succeeded" && job.result_asset_id && issues.length) o.failed.push(`${ref}: AI video kalite kapısından geçmedi (${issues.join("; ")}); yeniden üretim sahibin kararıdır`);
+  else if (job.status === "succeeded" && job.result_asset_id) o.produced.push(job.result_asset_id);
   else if (job.status === "failed") o.failed.push(`${ref}: önceki gönderim başarısız oldu (${job.error ?? "neden yok"}); yeniden göndermek sahibin kararıdır`);
   else if (job.status === "unknown") o.uncertain.push(`${ref}: önceki ücretli gönderimin sonucu bilinmiyor; otomatik tekrar gönderilmedi`);
   else if (job.status === "submitting") o.uncertain.push(`${ref}: gönderim yarıda kalmış görünüyor; çift ücret riskine karşı tekrar gönderilmedi`);
@@ -320,16 +322,23 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       return;
     }
     // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur)
+    // Birim fiyat bilinmeden ücretli video gönderilmez (bütçe sınırı ayarlı olmasa bile)
+    const est = gen.estimateCostUsd(seconds);
+    if (est === null) { o.waiting.push(`${vid.id}: AI video maliyeti bilinmiyor (GEMINI_VIDEO_COST_PER_SECOND_USD tanımlı değil); sahip fiyatı doğrulayıp tanımlamalı`); return; }
     const images: { base64: string; mimeType: string }[] = [];
+    const refs: MediaAsset[] = [];
     for (const id of vid.selected_asset_ids ?? []) {
       if (images.length >= MAX_REFERENCE_IMAGES) break;
       const m = await getMedia(task.brand_id, id);
-      if (m && m.kind === "photo" && RASTER.has(m.mime_type)) images.push({ base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type });
+      if (m && m.kind === "photo" && RASTER.has(m.mime_type)) {
+        images.push({ base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type });
+        refs.push(m);
+      }
     }
-    const est = gen.estimateCostUsd(seconds);
     const prompt = clean(vid.generation_prompt);
     const { job, created } = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "video_generation", itemRef: vid.id, key, estimateUsd: est,
-      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length } });
+      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length,
+        reference_asset_ids: refs.map((m) => m.id), product_id: refs.find((m) => m.product_id)?.product_id ?? null } });
     if (!created) { reportExisting(job, vid.id, o); return; }
     try {
       await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
@@ -395,21 +404,41 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
     } catch (err) {
       throw new PermanentError(`İndirilen dosya geçerli bir video değil: ${(err as Error).message}`);
     }
+    // Kalite kapısı: baştan sona çözme, istenen süre/yön/çözünürlük, duyulabilir ses
+    const decoded = await assertDecodes(file).then(() => true, (err) => { if (err instanceof FfmpegError) return false; throw err; });
+    const levels = probe.has_audio ? await audioLevels(file).catch(() => ({ mean_db: null, max_db: null })) : { mean_db: null, max_db: null };
+    const params = job.request?.parameters ?? {};
+    const issues = generatedVideoIssues({ probe, decoded, audioMeanDb: levels.mean_db }, {
+      durationS: Number(params.durationSeconds ?? vid.duration_s), aspectRatio: omniAspect(params.aspectRatio ?? vid.format), requireAudio: true,
+    });
+    const refIds: string[] = Array.isArray(job.request?.reference_asset_ids) ? job.request.reference_asset_ids : [];
     const est = job.cost_estimated_usd === null ? null : Number(job.cost_estimated_usd);
     const asset = await saveDerivedAsset(task.brand_id, {
-      buffer: buf, filename: `${vid.id}-ai.mp4`, origin: "ai_generated", generationMethod: `ai_video:${gen.model}`, sourceAssetIds: [],
-      productId: null, taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" }],
+      buffer: buf, filename: `${vid.id}-ai.mp4`, origin: "ai_generated", generationMethod: `ai_video:${gen.model}`, sourceAssetIds: refIds,
+      productId: job.request?.product_id ?? null, taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" }, ...(issues.length ? [{ tag: "kalite kapısından geçmedi", source: "system" as const }] : [])],
     });
     const thumb = await saveDerivedAsset(task.brand_id, {
       buffer: await extractFrame(file, Math.min(1, probe.duration / 2), probe.display_width), filename: `${vid.id}-ai-kapak.jpg`, origin: "ai_generated",
       generationMethod: "ffmpeg_thumbnail", sourceAssetIds: [asset.id], taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video kapak karesi", source: "system" }],
     });
-    // Ses varsa korunur (dosya olduğu gibi saklanır); kayıtta yalnızca var/yok bilgisi tutulur
-    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio } });
+    // Dosya olduğu gibi saklanır (ücreti ödenmiş olabilir); kayıtta yalnızca ölçümler tutulur
+    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: {
+      video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, video_codec: probe.video_codec, has_audio: probe.has_audio,
+      audio_mean_db: levels.mean_db, decoded, quality_issues: issues,
+    } });
     await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, providerJobId: job.id, note: "Yapılandırılmış saniye fiyatı; sağlayıcı faturasıyla doğrulanmadı" });
+    if (issues.length) {
+      // Sürüme bağlanmaz: onay kapısı doğrulanmış MP4 bulamaz, sahip dosyayı arşivde inceleyebilir
+      o.failed.push(`${vid.id}: AI video kalite kapısından geçmedi (${issues.join("; ")}); dosya arşivde: ${asset.id}`);
+      return;
+    }
     o.produced.push(asset.id, thumb.id);
+    o.artifacts.push({
+      ref: vid.id, asset_id: asset.id, codec: probe.video_codec, width: probe.width, height: probe.height, duration_s: probe.duration,
+      bytes: buf.length, segments: 1, sources: refIds.length, decoded, audio: `var (ortalama ${levels.mean_db} dB)`,
+    });
   } catch (err) {
     if (err instanceof TransientError) { o.inProgress.push(`${vid.id}: indirme geçici hata verdi, tekrar denenecek`); return; }
     await updateJob(job.id, { status: "failed", error: (err as Error).message });

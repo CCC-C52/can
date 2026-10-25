@@ -83,6 +83,37 @@ function inputFor(prompt: string, images: VideoGenImage[]) {
   ];
 }
 
+/** Üretilen videonun kalite kapısı için ölçümler (ffprobe + baştan sona çözme + volumedetect). */
+export type GeneratedVideoCheck = {
+  probe: { duration: number; display_width: number; display_height: number; video_codec: string | null; has_audio: boolean };
+  decoded: boolean;
+  audioMeanDb: number | null;
+};
+/** Duyulabilir ses için en düşük ortalama seviye (analiz hattındaki "sessiz" eşiğiyle aynı). */
+export const AUDIBLE_MEAN_DB = -50;
+/** Sağlayıcının süre yuvarlaması için tolerans (sn). Gerçek davranış ilk ücretli çağrıda doğrulanmalıdır. */
+export const GENERATED_DURATION_TOLERANCE_S = 1;
+
+/**
+ * AI video kalite kapısı. Sorun listesi döner; boşsa video onaya sunulabilir.
+ * Kapıdan geçmeyen dosya (ücreti ödenmiş olabilir) arşivde saklanır ama sürüme bağlanmaz; onay engellenir.
+ */
+export function generatedVideoIssues(c: GeneratedVideoCheck, want: { durationS: number; aspectRatio: "9:16" | "16:9"; requireAudio: boolean }): string[] {
+  const issues: string[] = [];
+  const { probe } = c;
+  if (!c.decoded) issues.push("dosya baştan sona hatasız çözülemedi");
+  if (!probe.video_codec) issues.push("video akışı yok");
+  if (Math.abs(probe.duration - want.durationS) > GENERATED_DURATION_TOLERANCE_S) issues.push(`süre ${probe.duration} sn, istenen ${want.durationS} sn`);
+  const portrait = probe.display_height > probe.display_width;
+  if ((want.aspectRatio === "9:16") !== portrait) issues.push(`yön uyuşmuyor (${probe.display_width}x${probe.display_height}, istenen ${want.aspectRatio})`);
+  if (Math.min(probe.display_width, probe.display_height) < 720) issues.push(`çözünürlük düşük (${probe.display_width}x${probe.display_height}, en az 720p)`);
+  if (want.requireAudio) {
+    if (!probe.has_audio) issues.push("ses akışı yok");
+    else if (c.audioMeanDb === null || c.audioMeanDb < AUDIBLE_MEAN_DB) issues.push(`ses duyulmuyor (ortalama ${c.audioMeanDb ?? "?"} dB)`);
+  }
+  return issues;
+}
+
 const ID = /^[\w.-]+$/;
 const FAILED = new Set(["failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"]);
 

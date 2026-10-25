@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { GeminiOmniVideoGenerator, VeoGenerator, getVideoGenerator, omniAspect, omniDuration, testGeminiOmniVideo, testVeo, veoDuration } from "@/lib/adapters/video-generation";
+import { GeminiOmniVideoGenerator, OMNI_MAX_SECONDS, VeoGenerator, generatedVideoIssues, getVideoGenerator, omniAspect, omniDuration, testGeminiOmniVideo, testVeo, veoDuration } from "@/lib/adapters/video-generation";
 import { config } from "@/lib/config";
 import { OpenAIImageGenerator } from "@/lib/adapters/images";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
@@ -17,6 +17,30 @@ const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { sta
 afterEach(() => {
   vi.unstubAllGlobals();
   for (const k of ["OPENAI_API_KEY", "GEMINI_API_KEY", "GEMINI_VIDEO_MODEL", "GEMINI_VIDEO_COST_PER_SECOND_USD", "VEO_MODEL", "VEO_COST_PER_SECOND_USD"]) delete process.env[k];
+});
+
+describe("AI video kalite kapısı (generatedVideoIssues)", () => {
+  const ok = { probe: { duration: 6.02, display_width: 720, display_height: 1280, video_codec: "h264", has_audio: true }, decoded: true, audioMeanDb: -21 };
+  const pilot = { durationS: 6, aspectRatio: "9:16" as const, requireAudio: true };
+
+  it("6 sn 720p dikey, çözülebilir, duyulabilir sesli pilot geçer", () => {
+    expect(generatedVideoIssues(ok, pilot)).toEqual([]);
+  });
+
+  it("çözülemeyen, kısa, yanlış yönlü, düşük çözünürlüklü, sessiz video reddedilir", () => {
+    expect(generatedVideoIssues({ ...ok, decoded: false }, pilot)).toEqual([expect.stringMatching(/çözülemedi/)]);
+    expect(generatedVideoIssues({ ...ok, probe: { ...ok.probe, duration: 2 } }, pilot)).toEqual([expect.stringMatching(/süre 2 sn, istenen 6/)]);
+    expect(generatedVideoIssues({ ...ok, probe: { ...ok.probe, display_width: 1280, display_height: 720 } }, pilot)).toEqual([expect.stringMatching(/yön uyuşmuyor/)]);
+    expect(generatedVideoIssues({ ...ok, probe: { ...ok.probe, display_width: 480, display_height: 854 } }, pilot)).toEqual([expect.stringMatching(/çözünürlük düşük/)]);
+    expect(generatedVideoIssues({ ...ok, probe: { ...ok.probe, has_audio: false }, audioMeanDb: null }, pilot)).toEqual(["ses akışı yok"]);
+    expect(generatedVideoIssues({ ...ok, audioMeanDb: -91 }, pilot)).toEqual([expect.stringMatching(/ses duyulmuyor/)]);
+    expect(generatedVideoIssues({ ...ok, probe: { ...ok.probe, has_audio: false } }, { ...pilot, requireAudio: false })).toEqual([]);
+  });
+
+  it("15 sn final tek üretimle istenemez: süre sağlayıcı sınırına (10 sn) kırpılır", () => {
+    expect(omniDuration(15)).toBe(OMNI_MAX_SECONDS);
+    expect([6, 7, 8].map(omniDuration)).toEqual([6, 7, 8]);
+  });
 });
 
 describe("Gemini Omni Flash video adaptörü — Interactions API (sahte sunucu)", () => {

@@ -83,7 +83,7 @@ export async function extractFrame(file: string, t: number, width = 768, timeout
   return stdout;
 }
 
-async function audioLevels(file: string, timeoutMs = 120_000) {
+export async function audioLevels(file: string, timeoutMs = 120_000) {
   const { stderr } = await execFileAsync(config.ffmpegPath, ["-hide_banner", "-nostats", ...SAFE_INPUT, "-i", file, "-vn", "-af", "volumedetect", "-f", "null", "-"], { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
   const mean = stderr.match(/mean_volume:\s*(-?[\d.]+) dB/);
   const max = stderr.match(/max_volume:\s*(-?[\d.]+) dB/);
