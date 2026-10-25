@@ -85,7 +85,7 @@ async function main() {
       await page.evaluate(() => {
         const form = document.querySelector<HTMLFormElement>('textarea#instruction')?.form;
         if (!form) throw new Error("Sohbet formu bulunamadı");
-        form.addEventListener("submit", event => {
+        form.addEventListener("submit", (event: Event) => {
           event.preventDefault();
           form.dataset.testSubmitted = "yes";
         }, { capture: true, once: true });
