@@ -254,7 +254,7 @@ export async function testGeminiOmniVideo() {
   try {
     await fetchJson(`${GEMINI_API}/v1beta/models/${encodeURIComponent(model)}`, { headers: { "x-goog-api-key": config.gemini.apiKey } });
     await upsertConnection("video_generation", null, { status: "connected", lastError: null });
-    return { ok: true, detail: `Model erişilebilir: ${model}${config.gemini.costPerSecondUsd === null ? " (GEMINI_VIDEO_COST_PER_SECOND_USD tanımlı değil: maliyet bilinmediği için üretim engellenir)" : ""}` };
+    return { ok: true, detail: `Model adresi erişilebilir: ${model}. Bu test VIDEO ÜRETİMİNİ, modelin video yeteneğini veya Interactions API istek sözleşmesini DOĞRULAMAZ; başarı yalnızca GET /models erişimini gösterir.${!config.gemini.contractVerified ? " GEMINI_VIDEO_CONTRACT_VERIFIED=false: gerçek ücretli üretim bilinçli olarak engellenir." : ""}${config.gemini.costPerSecondUsd === null ? " GEMINI_VIDEO_COST_PER_SECOND_USD tanımlı değil: maliyet bilinmediği için üretim engellenir." : ""}` };
   } catch (err) {
     await upsertConnection("video_generation", null, { status: "error", lastError: (err as Error).message });
     return { ok: false, detail: (err as Error).message };
