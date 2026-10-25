@@ -39,9 +39,14 @@ export type VideoGenPoll =
   | { state: "succeeded"; videoUri: string }
   | { state: "failed"; error: string; filtered?: boolean };
 
+export const CONTRACT_UNVERIFIED =
+  "Gemini video model/istek sözleşmesi doğrulanmadı (GEMINI_VIDEO_CONTRACT_VERIFIED=true sahip tarafından, model ve istek biçimi resmî belgeyle teyit edildikten sonra ayarlanmalı); ücretli gönderim yapılmadı";
+
 export interface VideoGenerator {
   readonly service: string;
   readonly model: string;
+  /** false: model adı/istek biçimi teyit edilmedi — ücretli gönderim yapılmaz. Tanımsız: test/sahte sağlayıcı. */
+  readonly contractVerified?: boolean;
   estimateCostUsd(durationS: number): number | null;
   submit(req: VideoGenRequest): Promise<{ externalId: string; request: Record<string, unknown> }>;
   poll(externalId: string): Promise<VideoGenPoll>;
@@ -88,7 +93,7 @@ const FAILED = new Set(["failed", "cancelled", "incomplete", "budget_exceeded", 
 
 export class GeminiOmniVideoGenerator implements VideoGenerator {
   readonly service = "video_generation";
-  constructor(private apiKey: string, readonly model: string, private costPerSecond: number | null) {}
+  constructor(private apiKey: string, readonly model: string, private costPerSecond: number | null, readonly contractVerified = false) {}
 
   estimateCostUsd(durationS: number) {
     return this.costPerSecond === null ? null : Math.round(this.costPerSecond * omniDuration(durationS) * 1e6) / 1e6;
@@ -238,7 +243,7 @@ export function setVideoGeneratorOverride(g: VideoGenerator | null | undefined) 
 export function getVideoGenerator(): VideoGenerator | null {
   if (override !== undefined) return override;
   if (!config.gemini.apiKey) return null;
-  return new GeminiOmniVideoGenerator(config.gemini.apiKey, config.gemini.videoModel, config.gemini.costPerSecondUsd);
+  return new GeminiOmniVideoGenerator(config.gemini.apiKey, config.gemini.videoModel, config.gemini.costPerSecondUsd, config.gemini.contractVerified);
 }
 
 /** Bağlantı testi: yalnızca model erişimini okur (ücretsiz uç nokta); video üretmez. */

@@ -66,6 +66,11 @@ Video editing rules (mode "edit_existing"):
 - Describe visuals only as reported by the analysis (scene_summaries, colors, products_seen); if the analysis has no visual description, say so instead of guessing.
 - on_screen_text must be short, in the brand content language, and contain no unverified product claims.
 - If no analysed video fits, return no edit_existing video and explain in "unknowns".
+New AI video rules (mode "generate_new"; paid, runs only with owner permission):
+- selected_asset_ids: 1-3 REAL product photos (origin real_photo) of ONE product; every photo must be linked to that product. Never pick a photo by file name alone.
+- product_theme: the print theme recorded on those photos (e.g. "space_alien", "music"). A mandala print belongs to "music"; never mix themes. If unknown, leave empty and say so in "unknowns".
+- duration_s: 6-8 for a pilot. A 15 second master is only possible after an approved, verified pilot; do not plan it otherwise.
+- generation_prompt describes camera, light and motion only; never describe or invent the print, logo or text on the product.
 
 ${SHARED_RULES}`;
   }

@@ -4,10 +4,11 @@ import path from "node:path";
 import { q1 } from "@/lib/db/pool";
 import { composeDesign } from "@/lib/adapters/compose";
 import { renderEdit, type EditClip } from "@/lib/adapters/video-edit";
-import { FfmpegError } from "@/lib/adapters/ffmpeg";
+import { assertDecodes, FfmpegError } from "@/lib/adapters/ffmpeg";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
-import { getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
+import { CONTRACT_UNVERIFIED, getVideoGenerator, MAX_REFERENCE_IMAGES, OMNI_MAX_SECONDS, omniAspect, videoGenMode } from "@/lib/adapters/video-generation";
+import { premiumStage, verifyMp4, verifyReferences } from "@/lib/video/premium";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
 import { assertTool } from "@/lib/agents/registry";
 import { PermanentError, TransientError } from "@/lib/models/types";
@@ -309,7 +310,13 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     const blocked = await paidAllowed(ctx, "video_generation");
     if (blocked || !gen) { o.waiting.push(`${vid.id}: AI video üretimi — ${blocked ?? "sağlayıcı yapılandırılmamış"}`); return; }
     assertTool("video", "video.generate");
-    const seconds = omniDuration(vid.duration_s);
+    // Sözleşme doğrulanmamışsa (gerçek model/istek biçimi sahipçe teyit edilmedi) ücretli gönderim yapılmaz
+    if (gen.contractVerified === false) { o.waiting.push(`${vid.id}: AI video — ${CONTRACT_UNVERIFIED}`); return; }
+    // Süre sessizce kırpılmaz: 6–8 sn pilot tek çekim; 15 sn master çok çekim + onaylı pilot gerektirir
+    const stage = premiumStage(vid.duration_s, OMNI_MAX_SECONDS, null);
+    // (Master için pilot onayı ve çok çekim birleştirme henüz bağlanmadı: pilot=null ile 15 sn her zaman reddedilir.)
+    if (!stage.ok) { o.failed.push(`${vid.id}: ${stage.reason}`); return; }
+    const seconds = stage.shots[0];
     const used = await q1<{ s: number }>(
       `SELECT COALESCE(SUM((request->'parameters'->>'durationSeconds')::numeric), 0)::float AS s FROM provider_jobs
        WHERE project_id = $1 AND kind = 'video_generation' AND status NOT IN ('failed','cancelled')`,
@@ -319,17 +326,28 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       o.waiting.push(`${vid.id}: proje AI video sınırı (${ctx.limits.maxVideoGenSeconds} sn) aşılacak; Ayarlar'dan sahip artırabilir`);
       return;
     }
-    // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur)
+    // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur).
+    // Doğrulanamayan referans sessizce düşürülmez: öğe reddedilir (aksi halde metinden video ürünü uydurabilir).
+    const requested: string[] = (vid.selected_asset_ids ?? []).map(String);
+    if (requested.length > MAX_REFERENCE_IMAGES) { o.failed.push(`${vid.id}: en fazla ${MAX_REFERENCE_IMAGES} referans fotoğraf gönderilebilir (${requested.length} seçildi)`); return; }
+    const found = new Map<string, MediaAsset | null>();
+    for (const id of requested) found.set(id, await getMedia(task.brand_id, id)); // marka kapsamı
+    const productIds = new Set([...found.values()].map((m) => m?.product_id ?? null));
+    const productId = productIds.size === 1 ? [...productIds][0] : null; // tüm referanslar aynı ürüne ait olmalı
+    const refs = verifyReferences(requested, found, { productId, theme: clean(vid.product_theme).trim() || null });
+    if (refs.rejected.length) {
+      o.failed.push(`${vid.id}: doğrulanmamış ürün referansı — ${refs.rejected.map((r) => `${r.id}: ${r.reason}`).join("; ")}`.slice(0, 600));
+      return;
+    }
     const images: { base64: string; mimeType: string }[] = [];
-    for (const id of vid.selected_asset_ids ?? []) {
-      if (images.length >= MAX_REFERENCE_IMAGES) break;
-      const m = await getMedia(task.brand_id, id);
-      if (m && m.kind === "photo" && RASTER.has(m.mime_type)) images.push({ base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type });
+    for (const id of refs.accepted) {
+      const m = found.get(id)!;
+      images.push({ base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type }); // özgün dosya yalnızca okunur
     }
     const est = gen.estimateCostUsd(seconds);
     const prompt = clean(vid.generation_prompt);
     const { job, created } = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "video_generation", itemRef: vid.id, key, estimateUsd: est,
-      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length } });
+      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length, reference_asset_ids: refs.accepted, product_id: productId, stage: stage.stage } });
     if (!created) { reportExisting(job, vid.id, o); return; }
     try {
       await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
@@ -391,15 +409,31 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
     let probe;
     try {
       probe = await probeVideo(file);
-      if (!(probe.duration > 0.5) || !probe.width || !probe.height) throw new Error("süre/boyut geçersiz");
     } catch (err) {
       throw new PermanentError(`İndirilen dosya geçerli bir video değil: ${(err as Error).message}`);
     }
     const est = job.cost_estimated_usd === null ? null : Number(job.cost_estimated_usd);
+    // MP4 kalite kapısı: kapsayıcı, kodek, süre ve en-boy; ses yalnızca raporlanır (sağlayıcı sesi garanti etmez)
+    const params = job.request?.parameters ?? {};
+    const check = verifyMp4(buf, probe, { durationS: Number(params.durationSeconds ?? vid.duration_s), aspectRatio: params.aspectRatio === "16:9" ? "16:9" : "9:16" });
+    if (check.ok) {
+      // Tam çözme: başlık doğru olsa da bozuk kareler oynatmada hata verir
+      try { await assertDecodes(file); } catch (err) { if (!(err instanceof FfmpegError)) throw err; check.ok = false; check.problems.push(`tam çözme başarısız: ${err.message}`); }
+    }
+    if (!check.ok) {
+      // Sağlayıcı ücret almış olabilir: kayıt korunur, otomatik tekrar gönderilmez
+      await updateJob(job.id, { status: "failed", error: `MP4 doğrulaması başarısız: ${check.problems.join("; ")}`, cost_actual_usd: est, response: { video_uri: uri, mp4: check.metadata, verified: false } });
+      await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, providerJobId: job.id, note: "Video üretildi ancak doğrulamadan geçmedi; ücret alınmış olabilir" });
+      o.failed.push(`${vid.id}: MP4 doğrulaması başarısız — ${check.problems.join("; ")}`);
+      return;
+    }
+    const refIds: string[] = Array.isArray(job.request?.reference_asset_ids) ? job.request.reference_asset_ids.map(String) : [];
     const asset = await saveDerivedAsset(task.brand_id, {
-      buffer: buf, filename: `${vid.id}-ai.mp4`, origin: "ai_generated", generationMethod: `ai_video:${gen.model}`, sourceAssetIds: [],
-      productId: null, taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" }],
+      buffer: buf, filename: `${vid.id}-ai.mp4`, origin: "ai_generated", generationMethod: `ai_video:${gen.model}`, sourceAssetIds: refIds,
+      productId: job.request?.product_id ?? null, taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" },
+        ...(refIds.length ? [{ tag: "gerçek ürün fotoğrafı referanslı", source: "system" }] : []),
+        ...(job.request?.stage ? [{ tag: `aşama:${job.request.stage}`, source: "system" }] : [])],
     });
     const thumb = await saveDerivedAsset(task.brand_id, {
       buffer: await extractFrame(file, Math.min(1, probe.duration / 2), probe.display_width), filename: `${vid.id}-ai-kapak.jpg`, origin: "ai_generated",
@@ -407,9 +441,13 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video kapak karesi", source: "system" }],
     });
     // Ses varsa korunur (dosya olduğu gibi saklanır); kayıtta yalnızca var/yok bilgisi tutulur
-    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio } });
+    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio, mp4: check.metadata, verified: true } });
     await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, providerJobId: job.id, note: "Yapılandırılmış saniye fiyatı; sağlayıcı faturasıyla doğrulanmadı" });
     o.produced.push(asset.id, thumb.id);
+    o.artifacts.push({
+      ref: vid.id, asset_id: asset.id, codec: check.metadata.codec, width: check.metadata.width, height: check.metadata.height, duration_s: check.metadata.duration_s,
+      bytes: buf.length, segments: 1, sources: refIds.length, decoded: true, audio: probe.has_audio ? `var (${probe.audio_codec ?? "?"})` : "yok (sağlayıcı ses üretmedi)",
+    });
   } catch (err) {
     if (err instanceof TransientError) { o.inProgress.push(`${vid.id}: indirme geçici hata verdi, tekrar denenecek`); return; }
     await updateJob(job.id, { status: "failed", error: (err as Error).message });

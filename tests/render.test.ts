@@ -60,6 +60,7 @@ const videoPlan: Plan = { reply: "plan", goals: ["g"], questions_for_owner: [], 
 
 let brandId: string;
 let photoId: string;
+let productId: string;
 let otherBrandPhotoId: string;
 let clipIds: string[];
 
@@ -68,6 +69,7 @@ beforeAll(async () => {
   brandId = b.id;
   await q(`UPDATE brands SET colors = $2 WHERE id = $1`, [brandId, JSON.stringify([{ name: "primary", hex: "#7c2d12" }, { name: "bg", hex: "#f5efe6" }])]);
   const p = await createProduct(brandId, { title: "Render Shirt", price: "50", currency: "USD" });
+  productId = p.id;
   photoId = (await uploadMedia(brandId, { buffer: await productPhoto("#2563eb"), filename: "shirt.jpg" }, { productId: p.id })).asset.id;
   const logo = await sharp({ create: { width: 300, height: 100, channels: 4, background: "#111111" } }).png().toBuffer();
   await uploadMedia(brandId, { buffer: logo, filename: "logo.png" }, { kind: "logo" });
@@ -264,7 +266,7 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     process.env.GEMINI_API_KEY = "test-key";
     await upsertConnection("video_generation", null, { status: "connected" });
     await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true });
-    const veo = new FakeVeo(await colorScenesVideo([{ color: "green", seconds: 2 }], { audio: true }));
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "green", seconds: 6 }], { audio: true }));
     setVideoGeneratorOverride(veo);
     setTextModelOverride(new ScriptedModel(videoPlan, { video: genVideo() }));
     const { project } = await submitInstruction({ brandId, instruction: "AI video", idempotencyKey: key() });
@@ -306,8 +308,11 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     const pr = await probeVideo(f);
     await fs.rm(dir, { recursive: true, force: true });
     expect(pr.has_audio).toBe(true);
-    expect(pr.duration).toBeGreaterThan(1.5);
-
+    expect(pr.duration).toBeGreaterThan(5);
+    // MP4 doğrulama meta verisi ve kaynak izlenebilirliği (gerçek ürün fotoğrafı referansı, ürün kimliği)
+    expect(job.response).toMatchObject({ verified: true, mp4: { container: "mp4", mime_type: "video/mp4", codec: "h264", has_audio: true } });
+    expect(job.request).toMatchObject({ reference_asset_ids: [photoId], product_id: productId, stage: "pilot" });
+    expect(vidAsset.product_id).toBe(productId);
     // İdempotent tekrar: aynı iş yeniden işlense de sağlayıcıya ikinci kez gönderilmez
     await q(`UPDATE tasks SET status = 'ready', updated_at = now() WHERE id = $1`, [render.id]);
     await drive(new Engine("veo-w2b"));
@@ -336,8 +341,8 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     await upsertConnection("video_generation", null, { status: "connected" });
     await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true });
     const extra: string[] = [];
-    for (const c of ["#f97316", "#111827", "#f5f5f5"]) extra.push((await uploadMedia(brandId, { buffer: await productPhoto(c), filename: `ref-${c.slice(1)}.jpg` })).asset.id);
-    const veo = new FakeVeo(await colorScenesVideo([{ color: "orange", seconds: 2 }]), 0);
+    for (const c of ["#f97316", "#111827"]) extra.push((await uploadMedia(brandId, { buffer: await productPhoto(c), filename: `ref-${c.slice(1)}.jpg` }, { productId })).asset.id);
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "orange", seconds: 6 }]), 0);
     setVideoGeneratorOverride(veo);
     const plan = genVideo();
     plan.videos[0].selected_asset_ids = [photoId, ...extra];
@@ -381,6 +386,80 @@ describe("AI video üretimi (sahte Gemini Omni Video)", () => {
     expect(render.status).toBe("waiting_connection");
     expect(render.error).toMatch(/AI video sınırı/);
     expect(veo.submits).toHaveLength(0);
+  });
+
+  async function runGen(name: string, veo: VideoGenerator, edit: (v: any) => void) {
+    process.env.GEMINI_API_KEY = "test-key";
+    await upsertConnection("video_generation", null, { status: "connected" });
+    await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true });
+    setVideoGeneratorOverride(veo);
+    const plan = genVideo();
+    edit(plan.videos[0]);
+    setTextModelOverride(new ScriptedModel(videoPlan, { video: plan }));
+    const { project } = await submitInstruction({ brandId, instruction: name, idempotencyKey: key() });
+    await drive(new Engine(name));
+    const render = (await listTasks(brandId, { projectId: project.id })).find((t) => t.kind === "render")!;
+    return { render, jobs: await q<any>(`SELECT * FROM provider_jobs WHERE task_id = $1`, [render.id]) };
+  }
+
+  it("doğrulanmamış referans (ürünsüz fotoğraf) sessizce düşürülmez: öğe reddedilir, gönderim yapılmaz", async () => {
+    const loose = (await uploadMedia(brandId, { buffer: await productPhoto("#000000"), filename: "unknown-tee.jpg" })).asset.id;
+    const veo = new FakeVeo(Buffer.alloc(0));
+    const { render, jobs } = await runGen("gen-unverified", veo, (v) => { v.selected_asset_ids = [photoId, loose]; });
+    expect(veo.submits).toHaveLength(0);
+    expect(jobs).toHaveLength(0);
+    expect(render.error).toMatch(/doğrulanmamış ürün referansı/);
+  });
+
+  it("tema uyuşmazlığı: Space Alien planında mandala (Music) baskılı fotoğraf reddedilir", async () => {
+    const p = await createProduct(brandId, { title: "Black Oversized Tee", price: "40", currency: "USD" });
+    const alien = (await uploadMedia(brandId, { buffer: await productPhoto("#0a0a0a"), filename: "black-alien.jpg" }, { productId: p.id, themes: ["Space Alien"] })).asset.id;
+    const mandala = (await uploadMedia(brandId, { buffer: await productPhoto("#0b0b0b"), filename: "black-mandala.jpg" }, { productId: p.id, themes: ["mandala"] })).asset.id;
+    const veo = new FakeVeo(Buffer.alloc(0));
+    const { render, jobs } = await runGen("gen-theme", veo, (v) => { v.selected_asset_ids = [alien, mandala]; v.product_theme = "space_alien"; });
+    expect(veo.submits).toHaveLength(0);
+    expect(jobs).toHaveLength(0);
+    expect(render.error).toMatch(/tema uyuşmuyor \(music ≠ space_alien\)/);
+
+    const veo2 = new FakeVeo(await colorScenesVideo([{ color: "black", seconds: 7 }]), 0);
+    const ok = await runGen("gen-theme-ok", veo2, (v) => { v.selected_asset_ids = [alien]; v.product_theme = "Space Alien"; v.duration_s = 7; });
+    expect(veo2.submits).toHaveLength(1);
+    expect(ok.render.status).toBe("completed");
+    expect(ok.jobs[0].request).toMatchObject({ reference_asset_ids: [alien], product_id: p.id, stage: "pilot", parameters: { durationSeconds: 7 } });
+  });
+
+  it("15 sn master sessizce 10 sn'ye kırpılmaz; onaylı pilot olmadan gönderilmez", async () => {
+    const veo = new FakeVeo(Buffer.alloc(0));
+    const { render, jobs } = await runGen("gen-master", veo, (v) => { v.duration_s = 15; });
+    expect(veo.submits).toHaveLength(0);
+    expect(jobs).toHaveLength(0);
+    expect(render.error).toMatch(/pilot/);
+  });
+
+  it("sözleşmesi doğrulanmamış sağlayıcıya ücretli gönderim yapılmaz", async () => {
+    const veo = Object.assign(new FakeVeo(Buffer.alloc(0)), { contractVerified: false });
+    const { render, jobs } = await runGen("gen-contract", veo, () => {});
+    expect(veo.submits).toHaveLength(0);
+    expect(jobs).toHaveLength(0);
+    expect(render.status).toBe("waiting_connection");
+    expect(render.error).toMatch(/sözleşmesi doğrulanmadı/);
+  });
+
+  it("sadakat hatası: istenen süreyi/oranı tutmayan MP4 arşive alınmaz, iş başarısız olur ve tekrar gönderilmez", async () => {
+    const veo = new FakeVeo(await colorScenesVideo([{ color: "purple", seconds: 2 }], { size: "1280x720" }), 0);
+    const { render, jobs } = await runGen("gen-fidelity", veo, () => {});
+    expect(veo.submits).toHaveLength(1);
+    expect(jobs[0].status).toBe("failed");
+    expect(jobs[0].response).toMatchObject({ verified: false, mp4: { container: "mp4" } });
+    expect(jobs[0].error).toMatch(/süre .* beklenen 6 sn/);
+    expect(jobs[0].error).toMatch(/en-boy oranı beklenen 9:16/);
+    expect(render.error).toMatch(/MP4 doğrulaması başarısız/);
+    expect(await q1(`SELECT 1 FROM media_assets WHERE source_task_id = $1 AND kind = 'video'`, [render.id])).toBeNull();
+    const cost = await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM cost_entries WHERE provider_job_id = $1 AND kind = 'actual'`, [jobs[0].id]);
+    expect(cost!.n).toBe(1);
+    await q(`UPDATE tasks SET status = 'ready', updated_at = now() WHERE id = $1`, [render.id]);
+    await drive(new Engine("gen-fidelity-2"));
+    expect(veo.submits).toHaveLength(1);
   });
 
   it("gönderim sırasında yarıda kalan iş 'bilinmiyor' olur", async () => {
