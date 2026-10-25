@@ -3,7 +3,7 @@
 **Durum:** Ayrı geliştirme dalında; canlıya dağıtılmadı.
 
 ## Amaç
-AI Operations Studio içindeki projeleri, görevleri, video reklam taslaklarını, onayları ve medya analizlerini mevcut oturumla salt okunur incelemek.
+AI Operations Studio içindeki projeleri, görevleri, video reklam taslaklarının sınırlı önizlemelerini, onayları ve medya analizlerini mevcut oturumla salt okunur incelemek.
 
 ## Uç nokta
 `GET /api/management?section=projects|tasks|outputs|media`
@@ -22,3 +22,8 @@ AI Operations Studio içindeki projeleri, görevleri, video reklam taslakların�
 
 ## İşletim
 Mevcut veriler okunur; yeni video üretimi veya mevcut Space Alien görevinin yeniden çalıştırılması bu uç noktanın parçası değildir.
+
+## İnceleme notu
+- Güvenlik incelemesinde ham çıktı JSON aktarımı kaldırıldı. Video planı yalnızca özet, sahne görsel açıklaması, seslendirme, ekran yazısı, süre ve müzik notu gibi izinli alanları sunar; diğer ajanların ham çıktıları sunulmaz.
+- Metin alanları kullanıcı tarafından yazılmış gizli bilgileri içerebilir; bu yüzden API sadece oturumlu kullanım içindir ve üçüncü taraf bağlantılarına açılmamalıdır.
+- API yetkilendirme, marka izolasyonu ve veri sızıntısı testleri üretim öncesi zorunludur. İlk CI başarısı canlı erişim güvenliğini tek başına kanıtlamaz.
