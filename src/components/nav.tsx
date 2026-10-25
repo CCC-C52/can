@@ -41,6 +41,7 @@ export const NAV_GROUPS: { title: string; items: { href: string; label: string }
       { href: "/maliyet", label: "Maliyet Yönetimi" },
       { href: "/entegrasyonlar", label: "Entegrasyonlar" },
       { href: "/tanilama", label: "Sistem Durumu" },
+      { href: "/gelistirme", label: "AI Development Center" },
       { href: "/ayarlar", label: "Ayarlar ve geçmiş" },
     ],
   },
