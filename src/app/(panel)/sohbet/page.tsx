@@ -1,3 +1,4 @@
+import { ChatMessages, ChatInstructionInput } from "./chat-interactions";
 import Link from "next/link";
 import { requireBrand, flash, type SP } from "@/lib/current";
 import { chatHistory } from "@/lib/orchestrator/projects";
@@ -31,7 +32,7 @@ export default async function ChatPage({ searchParams }: { searchParams: SP }) {
       <div className="min-w-0 flex-1">
         <PageHeader title="Ana yönetici" subtitle={<>Talimatınızı yazın; yönetici görevlere ayırıp uzmanlara dağıtır. Marka: <strong>{brand.name}</strong> · {mode.mode === "demo" ? <DemoBadge /> : mode.mode === "off" ? <Badge tone="warn">AI bağlı değil</Badge> : <Badge tone="ok">Gerçek AI</Badge>}</>} actions={<AutoRefresh active={running} />} />
         <Flash ok={ok} err={err} />
-        <div tabIndex={0} className="card mb-4 max-h-[60vh] space-y-3 overflow-y-auto">
+        <ChatMessages latestMessageId={messages.at(-1)?.id ?? null}>
           {messages.length === 0 && <p className="muted">Henüz konuşma yok. Aşağıdan ilk talimatınızı verin.</p>}
           {messages.map((m) => (
             <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -47,11 +48,12 @@ export default async function ChatPage({ searchParams }: { searchParams: SP }) {
               </div>
             </div>
           ))}
-        </div>
+        </ChatMessages>
         <form action={sendInstructionAction} className="card space-y-2">
           <IdempotencyField />
           <label htmlFor="instruction" className="label">Talimat</label>
-          <textarea id="instruction" name="instruction" required rows={4} maxLength={8000} className="input" placeholder="Örn: Yeni ürün için lansman hazırla…" />
+          <ChatInstructionInput />
+          <p id="chat-keyboard-hint" className="text-xs text-muted">Enter: gönder · Shift + Enter: yeni satır</p>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted">Dış platformda yayın, mağaza güncellemesi, fiyat ve reklam işlemleri her zaman onayınızı bekler.</p>
             <SubmitButton pendingText="Gönderiliyor…">Gönder</SubmitButton>
