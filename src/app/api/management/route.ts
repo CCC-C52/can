@@ -7,6 +7,7 @@ import { listProjects, listTasks, getProject } from "@/lib/orchestrator/projects
 import { listOutputs, listVersions, listApprovals } from "@/lib/services/outputs";
 import { listMedia } from "@/lib/services/media";
 import { latestAnalysis, compactAnalysis } from "@/lib/media-analysis";
+import { publicOutputPreview } from "@/lib/services/management-preview";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,8 +71,8 @@ export async function GET(req: NextRequest) {
         return {
           id: o.id, projectId: o.project_id, title: o.title, agent: o.agent, kind: o.kind,
           currentVersion: o.current_version, updatedAt: o.updated_at,
-          latest: latest ? { id: latest.id, version: latest.version, content: latest.content,
-            qaReport: latest.qa_report, assetIds: latest.asset_ids, isDemo: latest.is_demo } : null,
+          latest: latest ? { id: latest.id, version: latest.version, preview: publicOutputPreview(o.agent, latest.content),
+            qaVerdict: typeof latest.qa_report?.verdict === "string" ? latest.qa_report.verdict : null, assetIds: latest.asset_ids, isDemo: latest.is_demo } : null,
           approvals: approvals.filter(a => !a.revoked_at).map(a => ({
             versionId: a.output_version_id, decision: a.decision, scopes: a.scopes, createdAt: a.created_at,
           })),
