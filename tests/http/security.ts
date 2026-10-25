@@ -145,8 +145,8 @@ async function main() {
       expect(r.status === 307 || r.status === 302, `durum ${r.status}`);
       expect((r.headers.get("location") ?? "").includes("/login"), "login'e gitmedi");
     });
-    await check("oturumsuz: yeni bölümler (hafıza, araştırma, maliyet, stüdyolar, kampanyalar) giriş ister", async () => {
-      for (const u of ["/hafiza", "/arastirma", "/maliyet", "/studyo/video", "/studyo/gorsel", "/projeler"]) {
+    await check("oturumsuz: yeni bölümler (hafıza, araştırma, maliyet, stüdyolar, kampanyalar, PR ajansı) giriş ister", async () => {
+      for (const u of ["/hafiza", "/arastirma", "/maliyet", "/studyo/video", "/studyo/gorsel", "/projeler", "/pr-ajansi"]) {
         const r = await fetch(BASE + u, { redirect: "manual" });
         expect((r.status === 307 || r.status === 302) && (r.headers.get("location") ?? "").includes("/login"), `${u} durum ${r.status}`);
       }
@@ -265,8 +265,8 @@ async function main() {
         expect(!(await page.content()).includes("B gizli strateji"), "B içeriği sızdı");
       });
     }
-    await check("A'nın Marka Hafızası ve Araştırma Merkezi'nde B kaydı görünmez", async () => {
-      for (const url of ["/hafiza", "/arastirma"]) {
+    await check("A'nın Marka Hafızası, Araştırma Merkezi ve PR Ajansı'nda B kaydı görünmez", async () => {
+      for (const url of ["/hafiza", "/arastirma", "/pr-ajansi"]) {
         await page.goto(BASE + url);
         const html = await page.content();
         for (const needle of ["B gizli hafıza", "B gizli sorgu", "B gizli kaynak", "b-secret.example", s.memB.id, s.srcB.id]) expect(!html.includes(needle), `${url} ${needle} içeriyor`);
