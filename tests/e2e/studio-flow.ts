@@ -75,6 +75,29 @@ async function main() {
       await page.waitForLoadState("networkidle");
     }
 
+    await step("AI Yönetici: Enter gönderir, Shift+Enter satır açar ve sohbet sona kayar", async () => {
+      await page.goto(`${BASE}/sohbet`);
+      const input = page.locator("#instruction");
+      await input.fill("Deneme");
+      await input.press("Shift+Enter");
+      expect((await input.inputValue()).includes("\\n"), "Shift+Enter yeni satır eklemedi");
+      await input.fill("Deneme gönderim");
+      await page.evaluate(() => {
+        const form = document.querySelector<HTMLFormElement>('textarea#instruction')?.form;
+        if (!form) throw new Error("Sohbet formu bulunamadı");
+        form.addEventListener("submit", event => {
+          event.preventDefault();
+          form.dataset.testSubmitted = "yes";
+        }, { capture: true, once: true });
+      });
+      await input.press("Enter");
+      expect(await page.locator('form:has(#instruction)').getAttribute("data-test-submitted") === "yes", "Enter form gönderimini tetiklemedi");
+      const log = page.getByRole("log", { name: "AI Yönetici konuşması" });
+      expect(await log.count() === 1, "Sohbet kaydırma alanı yok");
+      const atEnd = await log.evaluate(el => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 4);
+      expect(atEnd, "Sohbet son mesaja kaymadı");
+    });
+
     await step("Gezinme: tüm bölümler menüde ve açılıyor", async () => {
       await page.goto(`${BASE}/`);
       const labels = ["AI Yönetici", "AI Ekibi", "Marka Yönetimi", "Araştırma Merkezi", "Görsel Stüdyosu", "Video Stüdyosu", "Kampanya Yönetimi", "Sosyal Medya", "Analitik", "Entegrasyonlar", "Marka Hafızası", "Onay Merkezi", "Sistem Durumu", "Maliyet Yönetimi"];
