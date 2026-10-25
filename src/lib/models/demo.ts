@@ -393,6 +393,7 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
         summary: `${DEMO_TAG} ${analysed.length} analiz edilmiş videodan ${segments.length} doğrulanmış sahne bölümüyle ${total} sn'lik dikey kurgu planı.`,
         videos: [{
           id: "reel-1", mode: "edit_existing", format: "9:16", duration_s: total,
+          product_theme: "", // Demo edit has no verified product-print theme.
           selected_asset_ids: [...new Set(segments.map((sg) => sg.asset_id))],
           script, subtitles: [], generation_prompt: "", music_note: "Ses kaldırıldı; lisanslı müzik ekleme manuel.",
           transition: "cut", framing: "fit", intro_text: "", outro_text: "", segments,
@@ -414,6 +415,7 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
       {
         id: "reel-1",
         mode: "generate_new",
+        product_theme: "", // No verified product photo: only ambient, product-free b-roll.
         format: "9:16",
         duration_s: 8,
         selected_asset_ids: [],
