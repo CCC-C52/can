@@ -139,6 +139,7 @@ export const VideoPlanSchema = z.object({
       ),
       subtitles: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })),
       generation_prompt: z.string().describe("Yalnızca generate_new için; aksi halde boş"),
+      product_theme: z.string().describe("generate_new: referans fotoğrafların doğrulanmış baskı teması (ör. space_alien, music); bilinmiyorsa boş").default(""),
       music_note: z.string(),
       transition: z.enum(["cut", "fade"]).default("cut"),
       framing: z.enum(["fit", "fill"]).describe("fit: ürün kırpılmaz (kenar boşluklu); fill: kadrajı doldurur (kenarlar kırpılabilir)").default("fit"),

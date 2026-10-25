@@ -65,6 +65,11 @@ export const config = {
     get videoModel() { return str("GEMINI_VIDEO_MODEL") ?? "gemini-omni-1.1-flash"; },
     /** Eski ad (uyumluluk). */
     get veoModel() { return this.videoModel; },
+    /**
+     * Model adı ve Interactions API video istek biçimi (response_format.duration vb.) resmî belgeyle teyit edilmeden
+     * ücretli gönderim yapılmaz. Sahip teyit ettikten sonra "true" olarak ayarlar; varsayılan kapalı.
+     */
+    get contractVerified() { return str("GEMINI_VIDEO_CONTRACT_VERIFIED") === "true"; },
     get costPerSecondUsd(): number | null {
       const v = str("GEMINI_VIDEO_COST_PER_SECOND_USD");
       return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
