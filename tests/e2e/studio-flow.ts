@@ -80,7 +80,7 @@ async function main() {
       const input = page.locator("#instruction");
       await input.fill("Deneme");
       await input.press("Shift+Enter");
-      expect((await input.inputValue()).includes("\\n"), "Shift+Enter yeni satır eklemedi");
+      expect((await input.inputValue()).includes("\n"), "Shift+Enter yeni satır eklemedi");
       await input.fill("Deneme gönderim");
       await page.evaluate(() => {
         const form = document.querySelector<HTMLFormElement>('textarea#instruction')?.form;
