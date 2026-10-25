@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { q, q1 } from "@/lib/db/pool";
-import { Engine, resolveVideoTargets, sanitizePlan, isVideoAnalysisOnlyTask } from "@/lib/orchestrator/engine";
+import { Engine, resolveVideoTargets, sanitizePlan, isVideoAnalysisOnlyTask, effectiveTimeoutMs, FAILURE_ACTION } from "@/lib/orchestrator/engine";
 import { submitInstruction, listTasks, requestRegeneration } from "@/lib/orchestrator/projects";
 import { createBrand } from "@/lib/services/brands";
 import { uploadMedia, getMedia } from "@/lib/services/media";
@@ -295,5 +295,18 @@ describe("Video hattı — birimler", () => {
       expect((await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM tasks WHERE project_id = $1`, [project.id]))!.n).toBeGreaterThan(0);
     }
     await setSetting("vision_on_upload", true);
+  });
+});
+
+describe("Video timeout and retry safety policy", () => {
+  it("keeps specialist video planning on task timeout and render on its own budget", () => {
+    const limits = { taskTimeoutMs: 180_000, renderTimeoutMs: 600_000 } as Parameters<typeof effectiveTimeoutMs>[1];
+    expect(effectiveTimeoutMs({ kind: "generate" }, limits)).toBe(180_000);
+    expect(effectiveTimeoutMs({ kind: "render" }, limits)).toBe(600_000);
+  });
+
+  it("does not recommend blind retry after a video timeout or uncertain paid submit", () => {
+    expect(FAILURE_ACTION.timeout.action).toContain("sağlayıcı iş durumunu inceleyin");
+    expect(FAILURE_ACTION.uncertain.blocks).toBe(true);
   });
 });
