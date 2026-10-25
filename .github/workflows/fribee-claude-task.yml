@@ -36,11 +36,19 @@ jobs:
             exit 1
           fi
       - name: Run Claude Code with owner review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          trigger_phrase: "@claude"
+          # Match the owner's issue label; default is "claude", not "claude-task".
+          label_trigger: "claude-task"
+          track_progress: "true"
+          # Explicitly allow source inspection/editing and bounded, local test commands.
+          # Never grant blanket Bash or deployment/secret-management shell access.
+          claude_args: |
+            --max-turns 40
+            --allowedTools "Read,Glob,Grep,Edit,Write,Replace,Bash(npm run typecheck),Bash(npm test),Bash(npm run migrations:check)"
           prompt: |
             You are implementing an owner-authorized FriBee development task.
             Read the issue #${{ github.event.issue.number }} from this repository.
@@ -50,3 +58,20 @@ jobs:
             publish marketing content, or call billable video/image providers.
             Do not alter release pipelines or weaken approval/budget controls.
             Run relevant tests and report outcomes and remaining limitations in the PR.
+            Include "Relates to #${{ github.event.issue.number }}" in the PR body.
+      - name: Assert a review pull request exists
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_BRANCH: ${{ steps.claude.outputs.branch_name }}
+        run: |
+          if [ -z "$REVIEW_BRANCH" ]; then
+            echo "::error::Claude ended without creating a development branch; task is NOT complete."
+            exit 1
+          fi
+          count="$(gh pr list --state open --head "$REVIEW_BRANCH" --json number --jq 'length')"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::Claude ended without an open PR for $REVIEW_BRANCH; task is NOT complete."
+            exit 1
+          fi
+          echo "Claude review PR found for branch $REVIEW_BRANCH"
