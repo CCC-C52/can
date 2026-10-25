@@ -101,6 +101,35 @@ describe("FriBee management API authorization and brand isolation", () => {
     expect(JSON.stringify(data)).not.toContain("secret-sha");
   });
 
+
+  it("returns only allowlisted video previews and non-secret approval metadata", async () => {
+    m.listOutputs.mockResolvedValue([{
+      id: "44444444-4444-4444-8444-444444444444", project_id: OTHER_PROJECT,
+      title: "Space Alien", agent: "video", kind: "video_plan", current_version: 1, updated_at: "2026-10-25",
+    }]);
+    m.listVersions.mockResolvedValue([{
+      id: "55555555-5555-4555-8555-555555555555", version: 1,
+      content: { summary: "Cinematic", private_token: "do-not-leak", videos: [] },
+      qa_report: { verdict: "pass", raw_provider_payload: "private-qa" },
+      asset_ids: [], is_demo: false,
+    }]);
+    m.listApprovals.mockResolvedValue([{
+      output_version_id: "55555555-5555-4555-8555-555555555555",
+      decision: "approved", scopes: ["render"], revoked_at: null,
+      created_at: "2026-10-25", note: "private-approval-note",
+    }]);
+    const response = await GET(req("section=outputs"));
+    expect(response.status).toBe(200);
+    expect(m.listOutputs).toHaveBeenCalledWith(A, { limit: 20 });
+    expect(m.listVersions).toHaveBeenCalledWith(A, "44444444-4444-4444-8444-444444444444");
+    expect(m.listApprovals).toHaveBeenCalledWith(A, "44444444-4444-4444-8444-444444444444");
+    const body = await response.text();
+    expect(body).toContain("Cinematic");
+    for (const secret of ["do-not-leak", "private-qa", "private-approval-note"]) {
+      expect(body).not.toContain(secret);
+    }
+  });
+
   it("rejects invalid identifiers and unsupported sections", async () => {
     expect((await GET(req("section=tasks&projectId=not-a-uuid"))).status).toBe(400);
     expect((await GET(req("section=invalid"))).status).toBe(400);
