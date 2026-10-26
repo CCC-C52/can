@@ -33,6 +33,7 @@ export const NAV_GROUPS: { title: string; items: { href: string; label: string }
       { href: "/medya", label: "Medya arşivi" },
       { href: "/drive-arsivi", label: "Drive Arşivi" },
       { href: "/arastirma", label: "Araştırma Merkezi" },
+      { href: "/pr-ajansi", label: "PR Ajansı" },
     ],
   },
   {
