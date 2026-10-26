@@ -12,6 +12,7 @@ import { backupConfigured, maybeRunScheduledBackup } from "@/lib/services/backup
 import { runAnalysisQueueOnce } from "@/lib/media-analysis";
 import { runUploadQueueOnce } from "@/lib/uploads";
 import { reconcileStaleSubmissions } from "@/lib/services/provider-jobs";
+import { runDriveScanOnce } from "@/lib/drive/indexer";
 
 const problems = assertProductionConfig("worker");
 if (problems.length) {
@@ -31,7 +32,9 @@ async function main() {
   log(b.ok ? "info" : "warn", b.ok ? "backup.enabled" : "backup.disabled", b.ok ? { hourUtc: config.backup.hourUtc } : { reason: b.reason });
   let backupRunning = false;
   let analysisRunning = false;
+  let driveRunning = false;
   let lastBackupCheck = 0;
+  let lastDriveCheck = 0;
   while (!stopping) {
     try {
       const n = await engine.tick();
@@ -54,6 +57,15 @@ async function main() {
         })()
           .catch((e) => log("error", "analysis.loop_error", { error: e }))
           .finally(() => { analysisRunning = false; });
+      }
+      // Google Drive arşiv dizini: görev döngüsünü bloklamadan, en fazla 10 sn'de bir; tek seferde tek kaynak ve sınırlı sayfa
+      if (!driveRunning && Date.now() - lastDriveCheck > 10_000) {
+        lastDriveCheck = Date.now();
+        driveRunning = true;
+        runDriveScanOnce(workerId)
+          .then((r) => r && log(r.status === "failed" ? "warn" : "info", "drive.scan", { brandId: r.brandId, status: r.status, pages: r.stats.pages, upserted: r.stats.upserted, removed: r.stats.removed, error: r.error }))
+          .catch((e) => log("error", "drive.scan_error", { error: e }))
+          .finally(() => { driveRunning = false; });
       }
       // Yedekleme görev döngüsünü bloklamadan, en fazla 30 sn'de bir kontrol edilir
       if (!backupRunning && Date.now() - lastBackupCheck > 30_000) {

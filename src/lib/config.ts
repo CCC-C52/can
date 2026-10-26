@@ -93,6 +93,18 @@ export const config = {
     get appSecret() { return str("INSTAGRAM_APP_SECRET"); },
     get graphVersion() { return str("INSTAGRAM_GRAPH_VERSION") ?? "v24.0"; },
   },
+  googleDrive: {
+    // Google Drive arşiv dizini (salt okunur üst veri). OAuth istemci bilgileri yalnızca sunucu ortamında tutulur;
+    // kullanıcı belirteçleri ENCRYPTION_KEY ile şifrelenip veritabanında saklanır.
+    get clientId() { return str("GOOGLE_DRIVE_CLIENT_ID"); },
+    get clientSecret() { return str("GOOGLE_DRIVE_CLIENT_SECRET"); },
+    /** Kullanıcıya aday olarak gösterilecek klasör adı. Klasör kimliği asla varsayılmaz; kullanıcı seçer. */
+    get folderName() { return str("DRIVE_ARCHIVE_FOLDER_NAME") ?? "FriBee Master Archive"; },
+    /** Artımlı taramalar arası en kısa süre (dakika). */
+    get scanIntervalMinutes() { return Math.max(5, num("DRIVE_SCAN_INTERVAL_MINUTES", 30)); },
+    /** Bir işleyici turunda en fazla Drive API sayfası (kota koruması). */
+    get pagesPerTick() { return Math.min(100, Math.max(1, num("DRIVE_SCAN_PAGES_PER_TICK", 10))); },
+  },
   tiktok: {
     get clientKey() { return str("TIKTOK_CLIENT_KEY"); },
     get clientSecret() { return str("TIKTOK_CLIENT_SECRET"); },

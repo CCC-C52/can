@@ -142,6 +142,8 @@ export type UploadMeta = {
   rightsStatus?: string;
   rightsNote?: string | null;
   tags?: string[];
+  /** false: içerik analizi yalnızca yerel yapılır (ücretli görsel model çağrılmaz). Verilmezse ayar geçerlidir. */
+  vision?: boolean;
 };
 
 /**
@@ -228,7 +230,7 @@ export async function registerFile(
   await audit({ brandId, actor: "user", action: "media.upload", message: `Medya yüklendi: ${asset.filename} (${kind}, ${origin}, ${(f.sizeBytes / 1e6).toFixed(1)} MB)`, data: { assetId: asset.id } }, db);
   // Gerçek içerik analizi arka planda (işleyici) yapılır
   const { enqueueAnalysis } = await import("@/lib/media-analysis");
-  await enqueueAnalysis(asset, {}, db);
+  await enqueueAnalysis(asset, meta.vision === false ? { vision: false } : {}, db);
   return { asset, duplicate: false };
 }
 

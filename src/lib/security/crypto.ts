@@ -65,7 +65,10 @@ export function redact(text: string): string {
     .replace(/sk-[A-Za-z0-9_\-]{16,}/g, "sk-***")
     .replace(/shpat_[A-Za-z0-9]+/g, "shpat_***")
     .replace(/AIza[0-9A-Za-z_\-]{20,}/g, "AIza***")
+    .replace(/ya29\.[A-Za-z0-9._\-]+/g, "ya29.***")
+    .replace(/\b1\/\/[A-Za-z0-9._\-]{16,}/g, "1//***")
+    .replace(/GOCSPX-[A-Za-z0-9_\-]+/g, "GOCSPX-***")
     .replace(/Bearer\s+[A-Za-z0-9._\-]{8,}/g, "Bearer ***")
-    .replace(/(access_token|client_secret|api_key|password|key|sig|signature|X-Amz-Signature|X-Amz-Credential)=([^&\s]+)/gi, "$1=***")
-    .replace(/("?(?:access_token|client_secret|api_key|password|authorization|x-goog-api-key)"?\s*[:=]\s*")([^"]+)"/gi, '$1***"');
+    .replace(/(access_token|refresh_token|id_token|client_secret|api_key|password|key|sig|signature|X-Amz-Signature|X-Amz-Credential)=([^&\s]+)/gi, "$1=***")
+    .replace(/("?(?:access_token|refresh_token|id_token|client_secret|api_key|password|authorization|x-goog-api-key)"?\s*[:=]\s*")([^"]+)"/gi, '$1***"');
 }

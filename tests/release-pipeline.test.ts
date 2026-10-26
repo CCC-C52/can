@@ -12,6 +12,8 @@ const SHA = "1".repeat(40);
 const OLD = "9cb052e0000000000000000000000000000000aa";
 const API_KEY = "rnd_test_key_should_never_appear";
 const TOKEN = "release-token-should-never-appear-xxxxxxxx";
+/** Bu sürümün imajındaki tüm geçişler (yeni sürüm canlıya çıkınca hepsi uygulanmış olur). */
+const ALL_MIGRATIONS = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql"];
 
 type Svc = { id: string; name: string; branch: string; autoDeployTrigger: string; suspended: string; repo: string };
 type Dep = { id: string; status: string; commit: { id: string }; createdAt: string; script: string[] };
@@ -52,7 +54,7 @@ function onLive(serviceId: string, d: Dep) {
   for (const o of S.deploys[serviceId]) if (o !== d && o.status === "live") o.status = "deactivated";
   if (serviceId === "srv-web") {
     if (!S.app.webCommitStuck) S.app.webCommit = d.commit.id;
-    if (d.commit.id === SHA) { S.app.legacy = false; S.app.applied = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]; }
+    if (d.commit.id === SHA) { S.app.legacy = false; S.app.applied = [...ALL_MIGRATIONS]; }
   } else if (!S.app.workerStuck) S.app.workerCommit = d.commit.id;
 }
 
@@ -106,7 +108,7 @@ beforeAll(async () => {
     if (S.app.legacy === "missing404") return json(res, 404, undefined);
     if (req.headers.authorization !== `Bearer ${TOKEN}`) return json(res, 401, { error: "unauthorized" });
     if (req.url === "/api/release/status") {
-      const all = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"];
+      const all = ALL_MIGRATIONS;
       return json(res, 200, {
         ok: true, commit: S.app.webCommit, db: { ok: true },
         migrations: { applied: S.app.applied, inImage: all, pending: all.filter((f) => !S.app.applied.includes(f)) },
@@ -159,7 +161,7 @@ describe("Sürüm hattı — ilk etkinleştirme (canlıda durum ucu yok, 003 bek
     expect(posts()).toEqual(["POST /v1/services/srv-web/deploys", "POST /v1/services/srv-worker/deploys"]);
     expect(r.web).toMatchObject({ status: "live", previousCommit: OLD });
     expect(r.worker).toMatchObject({ status: "live", previousCommit: OLD });
-    expect(r.migrations).toMatchObject({ source: "legacy_input", pending: ["003_brand_memory_research.sql"], authorizedUsed: ["003_brand_memory_research.sql"] });
+    expect(r.migrations).toMatchObject({ source: "legacy_input", pending: ["003_brand_memory_research.sql", "004_drive_archive.sql"], authorizedUsed: ["003_brand_memory_research.sql"] });
     expect(r.backup.evidence).toMatch(/Render PITR kullanılabilir/);
     expect(S.deploys["srv-web"][0].commit.id).toBe(SHA);
     expect(S.deploys["srv-worker"][0].commit.id).toBe(SHA);
@@ -234,7 +236,7 @@ describe("Sürüm hattı — engeller", () => {
   });
 
   it("daha önce başarısız olmuş commit, açık izin olmadan tekrar dağıtılmaz", async () => {
-    Object.assign(S.app, { legacy: false, webCommit: OLD, applied: ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"], backupAt: new Date(Date.UTC(2026, 9, 22) - 3_600_000).toISOString(), releases: [{ releaseId: "run-0", sha: SHA, outcome: "failed" }] });
+    Object.assign(S.app, { legacy: false, webCommit: OLD, applied: [...ALL_MIGRATIONS], backupAt: new Date(Date.UTC(2026, 9, 22) - 3_600_000).toISOString(), releases: [{ releaseId: "run-0", sha: SHA, outcome: "failed" }] });
     const r = await run({ authorizeMigrations: [], legacyAppliedMigrations: null });
     expect(r).toMatchObject({ outcome: "blocked", failedStep: "redeploy_guard" });
     expect(posts()).toEqual([]);
@@ -251,7 +253,7 @@ describe("Sürüm hattı — engeller", () => {
   it("servisler zaten bu commit'teyse dağıtım yapılmaz (noop)", async () => {
     S.deploys["srv-web"][0].commit.id = SHA;
     S.deploys["srv-worker"][0].commit.id = SHA;
-    Object.assign(S.app, { legacy: false, webCommit: SHA, workerCommit: SHA, applied: ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"] });
+    Object.assign(S.app, { legacy: false, webCommit: SHA, workerCommit: SHA, applied: [...ALL_MIGRATIONS] });
     const r = await run({ legacyAppliedMigrations: null });
     expect(r.outcome).toBe("noop");
     expect(posts()).toEqual([]);
