@@ -12,6 +12,7 @@ import { backupConfigured, maybeRunScheduledBackup } from "@/lib/services/backup
 import { runAnalysisQueueOnce } from "@/lib/media-analysis";
 import { runUploadQueueOnce } from "@/lib/uploads";
 import { reconcileStaleSubmissions } from "@/lib/services/provider-jobs";
+import { runPrAgencyTick } from "@/lib/services/pr-agency";
 
 const problems = assertProductionConfig("worker");
 if (problems.length) {
@@ -32,6 +33,8 @@ async function main() {
   let backupRunning = false;
   let analysisRunning = false;
   let lastBackupCheck = 0;
+  let prRunning = false;
+  let lastPrCheck = 0;
   while (!stopping) {
     try {
       const n = await engine.tick();
@@ -67,6 +70,15 @@ async function main() {
           .then((s) => s && log(s.ok ? "info" : "error", s.ok ? "backup.completed" : "backup.failed", { error: s.error ?? undefined }))
           .catch((e) => log("error", "backup.error", { error: e }))
           .finally(() => { backupRunning = false; });
+      }
+      // PR ajansı: zamanlaması açık markalar için besleme çekimi + vadesi gelen taslaklar (5 dk'da bir; dış gönderim yok)
+      if (!prRunning && Date.now() - lastPrCheck > 5 * 60_000) {
+        lastPrCheck = Date.now();
+        prRunning = true;
+        runPrAgencyTick()
+          .then((r) => r.forEach((x) => (x.created || x.polled || x.error) && log(x.error ? "warn" : "info", "pr_agency.tick", x)))
+          .catch((e) => log("error", "pr_agency.error", { error: e }))
+          .finally(() => { prRunning = false; });
       }
     } catch (err) {
       log("error", "worker.loop_error", { error: err });
