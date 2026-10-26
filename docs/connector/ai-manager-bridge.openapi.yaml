@@ -1,0 +1,103 @@
+openapi: 3.1.0
+info:
+  title: FriBee AI Manager Bridge
+  version: 1.0.0
+  description: >
+    Least-privilege bridge from an authorized connector (e.g. a ChatGPT custom GPT Action) to the FriBee
+    AI Operations Studio AI Manager. Every credential is bound to exactly one brand and a set of scopes.
+    Submitting an instruction can start paid AI work, so it requires `confirm_cost: true`; without it the
+    call is a dry-run preview and nothing is stored. Plan approvals ("onaylıyorum", "devam et") are rejected
+    here and must be given by the owner in the FriBee panel (/sohbet).
+servers:
+  - url: https://REPLACE-WITH-FRIBEE-WEB-HOST
+components:
+  securitySchemes:
+    bridgeToken:
+      type: http
+      scheme: bearer
+      description: "fbb_<id>_<secret>. Only its SHA-256 digest is configured on the server (AI_MANAGER_BRIDGE_CREDENTIALS)."
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, examples: [unauthorized, forbidden, rate_limited, invalid_body, invalid_idempotency_key, stale_request, approval_requires_panel, paused, idempotency_conflict, not_found] }
+        message: { type: string }
+    SubmitResult:
+      oneOf:
+        - type: object
+          required: [status, billable, message]
+          properties:
+            status: { const: preview }
+            billable: { const: true }
+            message: { type: string }
+        - type: object
+          required: [status, project_id, project_status, title]
+          properties:
+            status: { enum: [accepted, duplicate] }
+            project_id: { type: string, format: uuid }
+            project_status: { type: string }
+            title: { type: string }
+security:
+  - bridgeToken: []
+paths:
+  /api/bridge/v1/instructions:
+    post:
+      operationId: sendManagerInstruction
+      summary: Send an owner-approved instruction to the FriBee AI Manager (scope instructions:submit)
+      description: >
+        First call WITHOUT confirm_cost to get the cost preview, show it to the owner, and only resend with
+        confirm_cost=true after the owner explicitly approves. Reuse the same Idempotency-Key for retries.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique per instruction, 16-100 chars [A-Za-z0-9_-]. Retries with the same key return the same project.
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{16,100}$" }
+        - name: X-Bridge-Timestamp
+          in: header
+          required: true
+          description: Current Unix time in seconds; requests outside a 5 minute window are rejected.
+          schema: { type: string, pattern: "^[0-9]{9,11}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [instruction]
+              properties:
+                instruction: { type: string, minLength: 1, maxLength: 8000 }
+                confirm_cost: { type: boolean, description: "true only after the owner approved possible paid AI work" }
+      responses:
+        "200": { description: Preview (nothing stored) or duplicate, content: { application/json: { schema: { $ref: "#/components/schemas/SubmitResult" } } } }
+        "202": { description: Accepted; AI Manager planning queued, content: { application/json: { schema: { $ref: "#/components/schemas/SubmitResult" } } } }
+        "400": { description: Invalid input, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Missing or invalid credential, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Credential lacks scope, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Paused, approval must be given in panel, or key conflict, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Rate limited, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/bridge/v1/projects/{id}:
+    get:
+      operationId: getManagerProjectStatus
+      summary: Read project, task and recent AI Manager messages (scope status:read)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Project status (credential's brand only)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project: { type: object }
+                  tasks: { type: array, items: { type: object } }
+                  manager_messages: { type: array, items: { type: object } }
+                  pending_approvals_in_panel: { type: boolean }
+        "401": { description: Missing or invalid credential, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found (also returned for other brands' projects), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

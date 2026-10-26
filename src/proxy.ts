@@ -6,7 +6,8 @@ import { requestIdFrom } from "@/lib/log";
 // Kimlik doğrulama ve temel güvenlik başlıkları. Webhook uçları imza ile doğrulanır, oturum gerektirmez.
 // Herkese açık olanlar: giriş sayfası, imza doğrulamalı webhook'lar, bilgi sızdırmayan sağlık kontrolü, statik derleme dosyaları.
 // /api/release/: dağıtım hattının uçları; oturum yerine RELEASE_STATUS_TOKEN ile korunur (belirteç yoksa uç kapalıdır).
-const PUBLIC = ["/login", "/api/webhooks/", "/api/health", "/api/release/", "/_next/static/", "/favicon"];
+// /api/bridge/: ChatGPT → AI Manager köprüsü; oturum yerine kapsamlı, markaya bağlı belirteçle korunur (src/lib/bridge.ts).
+const PUBLIC = ["/login", "/api/webhooks/", "/api/health", "/api/release/", "/api/bridge/", "/_next/static/", "/favicon"];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
