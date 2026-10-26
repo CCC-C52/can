@@ -33,7 +33,12 @@ import { COST_PROVIDERS } from "@/lib/services/costs";
 import { addMemory, setMemoryStatus, type MemoryKind, type MemoryStatus } from "@/lib/services/brand-memory";
 import type { AgentId } from "@/lib/agents/schemas";
 import { disconnectDrive, requestDriveScan, selectArchiveFolder, setDrivePaused } from "@/lib/drive/source";
-import { importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds, type ReviewInput } from "@/lib/drive/references";
+import { generateDue, getPrConfig, pollFeeds, updatePrConfig } from "@/lib/services/pr-agency";
+import { addKnowledgeFact, collectionKey, confirmFribeeCollections, decideKnowledgeFact } from "@/lib/knowledge/store";
+import type { EntityType } from "@/lib/knowledge/graph";
+import type { Sensitivity } from "@/lib/knowledge/types";
+import { THEME_INFO, isTheme, type FribeeTheme } from "@/lib/drive/themes";
+import { getDriveItem, verifiedCatalogPhotos, verifiedThemesOf, importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds, type ReviewInput } from "@/lib/drive/references";
 
 // ---------------------------------------------------------------- Oturum
 
@@ -492,7 +497,94 @@ export async function driveProposeMemoryAction(fd: FormData) {
     const rl = rateLimit(`drive-doc:${brand.id}`, 20, 60_000);
     if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
     const r = await proposeMemoryFromDocument(brand.id, str(fd, "itemId"), (str(fd, "kind") || "guideline") as MemoryKind);
+    const theme = str(fd, "collection");
+    if (isTheme(theme)) {
+      // Belge koleksiyon hikâyesi olarak Bilgi Merkezi inceleme kuyruğuna da girer (onaylanınca ajanlar kaynaklı olarak görür)
+      const it = await getDriveItem(brand.id, str(fd, "itemId"));
+      if (it) await addKnowledgeFact(brand.id, { entityType: "collection", entityKey: collectionKey(theme), entityName: THEME_INFO[theme].label, attribute: "story_document", value: it.name, status: "extracted", driveItemId: it.id, method: "document", sensitivity: "internal" });
+    }
     return `${r.added} bölüm Marka Hafızası'na öneri olarak eklendi${r.skipped ? ` (${r.skipped} bölüm gizli bilgi şüphesiyle atlandı)` : ""}${r.truncated ? "; belge uzun, ilk bölümler alındı" : ""}. Marka Hafızası sayfasında etkinleştirince ajanlar kullanır.`;
+  });
+}
+
+// ---------------------------------------------------------------- PR Ajansı (otomasyon)
+
+const PR_PAGE = "/pr-ajansi";
+
+export async function prConfigAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${PR_PAGE}?tab=automation`, async () => {
+    const start = str(fd, "roadmapStart");
+    if (start && !/^\d{4}-\d{2}$/.test(start)) throw new Error("Plan başlangıcı YYYY-AA olmalı.");
+    const cfg = await updatePrConfig(brand.id, {
+      enabled: str(fd, "enabled") === "1",
+      enabledSources: fd.getAll("sources").map(String),
+      ...(start ? { roadmapStart: `${start}-01` } : {}),
+    });
+    return `PR ajansı ayarları kaydedildi: zamanlanmış üretim ${cfg.enabled ? "açık" : "kapalı"}, ${cfg.enabledSources.length} kaynak etkin.`;
+  });
+}
+
+export async function prVerifyDateAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${PR_PAGE}?tab=calendar`, async () => {
+    const id = str(fd, "id");
+    const cfg = await getPrConfig(brand.id);
+    const date = str(fd, "date"), endDate = str(fd, "endDate"), sourceUrl = str(fd, "sourceUrl");
+    await updatePrConfig(brand.id, { verifiedDates: { ...cfg.verifiedDates, [id]: { date, ...(endDate ? { endDate } : {}), sourceUrl } } });
+    return "Etkinlik tarihi kaynağıyla kaydedildi; takvime eklendi.";
+  });
+}
+
+export async function prRunNowAction() {
+  const brand = await requireBrand();
+  await act(`${PR_PAGE}?tab=automation`, async () => {
+    const rl = rateLimit(`pr-run:${brand.id}`, 3, 10 * 60_000);
+    if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const polled = await pollFeeds(brand.id);
+    const created = await generateDue(brand.id);
+    const fetched = polled.filter((p) => p.status === "fetched").length, failed = polled.filter((p) => p.status === "failed").length;
+    return `Beslemeler: ${fetched} başarılı, ${failed} başarısız. ${created.length} yeni taslak üretildi (onay kuyruğunda). Ücretli servis çağrılmadı.`;
+  });
+}
+
+// ---------------------------------------------------------------- Marka bilgi sistemi
+
+const KNOWLEDGE_PAGE = "/bilgi";
+
+export async function knowledgeConfirmCollectionsAction() {
+  const brand = await requireBrand();
+  await act(KNOWLEDGE_PAGE, async () => {
+    const r = await confirmFribeeCollections(brand.id);
+    return r.added ? `Dört koleksiyon ve renkleri onaylı bilgi olarak kaydedildi (${r.added} olgu).` : "Koleksiyonlar zaten kayıtlı.";
+  });
+}
+
+export async function knowledgeAddFactAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(KNOWLEDGE_PAGE, async () => {
+    const rl = rateLimit(`knowledge:${brand.id}`, 30, 60_000);
+    if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const status = str(fd, "status") === "confirmed" ? "confirmed" : "suggested";
+    const theme = str(fd, "collection");
+    await addKnowledgeFact(brand.id, {
+      entityType: (isTheme(theme) ? "collection" : str(fd, "entityType")) as EntityType,
+      entityKey: isTheme(theme) ? collectionKey(theme) : undefined,
+      entityName: isTheme(theme) ? THEME_INFO[theme].label : str(fd, "entityName"),
+      attribute: str(fd, "attribute"), value: str(fd, "value"), status,
+      sensitivity: (str(fd, "sensitivity") || "internal") as Sensitivity,
+      driveItemId: str(fd, "driveItemId") || null, sourceNote: str(fd, "sourceNote") || null, method: "manual",
+    });
+    return status === "confirmed" ? "Bilgi onaylı olarak kaydedildi." : "Bilgi öneri olarak inceleme kuyruğuna eklendi.";
+  });
+}
+
+export async function knowledgeDecideAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(KNOWLEDGE_PAGE, async () => {
+    const decision = str(fd, "decision") === "confirm" ? "confirm" : "reject";
+    await decideKnowledgeFact(brand.id, str(fd, "id"), decision);
+    return decision === "confirm" ? "Bilgi onaylandı; yetkili ajanlar artık kullanır." : "Bilgi reddedildi; hiçbir yerde kullanılmaz.";
   });
 }
 
@@ -680,7 +772,19 @@ export async function videoStudioAction(fd: FormData) {
     if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
     const mode = (STUDIO_MODES as readonly string[]).includes(str(fd, "mode")) ? (str(fd, "mode") as StudioMode) : "archive";
     const videos = await brandAssets(brand.id, fd.getAll("assetIds").map(String), "video");
-    const photos = (await brandAssets(brand.id, fd.getAll("photoIds").map(String), "photo")).filter((p) => p.kind === "photo").slice(0, STUDIO_MAX_PHOTOS);
+    let photos = (await brandAssets(brand.id, fd.getAll("photoIds").map(String), "photo")).filter((p) => p.kind === "photo").slice(0, STUDIO_MAX_PHOTOS);
+    const collection = isTheme(str(fd, "collection")) ? (str(fd, "collection") as FribeeTheme) : null;
+    if (collection && mode !== "archive" && !photos.length) {
+      // Koleksiyon seçildi, fotoğraf seçilmedi: doğrulanmış katalog fotoğrafları (ön, arka, detay) otomatik referans olur
+      const picked = await verifiedCatalogPhotos(brand.id, collection, STUDIO_MAX_PHOTOS);
+      if (!picked.length) throw new Error(`${THEME_INFO[collection].label} için doğrulanmış ve orijinali arşive alınmış katalog fotoğrafı yok. Drive Arşivi'nde doğrulayıp “Orijinali arşive al” deyin veya fotoğraf seçin.`);
+      photos = await brandAssets(brand.id, picked.map((p) => p.media_asset_id), "photo");
+    }
+    if (collection && photos.length) {
+      const themes = await verifiedThemesOf(brand.id, photos.map((p) => p.id));
+      const wrong = photos.filter((p) => themes.has(p.id) && themes.get(p.id) !== collection);
+      if (wrong.length) throw new Error(`Koleksiyon eşleşmiyor: ${wrong.map((p) => `${p.filename} (${THEME_INFO[themes.get(p.id)!].label})`).join(", ")} seçilen ${THEME_INFO[collection].label} koleksiyonuna ait değil.`);
+    }
     const lowRes = photos.filter((p) => referenceTooSmall(p.width, p.height));
     if (lowRes.length) throw new Error(`Düşük çözünürlüklü referans: ${lowRes.map((p) => `${p.filename} (${p.width}x${p.height})`).join(", ")}. Kısa kenarı en az ${REFERENCE_MIN_SHORT_SIDE} piksel olan orijinal fotoğraf seçin.`);
     const unverified = await unverifiedDriveAssetIds(brand.id, photos.map((p) => p.id));
@@ -702,7 +806,7 @@ export async function videoStudioAction(fd: FormData) {
       mode, videos, photos, minSeconds: min, maxSeconds: max,
       platform: str(fd, "platform") === "tiktok" ? "TikTok (9:16)" : "Instagram Reels (9:16)",
       transition: str(fd, "transition") === "fade" ? "fade" : "cut",
-      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500),
+      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500), collection,
     });
     const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
     return { ok: r.duplicate ? "Bu talep zaten gönderildi." : mode === "archive" ? "Video talebi Ana Yönetici'ye gönderildi." : "AI reklam talebi Ana Yönetici'ye gönderildi (Gemini Omni sahneleri ücretli; izin ve bütçe kontrolünden geçer).", to: `/projeler/${r.project.id}` };

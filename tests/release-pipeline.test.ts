@@ -13,7 +13,7 @@ const OLD = "9cb052e0000000000000000000000000000000aa";
 const API_KEY = "rnd_test_key_should_never_appear";
 const TOKEN = "release-token-should-never-appear-xxxxxxxx";
 /** Bu sürümün imajındaki tüm geçişler (yeni sürüm canlıya çıkınca hepsi uygulanmış olur). */
-const ALL_MIGRATIONS = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql"];
+const ALL_MIGRATIONS = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"];
 
 type Svc = { id: string; name: string; branch: string; autoDeployTrigger: string; suspended: string; repo: string };
 type Dep = { id: string; status: string; commit: { id: string }; createdAt: string; script: string[] };
@@ -161,7 +161,7 @@ describe("Sürüm hattı — ilk etkinleştirme (canlıda durum ucu yok, 003 bek
     expect(posts()).toEqual(["POST /v1/services/srv-web/deploys", "POST /v1/services/srv-worker/deploys"]);
     expect(r.web).toMatchObject({ status: "live", previousCommit: OLD });
     expect(r.worker).toMatchObject({ status: "live", previousCommit: OLD });
-    expect(r.migrations).toMatchObject({ source: "legacy_input", pending: ["003_brand_memory_research.sql", "004_drive_archive.sql"], authorizedUsed: ["003_brand_memory_research.sql"] });
+    expect(r.migrations).toMatchObject({ source: "legacy_input", pending: ["003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"], authorizedUsed: ["003_brand_memory_research.sql"] });
     expect(r.backup.evidence).toMatch(/Render PITR kullanılabilir/);
     expect(S.deploys["srv-web"][0].commit.id).toBe(SHA);
     expect(S.deploys["srv-worker"][0].commit.id).toBe(SHA);

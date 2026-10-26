@@ -1,34 +1,58 @@
-# FriBee marka bilgi sistemi ve 24 aylık PR yol haritası (issue #22)
+# FriBee Marka Bilgi Sistemi (`/bilgi`)
 
-Bu, ilk ve test edilebilir dilim. Kod saf TypeScript (`src/lib/knowledge/`): veritabanı migrasyonu yok, ağ çağrısı yok, ücretli yapay zekâ çağrısı yok, üretime hiçbir değişiklik yok.
+Google Drive'daki **FriBee Master Archive** klasörü sistemin merkezi marka hafızasıdır. Bilgi sistemi yeni bir veri
+kopyası oluşturmaz; mevcut parçaları birleştirir:
 
-## Uygulananlar
+| Kaynak | Ne sağlar | Tablo |
+|---|---|---|
+| Drive dizini (salt okunur, artımlı) | Tüm dosyalar: ad, klasör yolu, tür, boyut, çözünürlük, MD5, sürüm | `drive_items` (004) |
+| Doğrulanmış baskılar | Sahibin doğruladığı ön/arka/detay ürün görselleri, koleksiyon (tema), orijinal dosya medya arşivinde | `drive_references` (004) |
+| Kaynaklı olgular (bilgi grafiği) | Koleksiyon rengi, hikâye belgesi, ürün adı, tedarikçi, karar … | `knowledge_facts` (005) |
+| Marka Hafızası | Drive metin belgelerinden öneri olarak eklenen kurallar/hikâyeler | `brand_memory` (003) |
 
-| Alan | Dosya | Durum |
-| --- | --- | --- |
-| Arşiv dizini: kategoriler, hassasiyet, salt okunur kapsam denetimi, marka kök klasörü yetkisi, artımlı eşitleme (changes belirteci), revizyon geçmişi, silinen dosya işareti | `archive.ts` | Bellek içi + sabit veri kaynağı |
-| Bilgi grafiği: Brand, Collection, Product/SKU, Colorway, Design, Print, Asset, Story, Campaign, Supplier, Inventory, PR coverage, Decision; olgu durumu `extracted / confirmed / suggested / unknown` | `graph.ts` | Bellek içi |
-| Dört tema (Space Alien siyah, Music beyaz, Anime turuncu, Save the Bee açık mavi) ve Mandala → Music; kaynak: sahip beyanı (issue #22) | `graph.ts` | Onaylı başlangıç verisi |
-| Rol bazlı erişim (AI Yönetici, Video/Tasarım, Shopify/Pazarlama, PR, Finans); finans/tedarikçi/özel kısıtları | `access.ts` | Uygulandı |
-| Kaynaklı arama: atıf, orijinal çözünürlüklü Drive bağlantısı, `source_missing` / `source_changed` / `index_stale` bayrakları, ürün sadakati notu | `retrieval.ts` | Uygulandı |
-| İnceleme kuyruğu: OCR/görsel çıkarım, belirsiz ad, tema/görsel uyuşmazlığı, sınıflandırılamayan dosya; onay → kaynaklı kanonik olgu | `review.ts` | Bellek içi |
-| PR Ajansı 24 aylık plan (Kasım 2026 – Ekim 2028, 8 çeyrek, 24 aylık inceleme) — **öneri** | `pr-roadmap.ts` | Uygulandı |
-| Stüdyo panosu (salt okunur) | `src/app/(panel)/bilgi/page.tsx` | Uygulandı |
-| Testler | `tests/brand-knowledge.test.ts` | Güvenlik, marka yalıtımı, artımlı eşitleme, atıf, izin, güncellik, eksik kaynak |
+## Koleksiyonlar
 
-## Kurallar
+Sahip “Koleksiyonları onayla” dediğinde dört koleksiyon kaynaklı ve onaylı olgu olur (kaynak: sahip talimatı):
+**Space Alien — siyah**, **Music — beyaz** (mandala Music'e aittir), **Anime — turuncu**, **Save the Bee — açık mavi**.
+Baskılar (ön/arka/detay) Drive Arşivi'nde sahip doğrulamasıyla, hikâyeler belge → koleksiyon bağlantısı ve inceleme
+onayıyla koleksiyona bağlanır.
 
-- Ürün hikâyesi uydurulmaz: kaynaksız metin yalnızca `suggested` olabilir; `extracted` Drive dosyası, `confirmed` karar + kaynak ister.
-- Onaylanmamış olgu yayınlanamaz (`assertPublishable`).
-- `private` kayıtlar hiçbir ajana otomatik verilmez.
-- Üretken model referansı ürün sadakatini garanti etmez; ürün baskısı için doğrulanmış kompozit kullanılır.
-- PR planında geçmiş sonuç, pazar verisi, mevcut ortaklık veya sayısal hedef yoktur; hedefleri sahip Q1 temel ölçümünden sonra belirler.
+## Olgu durumu
 
-## Sahip onayı / kimlik bilgisi gerektirenler
+- `confirmed`: sahip kararı + kaynak (Drive dosyası veya kaynak notu). Ajanlara yalnızca bunlar gerçek olarak verilir.
+- `extracted` (arşiv dosyasından) ve `suggested`: İnceleme kuyruğunda bekler; ajanlara verilmez.
+- `rejected`: hiçbir yerde kullanılmaz. Aynı öznitelikte yeni onaylı değer eskisinin yerini alır.
+- Gizli bilgi (anahtar, parola, kart numarası) içeren olgu kaydedilmez.
 
-1. Google Drive OAuth istemcisi (yalnızca `drive.readonly` veya `drive.metadata.readonly`), FriBee kök klasör kimliği ve sahip onayı. `googleDriveSourceNotConfigured()` bilerek hata verir.
-2. Kalıcı depolama (arşiv dizini, grafik, inceleme kuyruğu tabloları) için migrasyon — güvenlik incelemesi sonrası ayrı PR.
-3. OCR/görsel çıkarım sağlayıcısı (ücretli olabilir; bütçe onayı gerekir).
-4. PR ve Finans ajanlarının ajan kayıt defterine eklenmesi ve bağlam oluşturucuya (`buildBrandContext`) rol bazlı aramanın bağlanması.
-5. Drive arşivi (#21) ve PR Ajansı (#14) çalışmalarıyla birleştirme; bu dallar bu taban dalda yok.
-6. Her dış paylaşım, basın/creator iletişimi ve ücretli medya için sahip onayı.
+## Rol bazlı erişim (ajan bağlamı: `brand_context.knowledge`)
+
+| Rol | Ajanlar | Görebildiği hassasiyet | İlgili arşiv dosyaları |
+|---|---|---|---|
+| AI Yönetici | Ana Yönetici, Kalite | public, internal, vendor | ürün adları, hikâye, koleksiyon geçmişi, lookbook |
+| Video / Tasarım | Video, Tasarım | public, internal | katalog fotoğraf/video, tasarım kaynakları, lookbook |
+| Shopify / Pazarlama | Pazarlama, Shopify, Sosyal | public, internal | ürün adları, hikâye, lookbook, katalog fotoğrafı |
+| PR | PR Uzmanı | public, internal | basın, hikâye, koleksiyon geçmişi, lookbook |
+| Finans | Finans Uzmanı | public, internal, vendor, finance | finans, üretim, lojistik |
+
+- `private` (sözleşme, ortaklık, hukuk) **hiçbir ajana** verilmez.
+- Finans kayıtları (bütçe, fatura, muhasebe) ve sınıflandırılamayan tablo dosyaları (xlsx, csv, Google E-Tablo)
+  yalnızca Finans'a verilir. Yalnızca Finans ajanında `finance.read` izni ve maliyet kayıtları vardır.
+- Ajanlar dosya **içeriğini** değil, yalnızca adını/yolunu/bağlantısını görür; gizlenen kayıt sayısı (`withheld`)
+  bildirilir, içeriği verilmez.
+
+## Video ve tasarım sadakati
+
+- Video Stüdyosu'nda koleksiyon seçilip fotoğraf seçilmezse, o koleksiyonun doğrulanmış ve orijinali arşive alınmış
+  katalog fotoğrafları (ön → arka → detay) Gemini'ye referans olarak otomatik gider.
+- Başka koleksiyonun fotoğrafı seçilirse talep reddedilir.
+- Kalite kontrol şu durumlarda planı geçirmez:
+  - referanslar farklı koleksiyonlardan;
+  - seçilen koleksiyonla uyuşmayan referans;
+  - istemde başka koleksiyon veya yanlış ürün rengi (ör. Anime için "black t-shirt");
+  - istem logo ekliyor, değiştiriyor veya kaldırıyor;
+  - reklamda koleksiyonlar karışık.
+- Üretilen videonun piksel düzeyinde baskı denetimi görsel model (ücretli) gerektirir; şu an son kontrol sahip onayıdır.
+
+## Testler
+
+`tests/knowledge-system.test.ts`, `tests/brand-knowledge.test.ts`, `tests/drive.test.ts`.

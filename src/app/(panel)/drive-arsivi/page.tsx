@@ -251,6 +251,10 @@ async function Files({ brandId, search, filter, page }: { brandId: string; searc
                           <select name="kind" className="input py-1 text-xs" defaultValue="guideline" aria-label="Hafıza türü">
                             {MEMORY_KINDS.map((k) => <option key={k} value={k}>{MEMORY_KIND_LABEL[k] ?? k}</option>)}
                           </select>
+                          <select name="collection" className="input py-1 text-xs" defaultValue="" aria-label="Koleksiyon">
+                            <option value="">Koleksiyon (isteğe bağlı)</option>
+                            {FRIBEE_THEMES.map((t) => <option key={t} value={t}>{THEME_INFO[t].label}</option>)}
+                          </select>
                           <SubmitButton className="btn py-1">Marka hafızasına öner</SubmitButton>
                         </form>
                       )}

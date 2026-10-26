@@ -429,6 +429,17 @@ async function runPlan(ctx: RunCtx, workerId: string) {
 // ---------------------------------------------------------------- Uzman üretimi
 
 async function extraForAgent(agent: SpecialistId, brandId: string): Promise<string | undefined> {
+  if (agent === "pr") {
+    // ABD 12 aylık takvim: resmî tatiller ve tarihi kesin günler; organizatör tarihli etkinlikler yalnızca sahip doğruladıysa
+    const { prCalendar } = await import("@/lib/services/pr-agency");
+    const { events, unverified } = await prCalendar(brandId);
+    return `<us_calendar_12m><data>${JSON.stringify({ events: events.map((e) => ({ id: e.id, name: e.name, date: e.date, kind: e.kind, date_basis: e.dateBasis })), unverified_dates: unverified.map((u) => u.name) })}</data></us_calendar_12m>`;
+  }
+  if (agent === "finance") {
+    assertTool("finance", "finance.read");
+    const [byService, byDay, limits] = await Promise.all([costSummary(brandId, "service"), costSummary(brandId, "day"), getLimits()]);
+    return `<cost_records><data>${JSON.stringify({ by_service: byService, by_day: byDay })}</data></cost_records>\n<budget_limits><data>${JSON.stringify({ daily_ai_budget_usd: limits.dailyBudgetUsd, task_budget_usd: limits.perTaskBudgetUsd, provider_monthly_usd: limits.providerMonthlyUsd })}</data></budget_limits>\n<performance_data><data>No revenue or performance source is connected. Do not invent amounts.</data></performance_data>`;
+  }
   if (agent !== "quality") return undefined;
   const [costs, statuses] = await Promise.all([
     costSummary(brandId, "service"),
@@ -469,7 +480,7 @@ export async function studioForProject(brandId: string, projectId: string): Prom
 
 function studioBlock(st: StudioRequest, limits: Limits) {
   const data = {
-    mode: st.mode, ai_scenes: st.aiScenes, scene_seconds: st.sceneSeconds, product_photo_ids: st.photoIds,
+    mode: st.mode, ai_scenes: st.aiScenes, scene_seconds: st.sceneSeconds, product_photo_ids: st.photoIds, collection: st.collection ?? null,
     max_ai_video_seconds_per_project: limits.maxVideoGenSeconds, paid_generation_enabled: limits.paidMediaGeneration,
   };
   const rules = st.mode === "archive" ? "Use only analysed archive footage (edit_existing)." : [
@@ -477,6 +488,7 @@ function studioBlock(st: StudioRequest, limits: Limits) {
     `Return exactly ${st.aiScenes} "generate_new" videos (one AI scene each, ${st.sceneSeconds} s, format 9:16) and ONE "compose" video that assembles the final ad.`,
     `Every generate_new scene: a vivid cinematic generation_prompt in English (subject, setting, light, camera movement, mood; no on-screen text) and selected_asset_ids = the product_photo_ids, so the real product photos are sent as references and the print, colours, logo and cut stay unchanged.`,
     `The compose video lists "parts" in output order: every AI scene ("ai_scene", ref = its id)${st.photoIds.length ? ', at least one "product_photo" part (ref = a product_photo_id, 1.5-4 s, a camera motion) so the real product is shown as photographed' : ""}${st.mode === "hybrid" ? ', and analysed archive scenes ("archive_clip", inside verified scene limits) when they fit' : ""}.`,
+    ...(st.collection ? [`Collection: "${st.collection}". Every product reference and every description must match this collection's confirmed colour and print (see <brand_context>.knowledge.collections). Never mention another collection, colour or logo.`] : []),
     `Give the compose video a short hook as on_screen_text of the first part, a CTA on the last part, outro_text with the brand name (closing card with the logo), transition "fade" and framing "fill". Keep the total within the requested length.`,
   ].join("\n");
   return `<studio_request>\n<data>${JSON.stringify(data)}</data>\n${rules}\n</studio_request>`;

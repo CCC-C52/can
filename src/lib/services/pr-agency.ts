@@ -214,9 +214,17 @@ export async function brandKnowledge(brandId: string, db: Queryable = getPool())
     [brandId],
     db,
   );
-  const collections = cfg.collections.length
-    ? cfg.collections
-    : types.map((t) => ({ name: t.product_type, keywords: [t.product_type.toLowerCase()], sourceRef: `product_type:${t.product_type}` }));
+  // Öncelik: Marka Bilgi Merkezi'nde onaylı koleksiyonlar (kaynaklı); sonra sahibin PR ayarı; en son ürün türleri
+  const confirmed = await q<{ entity_key: string; entity_name: string; value: string; id: string }>(
+    `SELECT id, entity_key, entity_name, value FROM knowledge_facts WHERE brand_id = $1 AND entity_type = 'collection' AND attribute = 'theme_color' AND status = 'confirmed' ORDER BY entity_name`,
+    [brandId],
+    db,
+  );
+  const collections = confirmed.length
+    ? confirmed.map((c) => ({ name: c.entity_name, keywords: [...new Set([c.entity_name.toLowerCase(), ...c.entity_name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && w !== "the"), c.value.toLowerCase()])], sourceRef: `knowledge_fact:${c.id}` }))
+    : cfg.collections.length
+      ? cfg.collections
+      : types.map((t) => ({ name: t.product_type, keywords: [t.product_type.toLowerCase()], sourceRef: `product_type:${t.product_type}` }));
   return {
     brandName: brand.name,
     voice: (brand.tone ?? "").split(/\n+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),

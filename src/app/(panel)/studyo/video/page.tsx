@@ -13,6 +13,8 @@ import { config } from "@/lib/config";
 import { capabilityReady } from "@/lib/services/connections";
 import { STUDIO_MAX_AI_SCENES, STUDIO_MODE_LABEL } from "@/lib/video/studio";
 import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
+import { FRIBEE_THEMES, THEME_INFO } from "@/lib/drive/themes";
+import { verifiedCatalogPhotos } from "@/lib/drive/references";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
   const outputs = (await listOutputs(brand.id, { limit: 50 })).filter((o) => o.kind === "video_plan").slice(0, 10);
   const photos = (await listMedia(brand.id, { kind: "photo" })).filter((m) => ["image/jpeg", "image/png", "image/webp"].includes(m.mime_type)).slice(0, 60);
   const limits = await getLimits();
+  const catalog = await Promise.all(FRIBEE_THEMES.map(async (t) => ({ theme: t, photos: await verifiedCatalogPhotos(brand.id, t, 3) })));
   const gen = await capabilityReady("video_generation", brand.id);
   const price = config.gemini.costPerSecondUsd;
   const geminiChecks = [
@@ -48,6 +51,14 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
                 <label key={m} className="flex items-start gap-2 text-sm"><input type="radio" name="mode" value={m} defaultChecked={m === (geminiReady ? "hybrid" : "archive")} className="mt-1" /> <span>{STUDIO_MODE_LABEL[m]}</span></label>
               ))}
             </div>
+          </fieldset>
+          <fieldset>
+            <legend className="h2 mb-2">Koleksiyon</legend>
+            <select name="collection" className="input" defaultValue="" aria-label="Koleksiyon">
+              <option value="">Seçilmedi</option>
+              {catalog.map((c) => <option key={c.theme} value={c.theme}>{THEME_INFO[c.theme].label} ({THEME_INFO[c.theme].garmentLabel}) — {c.photos.length} doğrulanmış katalog fotoğrafı</option>)}
+            </select>
+            <p className="mt-1 text-xs text-muted">Koleksiyon seçip fotoğraf seçmezseniz, Drive Arşivi&apos;nde doğrulanmış ön/arka/detay katalog fotoğrafları otomatik referans olur. Başka koleksiyondan fotoğraf seçilirse talep reddedilir.</p>
           </fieldset>
           <fieldset>
             <legend className="h2 mb-2">Gerçek ürün fotoğrafları <span className="text-xs font-normal text-muted">(AI sahnelerine orijinal netlikte referans, en fazla 3; kısa kenar en az {REFERENCE_MIN_SHORT_SIDE} piksel; tasarım ve renk değişmez)</span></legend>

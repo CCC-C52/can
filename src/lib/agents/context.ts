@@ -6,6 +6,8 @@ import { AGENTS } from "./registry";
 import { activeMemoryFor } from "@/lib/services/brand-memory";
 import { verifiedResearchFor } from "@/lib/services/research";
 import { archiveReferencesFor } from "@/lib/drive/references";
+import { knowledgeForRole, type KnowledgeContext } from "@/lib/knowledge/store";
+import { roleForAgent } from "@/lib/knowledge/access";
 import { compactAnalysis, type MediaAnalysis } from "@/lib/media-analysis";
 import type { AgentId } from "./schemas";
 
@@ -80,6 +82,11 @@ export type BrandContext = {
    * Yalnızca metin üst verisi; doğrulanmamış öneriler girmez. media.read izni gerekir.
    */
   archive_references: { reference_id: string; theme: string; view: string; file: string; media_asset_id?: string; notes?: string }[];
+  /**
+   * Marka bilgi sistemi (rol bazlı): onaylı koleksiyon bilgileri, doğrulanmış baskılar ve arşiv dizini. Her ajan yalnızca
+   * kendi rolünün görebildiği hassasiyeti görür (finans yalnızca Finans; "private" hiçbir ajan). knowledge.read izni gerekir.
+   */
+  knowledge: KnowledgeContext | null;
 };
 
 const u = (v: unknown) => (v === null || v === undefined || v === "" ? UNKNOWN : String(v));
@@ -92,7 +99,7 @@ const u = (v: unknown) => (v === null || v === undefined || v === "" ? UNKNOWN :
 export async function buildBrandContext(brandId: string, db: Queryable = getPool(), opts: { agent?: AgentId; includeAssetIds?: string[] } = {}): Promise<BrandContext> {
   const brand = await getBrand(brandId, db);
   if (!brand) throw new Error("Marka bulunamadı");
-  const [facts, products, variants, pfacts, media, memory, research, archiveRefs] = await Promise.all([
+  const [facts, products, variants, pfacts, media, memory, research, archiveRefs, knowledge] = await Promise.all([
     listBrandFacts(brandId, db),
     listProducts(brandId, db),
     listVariants(brandId, undefined, db),
@@ -116,6 +123,7 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
     activeMemoryFor(brandId, opts.agent, db),
     !opts.agent || AGENTS[opts.agent].tools.includes("research.read") ? verifiedResearchFor(brandId, db) : Promise.resolve([]),
     !opts.agent || AGENTS[opts.agent].tools.includes("media.read") ? archiveReferencesFor(brandId, db) : Promise.resolve([]),
+    !opts.agent || AGENTS[opts.agent].tools.includes("knowledge.read") ? knowledgeForRole(brandId, opts.agent ? roleForAgent(opts.agent) : "manager", db) : Promise.resolve(null),
   ]);
   const can = (tool: "products.read" | "media.read") => !opts.agent || AGENTS[opts.agent].tools.includes(tool);
   return {
@@ -165,5 +173,6 @@ export async function buildBrandContext(brandId: string, db: Queryable = getPool
       : [],
     research,
     archive_references: archiveRefs,
+    knowledge,
   };
 }

@@ -10,6 +10,8 @@ import type {
   SpecialistId,
   StrategyOutput,
   VideoPlanOutput,
+  PrPlan,
+  FinanceReview,
 } from "@/lib/agents/schemas";
 import type { GenerateRequest, GenerateResult, TextModelAdapter } from "./types";
 
@@ -123,6 +125,8 @@ const RULES: { agent: SpecialistId; words: string[] }[] = [
   { agent: "video", words: ["video", "reels", "reel", "kurgu", "senaryo", "altyazı", "script"] },
   { agent: "social", words: ["sosyal", "instagram", "tiktok", "takvim", "paylaşım", "yayın", "caption", "social", "calendar", "post"] },
   { agent: "quality", words: ["analiz", "performans", "denetle", "kontrol et", "audit", "performance"] },
+  { agent: "pr", words: ["pr ", "basın", "basin", "press", "pitch", "influencer", "creator", "halkla ilişkiler", "bülten"] },
+  { agent: "finance", words: ["finans", "bütçe", "butce", "maliyet raporu", "harcama", "finance", "budget", "spend"] },
 ];
 const LAUNCH = ["lansman", "launch", "tanıtım", "yeni ürün", "yeni koleksiyon", "çıkış"];
 // Yalnızca planın kendisini önce görmek isteyen ifadeler ("ürün sayfası önerisi" gibi çıktı adları değil)
@@ -161,6 +165,8 @@ export function demoPlan(input: DemoInput): Plan {
     const deps = [...stratDep, ...(has("design") ? ["visuals"] : []), ...(has("video") ? ["video"] : [])];
     tasks.push({ key: "social", agent: "social", title: "Sosyal medya yayın paketi ve takvim", instruction: `Instagram ve TikTok için açıklamalar, içerik takvimi ve yayın paketi hazırla.`, depends_on: deps });
   }
+  if (has("pr")) tasks.push({ key: "pr", agent: "pr", title: "PR planı ve basın/creator taslakları", instruction: `Onaylı koleksiyon bilgileri ve ABD takvimine göre hikâye açıları, basın ve creator teklif taslakları hazırla. Sahibin talimatı: ${input.instruction.slice(0, 400)}`, depends_on: has("marketing") ? ["strategy"] : [] });
+  if (has("finance")) tasks.push({ key: "finance", agent: "finance", title: "Bütçe ve harcama değerlendirmesi", instruction: "Kayıtlı maliyetler ve bütçe sınırlarından harcama özeti ve bütçe önerisi hazırla; kayıtta olmayan tutar uydurma.", depends_on: [] });
   if (has("quality")) tasks.push({ key: "analysis", agent: "quality", title: "Performans ve maliyet analizi", instruction: `Mevcut bağlantılar, maliyetler ve performans verileri üzerinden durum analizi yap.`, depends_on: [] });
 
   return {
@@ -555,6 +561,40 @@ export function demoQualityAnalysis(input: DemoInput): QaReview {
   };
 }
 
+/** PR: yalnızca onaylı koleksiyon bilgileri ve takvimden; kişi adı, iletişim bilgisi veya erişim rakamı üretmez. */
+export function demoPr(input: DemoInput): PrPlan {
+  const { ctx } = input;
+  const cols = ctx.knowledge?.collections ?? [];
+  return {
+    summary: `${DEMO_TAG} ${cols.length ? `${cols.length} onaylı koleksiyon için` : "Onaylı koleksiyon bilgisi olmadan"} PR hikâye açıları (kural tabanlı taslak).`,
+    story_angles: cols.map((c, i) => ({
+      id: `angle-${i + 1}`,
+      collection: c.name,
+      angle: `${ctx.brand.name} ${c.name}${c.color ? ` (${c.color})` : ""}: collection story for US streetwear press`,
+      proof_points: [c.color ? `Collection colour: ${c.color}` : "", ...c.facts.map((f) => `${f.attribute}: ${f.value.slice(0, 120)}`)].filter(Boolean),
+      sources: [...c.facts.map((f) => f.source), ...c.verified_prints.map((p) => `print:${p.file}`)],
+    })),
+    calendar_hooks: [],
+    media_targets: [{ type: "US streetwear and culture press (to be researched and verified)", why: "Collection storytelling" }],
+    pitch_drafts: [],
+    risks: [{ risk: "Claims without confirmed sources", mitigation: "Use only confirmed knowledge facts; owner approves every external message." }],
+    kpis: [{ metric: "Earned media mentions", baseline: "unknown", how_to_measure: "Connect a monitoring source and record a measured baseline." }],
+    unknowns: cols.length ? [] : ["Onaylı koleksiyon bilgisi yok: Bilgi Merkezi'nde koleksiyonları onaylayın."],
+  };
+}
+
+/** Finans: yalnızca kayıtlı maliyetlerden; tutar uydurmaz. */
+export function demoFinance(input: DemoInput): FinanceReview {
+  return {
+    summary: `${DEMO_TAG} Kayıtlı maliyet verisine dayalı finans değerlendirmesi taslağı.`,
+    spend: [],
+    budget_recommendations: [{ area: "AI üretimi", recommendation: "Günlük ve görev bütçe sınırlarını kayıtlı harcamaya göre gözden geçirin.", basis: "assumption" }],
+    risks: ["Gelir ve performans kaynağı bağlı değil; kârlılık hesaplanamaz."],
+    sources: ["cost_records"],
+    unknowns: ["Gelir verisi", "Ürün maliyetleri (COGS)"],
+  };
+}
+
 export function demoReview(_input: DemoInput): QaReview {
   return {
     verdict: "pass",
@@ -573,6 +613,8 @@ const GENERATORS: Record<string, (i: DemoInput) => unknown> = {
   "social:work": demoSocial,
   "quality:work": demoQualityAnalysis,
   "quality:review": demoReview,
+  "pr:work": demoPr,
+  "finance:work": demoFinance,
 };
 
 export class DemoAdapter implements TextModelAdapter {

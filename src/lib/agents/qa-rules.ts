@@ -51,6 +51,9 @@ function customerStrings(agent: string, c: Record<string, any>): string[] {
         push(v.intro_text); push(v.outro_text);
       });
       break;
+    case "pr":
+      c.pitch_drafts?.forEach((p: any) => { push(p.subject); push(p.body); });
+      break;
     case "social":
       c.posts?.forEach((p: any) => { push(p.caption); push(p.cta); push(p.cover_text); });
       c.reels_ideas?.forEach((r: any) => { push(r.hook); push(r.on_screen_text); });
@@ -257,6 +260,7 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
           checks.push({ name: "Referans netliği", status: "fail", detail: `${v.id}: ${lowRes.length} referans fotoğrafın kısa kenarı ${REFERENCE_MIN_SHORT_SIDE} pikselden küçük; baskı detayı korunamaz.` });
           required.push(`Yalnızca kısa kenarı en az ${REFERENCE_MIN_SHORT_SIDE} piksel olan orijinal ürün fotoğraflarını referans seçin.`);
         }
+        collectionChecks(v, photos, ctx, opts.studio?.collection ?? null, checks, required);
         if (opts.studio?.photoIds.length && !photos.length) {
           checks.push({ name: "Ürün referansı", status: "fail", detail: `${v.id}: sahibin seçtiği ürün fotoğrafları referans olarak verilmedi; ürün baskısı ve rengi korunamaz.` });
           required.push("generate_new sahnelerinde selected_asset_ids olarak stüdyoda seçilen ürün fotoğraflarını verin.");
@@ -266,6 +270,23 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
       if (late.length) {
         checks.push({ name: "Altyazı zamanlaması", status: "fail", detail: `${v.id}: ${late.length} altyazı süre dışında veya hatalı.` });
         required.push("Altyazı zamanlarını video süresi içinde tutun.");
+      }
+    }
+  }
+  if (agent === "video") {
+    // Birleştirilen reklam tek koleksiyonu göstermeli: AI sahnelerinin referansları ve ürün fotoğrafı parçaları aynı koleksiyondan
+    const byAsset = collectionOfAssets(ctx);
+    const vids: any[] = content.videos ?? [];
+    for (const c of vids.filter((v) => v.mode === "compose")) {
+      const ids: string[] = [];
+      for (const p of c.parts ?? []) {
+        if (p.kind === "product_photo") ids.push(String(p.ref));
+        if (p.kind === "ai_scene") ids.push(...(vids.find((v) => v.id === p.ref)?.selected_asset_ids ?? []));
+      }
+      const cols = [...new Set(ids.map((id) => byAsset.get(id)).filter(Boolean))];
+      if (cols.length > 1 || (opts.studio?.collection && cols.some((x) => x !== opts.studio!.collection))) {
+        checks.push({ name: "Koleksiyon ve baskı eşleşmesi", status: "fail", detail: `${c.id}: reklam farklı koleksiyonların ürünlerini karıştırıyor (${cols.join(", ")}).` });
+        required.push("Bir reklamda yalnızca seçilen koleksiyonun ürün fotoğraflarını ve AI sahnelerini kullanın.");
       }
     }
   }
@@ -295,6 +316,36 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
         checks.push({ name: "Yayın zamanı", status: "fail", detail: `${p.id}: geçersiz tarih.` });
         required.push("suggested_datetime alanını ISO 8601 biçiminde verin.");
       }
+    }
+  }
+
+  if (agent === "pr") {
+    // Uydurma iletişim bilgisi veya erişim/etkileşim rakamı yasak; gönderim yok
+    const prText = JSON.stringify([content.pitch_drafts ?? [], content.media_targets ?? [], content.story_angles ?? []]);
+    const contacts = [...prText.matchAll(/[\w.+-]+@[\w-]+\.[\w.]+|(?<![\w@])@[A-Za-z0-9_.]{3,30}\b/g)].map((m) => m[0]);
+    if (contacts.length) {
+      checks.push({ name: "Uydurma iletişim bilgisi", status: "fail", detail: `İletişim bilgisi/hesap adı: ${[...new Set(contacts)].slice(0, 5).join(", ")}` });
+      required.push("Gazeteci/creator e-postası veya hesap adı yazmayın; yalnızca hedef TÜRÜ belirtin. Gerçek kişiler sahip tarafından doğrulanır.");
+    }
+    const reach = [...prText.matchAll(/\b\d+(?:[.,]\d+)?\s?(?:k|m|bin|milyon|million)?\s?(?:followers|takipçi|views|görüntülenme|reach|erişim|impressions)\b/gi)].map((m) => m[0]);
+    if (reach.length) {
+      checks.push({ name: "Uydurma erişim rakamı", status: "fail", detail: [...new Set(reach)].slice(0, 5).join(", ") });
+      required.push("Ölçülmemiş takipçi/erişim/görüntülenme rakamı yazmayın.");
+    }
+    // Koleksiyon eşleşmesi: hikâye açısı onaylı bir koleksiyona bağlanmalı
+    const known = new Set((ctx.knowledge?.collections ?? []).map((c) => c.name.toLowerCase()));
+    const stray = (content.story_angles ?? []).filter((x: any) => x.collection && x.collection.toLowerCase() !== "brand" && known.size && !known.has(String(x.collection).toLowerCase()));
+    if (stray.length) {
+      checks.push({ name: "Koleksiyon eşleşmesi", status: "fail", detail: `Onaylı olmayan koleksiyon: ${stray.map((x: any) => x.collection).join(", ")}` });
+      required.push("Hikâye açılarını yalnızca onaylı koleksiyonlara bağlayın.");
+    }
+  }
+
+  if (agent === "finance") {
+    const unsourced = (content.spend ?? []).filter((x: any) => x.amount_usd !== null && x.amount_usd !== undefined && !String(x.source ?? "").trim());
+    if (unsourced.length) {
+      checks.push({ name: "Kaynaksız tutar", status: "fail", detail: unsourced.map((x: any) => x.item).join(", ") });
+      required.push("Her tutar kayıtlı bir kaynağa dayanmalı; bilinmeyen tutar null olmalı.");
     }
   }
 
@@ -379,4 +430,59 @@ function composeChecks(v: any, content: any, mediaById: Map<string, any>, checks
 }
 
 /** Ürün tasarımını/rengini değiştirmeye yönelik istem ifadeleri (marka tasarımları sabittir). */
+// ---------------------------------------------------------------- Koleksiyon, baskı ve logo eşleşmesi (FriBee)
+
+const COLLECTION_WORDS: Record<string, RegExp> = {
+  space_alien: /\b(space alien|alien|ufo)\b/i,
+  music: /\b(music|mandala)\b/i,
+  anime: /\banime\b/i,
+  save_the_bee: /\b(save the bee|bee|bees|honeybee)\b/i,
+};
+const COLLECTION_COLOUR: Record<string, RegExp> = {
+  space_alien: /\bblack\b/i,
+  music: /\bwhite\b/i,
+  anime: /\borange\b/i,
+  save_the_bee: /\b(light[- ]?blue|sky[- ]?blue|baby[- ]?blue)\b/i,
+};
+const GARMENT_COLOUR = /\b(black|white|orange|light[- ]?blue|sky[- ]?blue|baby[- ]?blue|navy|red|green|yellow|pink|purple|grey|gray|beige)\s+(t-?shirts?|tees?|shirts?|hoodies?|sweatshirts?|garments?|apparel)\b/gi;
+const LOGO_CHANGE = /\b(add(ing)? (a |the )?logo|(new|different|another|modern|minimal|redesigned|bigger|smaller) logo|logo (redesign|swap|replacement)|replace (the )?logo|remove (the )?logo|without (the |a )?logo)\b/i;
+
+/** Medya kimliği → koleksiyon (sahibin doğruladığı Drive referansları; bilgi bağlamından). */
+function collectionOfAssets(ctx: BrandContext): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const c of ctx.knowledge?.collections ?? []) {
+    const theme = c.key.replace(/^collection_/, "");
+    for (const p of c.verified_prints) if (p.media_asset_id) out.set(p.media_asset_id, theme);
+  }
+  return out;
+}
+
+/**
+ * AI sahnesi koleksiyon kontrolü: referanslar tek koleksiyondan olmalı, sahibin seçtiği koleksiyonla eşleşmeli; istem başka
+ * koleksiyonu, başka bir ürün rengini veya logo değişikliğini istememeli. Aksi halde üretim kalite kontrolünden geçmez.
+ */
+function collectionChecks(v: any, photos: string[], ctx: BrandContext, studioCollection: string | null, checks: Check[], required: string[]) {
+  const byAsset = collectionOfAssets(ctx);
+  const refCollections = [...new Set(photos.map((id) => byAsset.get(id)).filter((x): x is string => !!x))];
+  const prompt = String(v.generation_prompt ?? "");
+  const problems: string[] = [];
+  if (refCollections.length > 1) problems.push(`referanslar farklı koleksiyonlardan (${refCollections.join(", ")})`);
+  const target = studioCollection ?? (refCollections.length === 1 ? refCollections[0] : null);
+  if (studioCollection && refCollections.some((c) => c !== studioCollection)) problems.push(`seçilen koleksiyon ${studioCollection}, referans ${refCollections.join(", ")}`);
+  if (target) {
+    const others = Object.keys(COLLECTION_WORDS).filter((k) => k !== target && COLLECTION_WORDS[k].test(prompt));
+    if (others.length) problems.push(`istem başka koleksiyondan söz ediyor (${others.join(", ")})`);
+    const colours = [...prompt.matchAll(GARMENT_COLOUR)].map((m) => m[1]);
+    const wrong = colours.filter((c) => !COLLECTION_COLOUR[target]?.test(c));
+    if (wrong.length) problems.push(`istem ürünü yanlış renkte tarif ediyor (${[...new Set(wrong)].join(", ")}); ${target} koleksiyonunun onaylı rengi korunmalı`);
+  }
+  if (LOGO_CHANGE.test(prompt)) problems.push("istem logoyu ekliyor/değiştiriyor/kaldırıyor");
+  if (problems.length) {
+    checks.push({ name: "Koleksiyon ve baskı eşleşmesi", status: "fail", detail: `${v.id}: ${problems.join("; ")}.` });
+    required.push("AI sahnesinde yalnızca tek koleksiyonun doğrulanmış katalog fotoğraflarını kullanın; istemde başka koleksiyon, başka ürün rengi veya logo değişikliği olmasın.");
+  } else if (target) {
+    checks.push({ name: "Koleksiyon ve baskı eşleşmesi", status: "pass", detail: `${v.id}: referanslar ve istem ${target} koleksiyonuyla uyumlu.` });
+  }
+}
+
 const ALTERS_DESIGN = /\b(recolou?r(ed|ing)?|change (the )?(colou?rs?|print|design|logo|artwork|graphic)|different (colou?rs?|colou?rway|print|design|logo)|new (colou?rway|print|design|logo)|redesign(ed)?|restyle(d)?|alternate colou?rway)\b/i;

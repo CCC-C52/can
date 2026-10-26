@@ -4,6 +4,14 @@ import { listPrEvidence, prAgencyOverview } from "@/lib/services/pr-agency";
 import { FRIBEE_COLLECTIONS_SOURCE, PR_AGENCY_PATH, PR_EXTERNAL_ACTIONS, STALE_AFTER_HOURS, type Availability, type Freshness, type Verification } from "@/lib/pr-agency/model";
 import { Badge, Empty, Flash, PageHeader, Stat, dt } from "@/components/ui";
 import type { Tone } from "@/lib/labels";
+import { Automation, Calendar, Strategy } from "./tabs";
+
+const TABS = [
+  { id: "overview", label: "Genel bakış" },
+  { id: "automation", label: "Otomasyon ve raporlar" },
+  { id: "calendar", label: "ABD 12 aylık takvim" },
+  { id: "strategy", label: "24 aylık strateji" },
+] as const;
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +46,7 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
   const brand = await requireBrand();
   const { ok, err, one } = await flash(searchParams);
   const filter = (["verified", "unverified", "rejected"] as const).find((v) => v === one("durum")) ?? null;
+  const tab = TABS.find((t) => t.id === one("tab"))?.id ?? "overview";
   const page = Number(one("sayfa")) || 1;
   const [o, ev] = await Promise.all([prAgencyOverview(brand), listPrEvidence(brand.id, { page, pageSize: 20, verification: filter })]);
   const link = (p: { durum?: string | null; sayfa?: number }) => {
@@ -51,9 +60,16 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
     <div>
       <PageHeader
         title="PR Ajansı"
-        subtitle={`${o.brand.name} için PR komuta merkezi (salt okunur iskelet). Gösterilen her bilgi kaynağı ve alım zamanıyla birlikte gelir; kaynağı olmayan erişim, etkileşim veya duygu verisi gösterilmez.`}
+        subtitle={`${o.brand.name} için PR komuta merkezi: trend izleme, ABD takvimi, 24 aylık strateji ve zamanlanmış raporlar. Gösterilen her bilgi kaynağı ve alım zamanıyla birlikte gelir; kaynağı olmayan erişim, etkileşim veya duygu verisi gösterilmez.`}
       />
       <Flash ok={ok} err={err} />
+      <nav className="mb-4 flex flex-wrap gap-2" aria-label="PR Ajansı bölümleri">
+        {TABS.map((t) => <Link key={t.id} href={`${PR_AGENCY_PATH}?tab=${t.id}`} className={t.id === tab ? "btn-primary" : "btn"} aria-current={t.id === tab ? "page" : undefined}>{t.label}</Link>)}
+      </nav>
+      {tab === "automation" && <Automation brandId={brand.id} />}
+      {tab === "calendar" && <Calendar brandId={brand.id} />}
+      {tab === "strategy" && <Strategy brandId={brand.id} />}
+      {tab === "overview" && (<>
 
       <div role="note" className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200">
         Taslak modu: bu modül e-posta/DM göndermez, yayın yapmaz, Shopify&apos;ı değiştirmez, reklam bütçesi harcamaz ve dağıtım yapmaz.
@@ -199,6 +215,7 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
           </section>
         </div>
       </div>
+      </>)}
     </div>
   );
 }

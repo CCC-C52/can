@@ -29,7 +29,7 @@ export const NAV_GROUPS: { title: string; items: { href: string; label: string }
     items: [
       { href: "/markalar", label: "Marka Yönetimi" },
       { href: "/hafiza", label: "Marka Hafızası" },
-      { href: "/bilgi", label: "Marka Bilgisi ve PR Planı" },
+      { href: "/bilgi", label: "Marka Bilgi Merkezi" },
       { href: "/urunler", label: "Ürünler" },
       { href: "/medya", label: "Medya arşivi" },
       { href: "/drive-arsivi", label: "Drive Arşivi" },

@@ -293,6 +293,45 @@ export async function proposeMemoryFromDocument(brandId: string, itemId: string,
   return { added, skipped, truncated: chunks.length > DOC_MAX_CHUNKS };
 }
 
+const VIEW_ORDER: Record<string, number> = { front: 0, back: 1, detail: 2, other: 3 };
+
+/**
+ * Video/Görsel Stüdyosu için koleksiyonun doğrulanmış katalog fotoğrafları (orijinali medya arşivine alınmış, kısa kenarı
+ * yeterli). Sıra: ön, arka, detay, diğer. Ürün baskısının gerçek referansları bunlardır.
+ */
+export async function verifiedCatalogPhotos(brandId: string, theme: FribeeTheme, limit = 3, db: Queryable = getPool()) {
+  const rows = await q<{ media_asset_id: string; view: ReferenceView; name: string; width: number | null; height: number | null; mime_type: string }>(
+    `SELECT r.media_asset_id, r.view, i.name, m.width, m.height, m.mime_type
+     FROM drive_references r JOIN drive_items i ON i.id = r.item_id AND i.brand_id = r.brand_id
+     JOIN media_assets m ON m.id = r.media_asset_id AND m.brand_id = r.brand_id
+     WHERE r.brand_id = $1 AND r.theme = $2 AND r.status = 'verified' AND r.artwork_confirmed AND i.state <> 'removed' AND m.kind = 'photo'
+     ORDER BY r.verified_at DESC`,
+    [brandId, theme],
+    db,
+  );
+  return rows
+    .filter((r) => ["image/jpeg", "image/png", "image/webp"].includes(r.mime_type) && !referenceTooSmall(r.width, r.height))
+    .sort((a, b) => (VIEW_ORDER[a.view] ?? 9) - (VIEW_ORDER[b.view] ?? 9))
+    .slice(0, limit);
+}
+
+/** Medya kimliği → doğrulanmış Drive referansının koleksiyonu (yalnızca "verified"). */
+export async function verifiedThemesOf(brandId: string, assetIds: string[], db: Queryable = getPool()) {
+  const ids = assetIds.filter(isUuid);
+  if (!ids.length) return new Map<string, FribeeTheme>();
+  const rows = await q<{ media_asset_id: string; theme: FribeeTheme }>(
+    `SELECT media_asset_id, theme FROM drive_references WHERE brand_id = $1 AND media_asset_id = ANY($2::uuid[]) AND status = 'verified' AND theme IS NOT NULL`,
+    [brandId, ids],
+    db,
+  );
+  return new Map(rows.map((r) => [r.media_asset_id, r.theme]));
+}
+
+export async function getDriveItem(brandId: string, itemId: string) {
+  if (!isUuid(itemId)) return null;
+  return q1<DriveItem>(`SELECT * FROM drive_items WHERE id = $1 AND brand_id = $2`, [itemId, brandId]);
+}
+
 /** Doğrulanmamış (uncertain/rejected) Drive referansına bağlı medya kimlikleri: bunlar hiçbir AI isteğine giremez. */
 export async function unverifiedDriveAssetIds(brandId: string, assetIds: string[], db: Queryable = getPool()) {
   const ids = assetIds.filter(isUuid);

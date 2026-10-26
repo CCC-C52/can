@@ -6,7 +6,9 @@
 
 export const STUDIO_MODES = ["archive", "ai", "hybrid"] as const;
 export type StudioMode = (typeof STUDIO_MODES)[number];
-export type StudioRequest = { mode: StudioMode; aiScenes: number; sceneSeconds: number; photoIds: string[] };
+/** collection: sahibin seçtiği FriBee koleksiyonu (tema anahtarı; ör. "anime"). Referanslar bu koleksiyondan olmalı. */
+export type StudioRequest = { mode: StudioMode; aiScenes: number; sceneSeconds: number; photoIds: string[]; collection?: string | null };
+const COLLECTION_RE = /Koleksiyon:\s*(space_alien|music|anime|save_the_bee)\b/i;
 
 export const STUDIO_MAX_AI_SCENES = 3;
 export const STUDIO_MAX_PHOTOS = 3;
@@ -21,6 +23,7 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 export function studioDirectiveLines(req: StudioRequest, photos: { id: string; filename: string }[]): string[] {
   const lines = [`Stüdyo modu: ${req.mode}${req.mode === "archive" ? "" : ` (AI sahne: ${req.aiScenes} × ${req.sceneSeconds} sn)`}`];
+  if (req.collection) lines.push(`Koleksiyon: ${req.collection}`);
   if (photos.length) lines.push(`Ürün referans fotoğrafları: ${photos.map((p) => `${p.filename.replace(/[[\]\n]/g, "")} [id:${p.id}]`).join(", ")}`);
   return lines;
 }
@@ -34,7 +37,8 @@ export function parseStudioRequest(text: string | null | undefined): StudioReque
   const photoIds = [...new Set([...line.matchAll(new RegExp(`\\[id:(${UUID.source})\\]`, "gi"))].map((x) => x[1].toLowerCase()))].slice(0, STUDIO_MAX_PHOTOS);
   const aiScenes = mode === "archive" ? 0 : Math.min(STUDIO_MAX_AI_SCENES, Math.max(1, Number(m[2] ?? 2)));
   const sceneSeconds = mode === "archive" ? 0 : Math.min(10, Math.max(3, Number(m[3] ?? 6)));
-  return { mode, aiScenes, sceneSeconds, photoIds };
+  const collection = COLLECTION_RE.exec(text ?? "")?.[1]?.toLowerCase() ?? null;
+  return { mode, aiScenes, sceneSeconds, photoIds, collection };
 }
 
 export const wantsAiScenes = (s: StudioRequest | null | undefined) => !!s && s.mode !== "archive";
@@ -51,8 +55,9 @@ export function buildStudioInstruction(args: {
   aiScenes: number;
   sceneSeconds: number;
   goal: string;
+  collection?: string | null;
 }) {
-  const req: StudioRequest = { mode: args.mode, aiScenes: args.mode === "archive" ? 0 : args.aiScenes, sceneSeconds: args.mode === "archive" ? 0 : args.sceneSeconds, photoIds: args.photos.map((p) => p.id) };
+  const req: StudioRequest = { mode: args.mode, aiScenes: args.mode === "archive" ? 0 : args.aiScenes, sceneSeconds: args.mode === "archive" ? 0 : args.sceneSeconds, photoIds: args.photos.map((p) => p.id), collection: args.collection ?? null };
   const files = args.videos.map((v) => v.filename).join(", ");
   const head = args.mode === "archive"
     ? [

@@ -1,4 +1,4 @@
-import type { AgentId, SpecialistId } from "./schemas";
+import { SPECIALISTS, type AgentId, type SpecialistId } from "./schemas";
 
 // Uygulamanın ÇALIŞMA ZAMANI ajanları. (Geliştirme sırasında kullanılan kodlama ajanlarıyla ilgisi yoktur.)
 // Araç izinleri burada tanımlanır ve ToolGateway tarafından sunucu kodunda zorunlu kılınır.
@@ -18,6 +18,8 @@ export const TOOLS = {
   "shopify.propose": "Shopify değişiklik önerisi hazırlama (canlı yazma yok)",
   "social.propose": "Yayın paketi hazırlama (canlı yayın yok)",
   "research.read": "Sahibin doğruladığı web araştırması kaynaklarını okuma (üçüncü taraf içerik; web çağrısı yapamaz)",
+  "knowledge.read": "Marka bilgi sistemini (onaylı olgular, Drive arşivi dizini) rolüne izin verilen hassasiyette okuma",
+  "finance.read": "Finansal kayıtları ve finans hassasiyetindeki arşiv dosyalarını okuma",
 } as const;
 export type ToolId = keyof typeof TOOLS;
 
@@ -50,7 +52,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     requiredInputs: ["Kullanıcı talimatı", "Seçili marka", "Marka profili"],
     outputDescription: "Görev planı (hedefler + bağımlılıklı görev listesi) ve proje raporu",
     // media.read: hangi gerçek medyanın (ve analizlerinin) mevcut olduğunu bilerek plan yapmak için
-    tools: ["brand.read", "products.read", "media.read", "tasks.manage", "outputs.read", "costs.read", "research.read"],
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "tasks.manage", "outputs.read", "costs.read", "research.read"],
     acceptanceCriteria: [
       "Her görev mevcut bir uzmana atanmış olmalı",
       "Bağımlılıklar döngüsüz olmalı",
@@ -67,7 +69,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     outputDescription: "Kampanya stratejisi (StrategySchema)",
     // outputs.read: yöneticinin bağımlılık olarak verdiği diğer uzman çıktılarını (ör. analiz) okumak için.
     // media.read: kampanya fikirlerini arşivdeki gerçek görsel/video analizlerine dayandırmak için.
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "performance.read", "research.read"],
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "outputs.read", "performance.read", "research.read"],
     acceptanceCriteria: [
       "Varsayımlar 'assumption' olarak işaretlenmeli",
       "Doğrulanmamış ürün özelliği, satış rakamı, yorum veya bağış oranı içermemeli",
@@ -82,7 +84,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Ürün açıklamaları", "Koleksiyon önerileri", "Mağaza sayfaları", "Bundle önerileri", "Mevcut ve önerilen değer karşılaştırması"],
     requiredInputs: ["Ürün kayıtları (mevcut değerler)", "Doğrulanmış ürün özellikleri", "Gönderim/iade bilgileri"],
     outputDescription: "Shopify değişiklik önerisi (ShopifyProposalSchema)",
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "shopify.propose", "research.read"],
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "outputs.read", "shopify.propose", "research.read"],
     acceptanceCriteria: [
       "Her değişiklikte mevcut değer kayıttaki değerle aynı olmalı",
       "Fiyat değişikliği ayrıca işaretlenir ve ayrı onay gerektirir",
@@ -97,7 +99,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Görsel briefler", "Gönderi/kapak/reklam görseli tanımları", "Bağlı servis varsa görsel üretimi"],
     requiredInputs: ["Marka renk/yazı tipi", "Ürün fotoğrafları (arşiv)", "Kampanya stratejisi"],
     outputDescription: "Tasarım briefleri (DesignBriefSchema) + bağlantı varsa üretilmiş görseller",
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "image.generate"],
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "outputs.read", "image.generate"],
     acceptanceCriteria: [
       "Gerçek ürün fotoğrafı ile AI kampanya görseli ayrılmalı",
       "Ürünün baskı, renk ve kalıbını değiştirecek talimat içermemeli",
@@ -112,7 +114,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Senaryo", "Arşivden çekim seçimi", "Kurgu planı ve altyazı", "Mevcut çekimlerden yerel render", "Bağlı servis varsa AI video"],
     requiredInputs: ["Arşivdeki video çekimleri", "Kampanya stratejisi", "Marka tonu"],
     outputDescription: "Video planı (VideoPlanSchema) + render edilmiş video (yalnızca gerçek çekim varsa)",
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "video.edit", "video.generate"],
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "outputs.read", "video.edit", "video.generate"],
     acceptanceCriteria: [
       "edit_existing yalnızca arşivde bulunan video kimliklerini kullanmalı",
       "compose parçaları yalnızca bu plandaki AI sahnelerine, markanın ürün fotoğraflarına ve doğrulanmış arşiv sahnelerine dayanmalı",
@@ -128,7 +130,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Platforma özel açıklamalar", "İçerik takvimi", "Yayın paketi", "Yayın durumu takibi"],
     requiredInputs: ["Strateji", "Tasarım briefleri / videolar", "Marka içerik dili"],
     outputDescription: "Sosyal medya yayın paketi (SocialPackageSchema)",
-    tools: ["brand.read", "products.read", "media.read", "outputs.read", "calendar.write", "social.propose", "research.read"],
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "outputs.read", "calendar.write", "social.propose", "research.read"],
     acceptanceCriteria: [
       "Instagram açıklaması 2.200 karakteri, en fazla 30 hashtag'i aşmamalı",
       "TikTok için otomatik yayın yoksa manuel paket hazırlanmalı",
@@ -143,8 +145,34 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Marka tutarlılığı", "Ürün bilgisi doğruluğu", "Uydurma iddia taraması", "Dil kontrolü", "Maliyet ve performans kontrolü"],
     requiredInputs: ["Kontrol edilecek çıktı sürümü", "Doğrulanmış marka ve ürün bilgileri"],
     outputDescription: "Kalite raporu (QaReviewSchema)",
-    tools: ["brand.read", "products.read", "outputs.read", "costs.read", "media.read", "research.read"],
+    tools: ["brand.read", "knowledge.read", "products.read", "outputs.read", "costs.read", "media.read", "research.read"],
     acceptanceCriteria: ["Her kontrol pass/warn/fail ile raporlanmalı", "Başarısız kontrol gerekçesi açık olmalı"],
+    producesExternalProposal: false,
+  },
+  pr: {
+    id: "pr",
+    name: "PR Uzmanı",
+    role: "Basın, creator ve topluluk iletişimi için koleksiyon hikâyesi açıları, takvim fırsatları, basın bülteni ve teklif (pitch) taslakları hazırlar.",
+    responsibilities: ["Koleksiyon hikâye açıları", "ABD özel gün fırsatları", "Basın ve creator teklif taslakları", "İtibar riskleri", "PR ölçütleri"],
+    requiredInputs: ["Onaylı marka ve koleksiyon bilgileri", "Doğrulanmış araştırma kaynakları", "PR takvimi"],
+    outputDescription: "PR planı (PrPlanSchema); hiçbir şey dışarı gönderilmez",
+    tools: ["brand.read", "knowledge.read", "products.read", "media.read", "outputs.read", "research.read"],
+    acceptanceCriteria: [
+      "Her iddia onaylı bilgiye veya doğrulanmış kaynağa dayanmalı",
+      "Gazeteci/creator adı, iletişim bilgisi, erişim veya etkileşim rakamı uydurulmamalı",
+      "Taslaklar gönderilmez; dış iletişim sahip onayı gerektirir",
+    ],
+    producesExternalProposal: false,
+  },
+  finance: {
+    id: "finance",
+    name: "Finans Uzmanı",
+    role: "Maliyet kayıtları, bütçe sınırları ve finans hassasiyetindeki arşiv kayıtlarından bütçe ve harcama değerlendirmesi hazırlar.",
+    responsibilities: ["Harcama özeti (kayıtlı veriden)", "Bütçe önerileri", "Maliyet riskleri"],
+    requiredInputs: ["Maliyet kayıtları", "Bütçe sınırları", "Finans arşiv dosyaları (yalnızca üst veri)"],
+    outputDescription: "Finans değerlendirmesi (FinanceReviewSchema)",
+    tools: ["brand.read", "knowledge.read", "finance.read", "costs.read", "products.read", "outputs.read", "performance.read"],
+    acceptanceCriteria: ["Tutarlar yalnızca kayıtlı veriden gelmeli; bilinmeyen tutar null", "Varsayımlar 'assumption' olarak işaretlenmeli"],
     producesExternalProposal: false,
   },
 };
@@ -163,5 +191,5 @@ export function assertTool(agent: AgentId, tool: ToolId) {
 }
 
 export function isSpecialist(id: string): id is SpecialistId {
-  return ["marketing", "shopify", "design", "video", "social", "quality"].includes(id);
+  return (SPECIALISTS as readonly string[]).includes(id);
 }

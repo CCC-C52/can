@@ -103,7 +103,18 @@ export function classifyFile(f: Pick<DriveFileMeta, "name" | "path" | "mimeType"
   return "other";
 }
 
-/** Kategoriden hassasiyet: finans ve iş kayıtları özel, üretim ve lojistik tedarikçi verisidir. */
+/** Tablo/hesap dosyası türleri: içerik bilinmeden finans verisi olabileceği varsayılır. */
+const SPREADSHEET = /(spreadsheet|excel|ms-excel|sheet|csv)/i;
+
+/**
+ * Kategoriden hassasiyet: finans ve iş kayıtları özel, üretim ve lojistik tedarikçi verisidir.
+ * Sınıflandırılamayan tablo dosyası (xlsx, csv, Google E-Tablo) temkinli olarak "finance" sayılır.
+ */
+export function sensitivityForFile(category: ArchiveCategory, mimeType: string): Sensitivity {
+  if (category === "other" && SPREADSHEET.test(mimeType)) return "finance";
+  return sensitivityFor(category);
+}
+
 export function sensitivityFor(category: ArchiveCategory): Sensitivity {
   switch (category) {
     case "financial_record": return "finance";
@@ -129,6 +140,17 @@ export class ArchiveIndex {
   constructor(readonly brandId: string, readonly rootFolderId: string, private now: () => Date = () => new Date()) {}
 
   get cursor() { return this.pageToken; }
+
+  /** Kalıcı dizinden (drive_items) yükleme: sorgu katmanı aynı arama/erişim kurallarını kullanır. */
+  static fromFiles(brandId: string, rootFolderId: string, files: ArchiveFile[], lastSyncedAt: string | null) {
+    const idx = new ArchiveIndex(brandId, rootFolderId);
+    for (const f of files) {
+      if (f.brandId !== brandId) throw new BrandIsolationError("Başka markanın dosyası dizine yüklenemez.");
+      idx.files.set(f.driveFileId, f);
+    }
+    idx.lastSyncedAt = lastSyncedAt;
+    return idx;
+  }
 
   private checkSource(source: DriveSource) {
     if (source.brandId !== this.brandId) throw new BrandIsolationError("Drive kaynağı bu markaya ait değil.");

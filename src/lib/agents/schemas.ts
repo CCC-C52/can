@@ -3,7 +3,7 @@ import { z } from "zod";
 // Yapılandırılmış çıktı şemaları. Model çıktısı bu şemalarla doğrulanmadan kaydedilmez.
 // Anthropic structured outputs ile uyum için şemalar sade tutulur (nesne/dizi/metin/sayı/enum).
 
-export const SPECIALISTS = ["marketing", "shopify", "design", "video", "social", "quality"] as const;
+export const SPECIALISTS = ["marketing", "shopify", "design", "video", "social", "quality", "pr", "finance"] as const;
 export type SpecialistId = (typeof SPECIALISTS)[number];
 export type AgentId = "manager" | SpecialistId;
 
@@ -192,6 +192,34 @@ export const SocialPackageSchema = z.object({
   unknowns: Unknowns,
 });
 
+const SourceRefs = z.array(z.string()).describe("Dayanılan kaynaklar: knowledge fact id, Drive dosya bağlantısı, doğrulanmış araştırma URL'si veya takvim etkinliği kimliği");
+
+export const PrPlanSchema = z.object({
+  summary: z.string(),
+  story_angles: z.array(z.object({
+    id: z.string(),
+    collection: z.string().describe("Koleksiyon adı (ör. Space Alien) veya 'brand'"),
+    angle: z.string().describe("Basın/creator hikâye açısı"),
+    proof_points: z.array(z.string()).describe("YALNIZCA onaylı bilgiler; yoksa boş"),
+    sources: SourceRefs,
+  })),
+  calendar_hooks: z.array(z.object({ date: z.string().describe("YYYY-MM-DD"), occasion: z.string(), idea: z.string(), lead_time_days: z.number() })).default([]),
+  media_targets: z.array(z.object({ type: z.string().describe("Yayın/creator TÜRÜ (ör. US streetwear press); kişi adı veya iletişim bilgisi uydurma"), why: z.string() })).default([]),
+  pitch_drafts: z.array(z.object({ id: z.string(), audience: z.string(), subject: z.string(), body: z.string().describe("Marka içerik dilinde taslak; gönderilmez") })).default([]),
+  risks: z.array(z.object({ risk: z.string(), mitigation: z.string() })).default([]),
+  kpis: z.array(z.object({ metric: z.string(), baseline: z.string().describe("Ölçülmüş değer veya 'unknown'"), how_to_measure: z.string() })).default([]),
+  unknowns: Unknowns,
+});
+
+export const FinanceReviewSchema = z.object({
+  summary: z.string(),
+  spend: z.array(z.object({ item: z.string(), amount_usd: z.number().nullable().describe("Yalnızca kayıttaki/kaynaktaki tutar; bilinmiyorsa null"), source: z.string() })).default([]),
+  budget_recommendations: z.array(z.object({ area: z.string(), recommendation: z.string(), basis: z.enum(["recorded_data", "assumption"]) })).default([]),
+  risks: z.array(z.string()).default([]),
+  sources: SourceRefs,
+  unknowns: Unknowns,
+});
+
 export const QaReviewSchema = z.object({
   verdict: z.enum(["pass", "needs_changes", "fail"]),
   score: z.number().describe("0-100"),
@@ -217,6 +245,8 @@ export const OUTPUT_SCHEMAS = {
   video: VideoPlanSchema,
   social: SocialPackageSchema,
   quality: QaReviewSchema,
+  pr: PrPlanSchema,
+  finance: FinanceReviewSchema,
 } as const;
 
 export const OUTPUT_KIND: Record<SpecialistId, string> = {
@@ -226,6 +256,8 @@ export const OUTPUT_KIND: Record<SpecialistId, string> = {
   video: "video_plan",
   social: "social_package",
   quality: "qa_report",
+  pr: "pr_plan",
+  finance: "finance_review",
 };
 
 export type StrategyOutput = z.infer<typeof StrategySchema>;
@@ -234,3 +266,5 @@ export type DesignBriefOutput = z.infer<typeof DesignBriefSchema>;
 export type VideoPlanOutput = z.infer<typeof VideoPlanSchema>;
 export type SocialPackage = z.infer<typeof SocialPackageSchema>;
 export type ProjectReport = z.infer<typeof ReportSchema>;
+export type PrPlan = z.infer<typeof PrPlanSchema>;
+export type FinanceReview = z.infer<typeof FinanceReviewSchema>;

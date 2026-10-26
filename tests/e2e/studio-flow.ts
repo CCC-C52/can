@@ -100,7 +100,7 @@ async function main() {
 
     await step("Gezinme: tüm bölümler menüde ve açılıyor", async () => {
       await page.goto(`${BASE}/`);
-      const labels = ["AI Yönetici", "AI Ekibi", "Marka Yönetimi", "Araştırma Merkezi", "Görsel Stüdyosu", "Video Stüdyosu", "Kampanya Yönetimi", "Sosyal Medya", "Analitik", "Entegrasyonlar", "Marka Hafızası", "Onay Merkezi", "Sistem Durumu", "Maliyet Yönetimi"];
+      const labels = ["AI Yönetici", "AI Ekibi", "Marka Yönetimi", "Araştırma Merkezi", "Görsel Stüdyosu", "Video Stüdyosu", "Kampanya Yönetimi", "Sosyal Medya", "Analitik", "Entegrasyonlar", "Marka Hafızası", "Onay Merkezi", "Sistem Durumu", "Maliyet Yönetimi", "Marka Bilgi Merkezi", "Drive Arşivi", "PR Ajansı"];
       const nav = page.getByRole("navigation", { name: "Ana menü" });
       for (const l of labels) {
         const link = nav.getByRole("link", { name: l, exact: true });
@@ -131,6 +131,39 @@ async function main() {
       await page.locator('form:has(#mem-title) button[type=submit]').click();
       await page.waitForURL(/ok=/);
       expect((await page.content()).includes(title), "kayıt listede yok");
+    });
+
+    await step("Bilgi Merkezi: koleksiyonları onayla → dört koleksiyon rengiyle görünür", async () => {
+      await page.goto(`${BASE}/bilgi`);
+      const btn = page.getByRole("button", { name: "Koleksiyonları onayla" });
+      if (await btn.count()) {
+        page.once("dialog", (d) => d.accept());
+        await btn.click();
+        await page.waitForURL(/ok=|err=/);
+        expect(decodeURIComponent(page.url()).includes("ok="), decodeURIComponent(page.url()));
+      }
+      const html = await page.content();
+      for (const [name, color] of [["Space Alien", "black"], ["Music", "white"], ["Anime", "orange"], ["Save the Bee", "light blue"]]) {
+        expect(html.includes(name) && html.includes(color), `${name} (${color}) görünmüyor`);
+      }
+      return "Space Alien siyah · Music beyaz · Anime turuncu · Save the Bee açık mavi";
+    });
+
+    await step("PR Ajansı: takvim, 24 aylık strateji ve otomasyon sekmeleri; 'şimdi çalıştır' taslak üretir (ücretsiz)", async () => {
+      await page.goto(`${BASE}/pr-ajansi?tab=calendar`);
+      let html = await page.content();
+      expect(html.includes("Thanksgiving") || html.includes("Independence Day"), "ABD takviminde federal tatil yok");
+      await page.goto(`${BASE}/pr-ajansi?tab=strategy`);
+      html = await page.content();
+      expect(html.includes("24 aylık marka bilinirliği stratejisi") && html.includes("Q8"), "24 aylık plan görünmüyor");
+      await page.goto(`${BASE}/pr-ajansi?tab=automation`);
+      await page.getByRole("button", { name: /Şimdi çalıştır/ }).click();
+      await page.waitForURL(/ok=|err=/);
+      const u = decodeURIComponent(page.url());
+      expect(u.includes("ok=") || u.includes("Çok sık"), u);
+      html = await page.content();
+      expect(html.includes("Günlük trend özeti"), "günlük özet taslağı yok");
+      return u.includes("ok=") ? u.split("ok=")[1].slice(0, 120) : "hız sınırı (önceki çalıştırma)";
     });
 
     const submitted = await step("Video Stüdyosu: gerçek arşiv videosu seç ve gönder", async () => {

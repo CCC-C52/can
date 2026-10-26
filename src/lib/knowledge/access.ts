@@ -20,13 +20,15 @@ export const ROLE_LABELS: Record<KnowledgeRole, string> = {
   finance: "Finans",
 };
 
-/** Mevcut ajan kimliklerinin bilgi rollerine eşlemesi (PR ve Finans ajanları henüz yok). */
+/** Ajan kimliklerinin bilgi rollerine eşlemesi. Bilinmeyen ajan en dar role (pazarlama: public + internal) düşer. */
 export function roleForAgent(agent: AgentId): KnowledgeRole {
   switch (agent) {
     case "manager":
     case "quality": return "manager";
     case "design":
     case "video": return "video_design";
+    case "pr": return "pr";
+    case "finance": return "finance";
     default: return "marketing";
   }
 }
