@@ -12,6 +12,7 @@ import { getLimits } from "@/lib/settings";
 import { config } from "@/lib/config";
 import { capabilityReady } from "@/lib/services/connections";
 import { STUDIO_MAX_AI_SCENES, STUDIO_MODE_LABEL } from "@/lib/video/studio";
+import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 
 export const dynamic = "force-dynamic";
 
@@ -49,12 +50,15 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
             </div>
           </fieldset>
           <fieldset>
-            <legend className="h2 mb-2">Gerçek ürün fotoğrafları <span className="text-xs font-normal text-muted">(AI sahnelerine referans, en fazla 3; baskı, renk, logo korunur)</span></legend>
+            <legend className="h2 mb-2">Gerçek ürün fotoğrafları <span className="text-xs font-normal text-muted">(AI sahnelerine orijinal netlikte referans, en fazla 3; kısa kenar en az {REFERENCE_MIN_SHORT_SIDE} piksel; tasarım ve renk değişmez)</span></legend>
             {photos.length === 0 ? <Empty>Arşivde ürün fotoğrafı yok. <Link href="/medya" className="text-brand underline">Medya arşivi</Link>nden yükleyin.</Empty> : (
               <ul className="max-h-60 space-y-1 overflow-y-auto">
-                {photos.map((p) => (
-                  <li key={p.id}><label className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-gray-50"><input type="checkbox" name="photoIds" value={p.id} /><span className="min-w-0 flex-1 truncate">{p.filename}</span>{p.width && p.height ? <span className="text-xs text-muted">{p.width}x{p.height}</span> : null}</label></li>
-                ))}
+                {photos.map((p) => {
+                  const low = referenceTooSmall(p.width, p.height);
+                  return (
+                    <li key={p.id}><label className={`flex items-center gap-2 rounded-lg px-2 py-1 text-sm ${low ? "opacity-60" : "hover:bg-gray-50"}`}><input type="checkbox" name="photoIds" value={p.id} disabled={low} /><span className="min-w-0 flex-1 truncate">{p.filename}</span>{p.width && p.height ? <span className="text-xs text-muted">{p.width}x{p.height}</span> : null}{low && <Badge tone="warn">Düşük çözünürlük</Badge>}</label></li>
+                  );
+                })}
               </ul>
             )}
           </fieldset>

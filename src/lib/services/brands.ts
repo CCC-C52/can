@@ -11,7 +11,8 @@ export type Brand = {
   target_audience: string | null;
   tone: string | null;
   content_language: string;
-  colors: { name: string; hex: string }[];
+  /** Marka paleti. pantone verilmişse kesin renk tanımıdır (ör. "PANTONE 1585 C"); hex ekran karşılığıdır. */
+  colors: { name: string; hex: string; pantone?: string }[];
   fonts: { role: string; family: string }[];
   logo_asset_id: string | null;
   shipping_info: string | null;
@@ -74,6 +75,15 @@ const EDITABLE = [
   "name", "story", "target_audience", "tone", "content_language", "colors", "fonts", "logo_asset_id",
   "shipping_info", "return_policy", "campaign_rules", "price_source", "inventory_source",
 ] as const;
+/** Marka paleti metni: her satır "ad, #hex[, PANTONE kodu]". Pantone verilirse kesin renk tanımı olarak saklanır. */
+export function parseBrandColors(text: string): Brand["colors"] {
+  return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [name, hex, pantone] = l.split(/[,;]\s*/);
+    const p = (pantone ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+    return { name: name ?? "", hex: (hex ?? name ?? "").trim(), ...(p ? { pantone: /^pantone/i.test(p) ? p.replace(/^pantone/i, "PANTONE") : `PANTONE ${p}` } : {}) };
+  }).filter((c) => /^#[0-9a-f]{3,8}$/i.test(c.hex));
+}
+
 export type BrandInput = Partial<Pick<Brand, (typeof EDITABLE)[number]>> & { name?: string };
 
 function clean(v: unknown) {

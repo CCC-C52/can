@@ -9,7 +9,7 @@ import { checkPassword, clearLoginFailures, loginLocked, recordLoginFailure, ses
 import { headers } from "next/headers";
 import { config } from "@/lib/config";
 import {
-  addBrandFact, addProductFact, addVariant, createBrand, createProduct, deleteBrandFact, deleteProductFact, deleteVariant, getBrand, updateBrand, updateProduct,
+  addBrandFact, addProductFact, addVariant, createBrand, createProduct, deleteBrandFact, deleteProductFact, deleteVariant, getBrand, parseBrandColors, updateBrand, updateProduct,
 } from "@/lib/services/brands";
 import { submitInstruction, cancelTask, cancelProject, retryTask, requestRegeneration, setPaused, retryWaitingConnections, getTask } from "@/lib/orchestrator/projects";
 import { decide, editOutput, revokeApproval } from "@/lib/services/outputs";
@@ -23,6 +23,7 @@ import { testInstagram } from "@/lib/adapters/instagram";
 import { testOpenAIImages } from "@/lib/adapters/images";
 import { testGeminiOmniVideo } from "@/lib/adapters/video-generation";
 import { STUDIO_MAX_AI_SCENES, STUDIO_MAX_PHOTOS, STUDIO_MODES, buildStudioInstruction, type StudioMode } from "@/lib/video/studio";
+import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import { releaseJob } from "@/lib/services/provider-jobs";
 import { testAnthropic } from "@/lib/models/test";
 import { audit } from "@/lib/audit";
@@ -82,10 +83,7 @@ export async function seedSampleAction() {
 }
 
 function brandFields(fd: FormData) {
-  const colors = str(fd, "colors").split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [name, hex] = l.split(/[,;]\s*/);
-    return { name: name ?? "", hex: (hex ?? name ?? "").trim() };
-  }).filter((c) => /^#[0-9a-f]{3,8}$/i.test(c.hex));
+  const colors = parseBrandColors(str(fd, "colors"));
   const fonts = str(fd, "fonts").split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
     const [role, family] = l.split(/[:;]\s*/);
     return family ? { role, family } : { role: "Genel", family: role };
@@ -592,6 +590,8 @@ export async function videoStudioAction(fd: FormData) {
     const mode = (STUDIO_MODES as readonly string[]).includes(str(fd, "mode")) ? (str(fd, "mode") as StudioMode) : "archive";
     const videos = await brandAssets(brand.id, fd.getAll("assetIds").map(String), "video");
     const photos = (await brandAssets(brand.id, fd.getAll("photoIds").map(String), "photo")).filter((p) => p.kind === "photo").slice(0, STUDIO_MAX_PHOTOS);
+    const lowRes = photos.filter((p) => referenceTooSmall(p.width, p.height));
+    if (lowRes.length) throw new Error(`Düşük çözünürlüklü referans: ${lowRes.map((p) => `${p.filename} (${p.width}x${p.height})`).join(", ")}. Kısa kenarı en az ${REFERENCE_MIN_SHORT_SIDE} piksel olan orijinal fotoğraf seçin.`);
     if (mode === "archive" && !videos.length) throw new Error("Arşiv kurgusu için en az bir video seçin.");
     if (mode === "hybrid" && !videos.length && !photos.length) throw new Error("Karma reklam için en az bir ürün fotoğrafı veya arşiv videosu seçin.");
     const min = Number(str(fd, "minSeconds")), max = Number(str(fd, "maxSeconds"));

@@ -18,6 +18,13 @@ export const TRANSITION_S = 0.5;
 export const CARD_S = 2;
 export const MAX_SEGMENTS = 12;
 const FFMPEG_THREADS = Math.max(1, Math.min(8, Number(process.env.FFMPEG_THREADS ?? 2) || 2));
+/**
+ * Renk doğruluğu: HD video oynatıcılar (Instagram, Chrome, Safari) etiketsiz dosyayı BT.709 kabul eder. Görüntüler
+ * (fotoğraf, kart) BT.709 matrisiyle YUV'a çevrilir ve her çıktı BT.709 olarak etiketlenir; aksi halde marka renkleri
+ * oynatıcıda kayar (ölçüm: etiketsiz BT.601 dönüşümünde turuncu ΔE 4,2, açık mavi ΔE 6,2).
+ */
+export const BT709_TAGS = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"];
+const RGB_TO_BT709 = "scale=out_color_matrix=bt709:out_range=tv";
 
 export type Cue = { start: number; end: number; text: string };
 /** Kaynak bölüm: `start`/`duration` KAYNAK dosyadaki zamandır. `text` bölüm boyunca ekranda görünür (çıktı konumu otomatik). */
@@ -89,7 +96,7 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
   const left = () => Math.max(1000, deadline - Date.now());
   const run = (a: string[], step: string) => runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", ...a], { step, timeoutMs: left(), signal: args.signal });
   const enc = (crf: number) => ["-c:v", "libx264", "-preset", "veryfast", "-crf", String(crf), "-threads", String(FFMPEG_THREADS),
-    "-x264-params", "rc-lookahead=10:sync-lookahead=0", "-pix_fmt", "yuv420p", "-r", String(FPS), "-video_track_timescale", "15360"];
+    "-x264-params", "rc-lookahead=10:sync-lookahead=0", "-pix_fmt", "yuv420p", "-r", String(FPS), "-video_track_timescale", "15360", ...BT709_TAGS];
   // fit: ürün kırpılmaz (kenar boşluğu); fill: kadraj doldurulur (kenarlar kırpılabilir). Renk/ton işlemi yapılmaz.
   const norm = framing === "fill"
     ? `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`
@@ -104,7 +111,7 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
       await fs.writeFile(png, img.buffer);
       const out = path.join(dir, `${name}.mp4`);
       await run([...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-t", CARD_S.toFixed(3), "-i", png,
-        "-vf", `scale=${W}:${H},setsar=1,format=yuv420p`, "-an", ...enc(18), "-t", CARD_S.toFixed(3), out], `${name} kartı`);
+        "-vf", `scale=${W}:${H}:out_color_matrix=bt709:out_range=tv,setsar=1,format=yuv420p`, "-an", ...enc(18), "-t", CARD_S.toFixed(3), out], `${name} kartı`);
       parts.push({ file: out, dur: await partDuration(out), clip: null });
     };
     if (args.intro?.text.trim()) await addCard(args.intro, "intro");
@@ -212,10 +219,10 @@ export async function photoMotionClip(args: { photo: string; out: string; format
     none: ["1", "0", "0"],
   };
   const [z, x, y] = zx[args.motion] ?? zx.zoom_in;
-  const vf = `scale=${SW}:${SH}:force_original_aspect_ratio=decrease,pad=${SW}:${SH}:(ow-iw)/2:(oh-ih)/2:color=${bg},setsar=1,` +
-    `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${W}x${H}:fps=${FPS},format=yuv420p`;
+  const vf = `scale=${SW}:${SH}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${SW}:${SH}:(ow-iw)/2:(oh-ih)/2:color=${bg},setsar=1,` +
+    `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${W}x${H}:fps=${FPS},${RGB_TO_BT709},format=yuv420p`;
   await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", ...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-i", args.photo,
-    "-vf", vf, "-frames:v", String(n), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", String(FFMPEG_THREADS), "-pix_fmt", "yuv420p", "-r", String(FPS), args.out],
+    "-vf", vf, "-frames:v", String(n), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", String(FFMPEG_THREADS), "-pix_fmt", "yuv420p", "-r", String(FPS), ...BT709_TAGS, args.out],
     { step: "ürün fotoğrafı hareketi", timeoutMs: args.timeoutMs ?? 120_000, signal: args.signal });
   return { duration: await partDuration(args.out), width: W, height: H };
 }

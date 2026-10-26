@@ -44,7 +44,8 @@ export type BrandContext = {
     tone: string;
     content_language: string;
     content_language_label: string;
-    colors: { name: string; hex: string }[];
+    /** Değiştirilemez marka paleti (hex + varsa Pantone). */
+    colors: { name: string; hex: string; pantone?: string }[];
     fonts: { role: string; family: string }[];
     shipping_info: string;
     return_policy: string;

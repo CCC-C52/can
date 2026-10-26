@@ -1,4 +1,5 @@
 import type { StudioRequest } from "@/lib/video/studio";
+import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import type { BrandContext } from "./context";
 import { UNKNOWN } from "./context";
 import type { QaReview } from "./schemas";
@@ -247,6 +248,15 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
           required.push("Her generate_new sahnesi için sinematik bir generation_prompt yazın.");
         }
         const photos = (v.selected_asset_ids ?? []).filter((id: string) => mediaById.get(id)?.kind === "photo");
+        if (ALTERS_DESIGN.test(String(v.generation_prompt ?? ""))) {
+          checks.push({ name: "Tasarım sadakati", status: "fail", detail: `${v.id}: istem ürünün rengini/baskısını/tasarımını değiştirmeyi istiyor; marka tasarımları ve renkleri değiştirilemez.` });
+          required.push("AI istemi ürünün tasarımını, baskısını, logosunu veya rengini değiştirmemeli; referans fotoğraftaki gibi korumalı.");
+        }
+        const lowRes = photos.filter((id: string) => { const m = mediaById.get(id); return referenceTooSmall(m?.width, m?.height); });
+        if (lowRes.length) {
+          checks.push({ name: "Referans netliği", status: "fail", detail: `${v.id}: ${lowRes.length} referans fotoğrafın kısa kenarı ${REFERENCE_MIN_SHORT_SIDE} pikselden küçük; baskı detayı korunamaz.` });
+          required.push(`Yalnızca kısa kenarı en az ${REFERENCE_MIN_SHORT_SIDE} piksel olan orijinal ürün fotoğraflarını referans seçin.`);
+        }
         if (opts.studio?.photoIds.length && !photos.length) {
           checks.push({ name: "Ürün referansı", status: "fail", detail: `${v.id}: sahibin seçtiği ürün fotoğrafları referans olarak verilmedi; ürün baskısı ve rengi korunamaz.` });
           required.push("generate_new sahnelerinde selected_asset_ids olarak stüdyoda seçilen ürün fotoğraflarını verin.");
@@ -367,3 +377,6 @@ function composeChecks(v: any, content: any, mediaById: Map<string, any>, checks
     checks.push({ name: "Marka kapanışı", status: "warn", detail: `${v.id}: outro_text boş; kapanışta marka adı kullanılacak.` });
   }
 }
+
+/** Ürün tasarımını/rengini değiştirmeye yönelik istem ifadeleri (marka tasarımları sabittir). */
+const ALTERS_DESIGN = /\b(recolou?r(ed|ing)?|change (the )?(colou?rs?|print|design|logo|artwork|graphic)|different (colou?rs?|colou?rway|print|design|logo)|new (colou?rway|print|design|logo)|redesign(ed)?|restyle(d)?|alternate colou?rway)\b/i;

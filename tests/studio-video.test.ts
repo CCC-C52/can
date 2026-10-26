@@ -179,6 +179,9 @@ describe("Video Stüdyosu → Gemini Omni → karma reklam MP4 (sahte sağlayıc
     expect(pr.duration).toBeLessThan(16.5);
     const job = await q<any>(`SELECT request, status FROM provider_jobs WHERE task_id = $1 ORDER BY created_at`, [render.id]);
     expect(job.map((j) => [j.status, j.request.mode])).toEqual([["succeeded", "image_to_video"], ["succeeded", "image_to_video"]]);
+    // Referans orijinal netlikte gitti (yeniden kodlama yok); bayt kayda yazılmadı
+    expect(job[0].request.reference_fidelity).toEqual([expect.objectContaining({ asset_id: photoId, transformed: "none", original_px: [1200, 1500], sent_px: [1200, 1500] })]);
+    expect(JSON.stringify(job[0].request)).not.toMatch(/base64|\/9j\//);
 
     // MP4 doğrulandığı için plan onaylanabilir
     const out = (await listOutputs(brandId, { projectId: project.id })).find((o) => o.kind === "video_plan")!;

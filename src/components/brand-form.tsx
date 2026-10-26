@@ -2,7 +2,7 @@ import type { Brand } from "@/lib/services/brands";
 import { LANGUAGES } from "@/lib/labels";
 
 export function BrandFields({ b }: { b?: Brand | null }) {
-  const colors = (b?.colors ?? []).map((c) => `${c.name}, ${c.hex}`).join("\n");
+  const colors = (b?.colors ?? []).map((c) => `${c.name}, ${c.hex}${c.pantone ? `, ${c.pantone}` : ""}`).join("\n");
   const fonts = (b?.fonts ?? []).map((f) => `${f.role}: ${f.family}`).join("\n");
   const ph = "Bilinmiyor — boş bırakılırsa ajanlar bu bilgiyi uydurmaz";
   return (
@@ -19,7 +19,7 @@ export function BrandFields({ b }: { b?: Brand | null }) {
         <label className="block"><span className="label">Fiyat kaynağı</span><select name="price_source" defaultValue={b?.price_source ?? "unknown"} className="input"><option value="unknown">Bilinmiyor</option><option value="manual">Manuel</option><option value="shopify">Shopify</option></select></label>
         <label className="block"><span className="label">Stok kaynağı</span><select name="inventory_source" defaultValue={b?.inventory_source ?? "unknown"} className="input"><option value="unknown">Bilinmiyor</option><option value="manual">Manuel</option><option value="shopify">Shopify</option></select></label>
       </div>
-      <label className="block"><span className="label">Renkler (her satır: ad, #hex)</span><textarea name="colors" rows={3} defaultValue={colors} placeholder={"Lacivert, #1f3a5f\nKum, #efe8dc"} className="input font-mono text-xs" /></label>
+      <label className="block"><span className="label">Renkler (her satır: ad, #hex, Pantone kodu — Pantone isteğe bağlı; verilen renkler değiştirilemez)</span><textarea name="colors" rows={4} defaultValue={colors} placeholder={"Anime turuncu, #f97316, PANTONE 1585 C\nSpace Alien siyah, #111827, PANTONE Black 6 C"} className="input font-mono text-xs" /></label>
       <label className="block"><span className="label">Yazı tipleri (her satır: rol: aile)</span><textarea name="fonts" rows={3} defaultValue={fonts} placeholder={"Başlık: Inter"} className="input font-mono text-xs" /></label>
       <label className="block"><span className="label">Gönderim bilgisi</span><textarea name="shipping_info" rows={2} defaultValue={b?.shipping_info ?? ""} placeholder={ph} className="input" /></label>
       <label className="block"><span className="label">İade politikası</span><textarea name="return_policy" rows={2} defaultValue={b?.return_policy ?? ""} placeholder={ph} className="input" /></label>

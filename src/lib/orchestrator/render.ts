@@ -4,6 +4,7 @@ import path from "node:path";
 import { q1 } from "@/lib/db/pool";
 import { composeDesign } from "@/lib/adapters/compose";
 import { photoMotionClip, renderEdit, type EditClip, type PhotoMotion } from "@/lib/adapters/video-edit";
+import { prepareReference, ReferenceQualityError, type ReferenceFidelity } from "@/lib/video/reference";
 import { FfmpegError } from "@/lib/adapters/ffmpeg";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
@@ -429,17 +430,27 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       o.waiting.push(`${vid.id}: proje AI video sınırı (${ctx.limits.maxVideoGenSeconds} sn) aşılacak; Ayarlar'dan sahip artırabilir`);
       return;
     }
-    // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur)
+    // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur).
+    // Orijinal netlik: sınıra sığan dosya aynen gider; düşük çözünürlüklü fotoğraf referans olamaz (ücretli istek yapılmaz).
     const images: { base64: string; mimeType: string }[] = [];
+    const fidelity: (ReferenceFidelity & { asset_id: string })[] = [];
     for (const id of vid.selected_asset_ids ?? []) {
       if (images.length >= MAX_REFERENCE_IMAGES) break;
       const m = await getMedia(task.brand_id, id);
-      if (m && m.kind === "photo" && RASTER.has(m.mime_type)) images.push({ base64: (await readMediaFile(m)).toString("base64"), mimeType: m.mime_type });
+      if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) continue;
+      try {
+        const ref = await prepareReference(await readMediaFile(m), m.mime_type, m.filename);
+        images.push({ base64: ref.base64, mimeType: ref.mimeType });
+        fidelity.push({ asset_id: m.id, ...ref.fidelity });
+      } catch (err) {
+        if (err instanceof ReferenceQualityError) { o.failed.push(`${vid.id}: ${err.message}`); return; }
+        throw err;
+      }
     }
     const est = gen.estimateCostUsd(seconds);
     const prompt = clean(vid.generation_prompt);
     const { job, created } = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "video_generation", itemRef: vid.id, key, estimateUsd: est,
-      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length } });
+      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length, reference_fidelity: fidelity } });
     if (!created) { reportExisting(job, vid.id, o); return; }
     try {
       await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
