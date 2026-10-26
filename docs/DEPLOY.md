@@ -124,6 +124,7 @@ Otomatik dağıtım kapalıdır (yukarıdaki uyarı). Güncelleme: Render → `a
 |---|---|
 | `OPENAI_API_KEY`, `OPENAI_IMAGE_COST_USD` | AI kampanya görseli (OpenAI Images) |
 | `GEMINI_API_KEY`, `GEMINI_VIDEO_MODEL`, `GEMINI_VIDEO_COST_PER_SECOND_USD` | AI video (Google Gemini Omni Video) |
+| `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET` | Google Drive marka arşivi (salt okunur; ayrıntı `docs/GOOGLE_DRIVE.md`). Web ve işleyicide aynı olmalı. |
 | `FFMPEG_THREADS` | ffmpeg iş parçacığı sınırı (vars. 2) |
 
 Anahtarı ekledikten sonra panelde **Entegrasyonlar → Test et** ve **Ayarlar → Ücretli AI medya üretimi** iznini (varsayılan kapalı) bilinçli olarak açın.

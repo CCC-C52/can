@@ -68,6 +68,9 @@ describe("Geçiş politikası (depo denetimi)", () => {
     expect(r.errors).toEqual([]);
     const m003 = r.migrations.find((m) => m.name === "003_brand_memory_research.sql")!;
     expect(m003).toMatchObject({ class: "additive", policy: "additive", requiresAuthorization: true, autoApprovable: false });
+    const m004 = r.migrations.find((m) => m.name === "004_drive_archive.sql")!;
+    // 004 (Drive arşiv dizini): yalnızca yeni tablolar; kayıtsız additive geçiş olarak otomatik onaylanabilir
+    expect(m004).toMatchObject({ class: "additive", policy: "none", requiresAuthorization: false, autoApprovable: true, findings: [] });
   });
 
   it("uygulanmış geçişin içeriği değişirse veya dosya silinirse hata", () => {
@@ -78,12 +81,12 @@ describe("Geçiş politikası (depo denetimi)", () => {
   });
 
   it("kayıtsız yeni geçiş: additive ise kabul, yıkıcı/inceleme gerektiren ise ret", () => {
-    const ok = tempMigrations((d) => fs.writeFileSync(path.join(d, "004_add_notes.sql"), "CREATE TABLE IF NOT EXISTS notes (id uuid PRIMARY KEY);\n"));
+    const ok = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_add_notes.sql"), "CREATE TABLE IF NOT EXISTS notes (id uuid PRIMARY KEY);\n"));
     const r = checkPolicy(ok);
     expect(r.ok).toBe(true);
-    expect(r.migrations.find((m) => m.name === "004_add_notes.sql")).toMatchObject({ class: "additive", policy: "none", autoApprovable: true });
-    const bad = tempMigrations((d) => fs.writeFileSync(path.join(d, "004_cleanup.sql"), "DELETE FROM audit_log;\n"));
-    expect(checkPolicy(bad).errors.join(" ")).toMatch(/004_cleanup\.sql: politikada kaydı yok ve sınıflandırma 'destructive'/);
+    expect(r.migrations.find((m) => m.name === "090_add_notes.sql")).toMatchObject({ class: "additive", policy: "none", autoApprovable: true });
+    const bad = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_cleanup.sql"), "DELETE FROM audit_log;\n"));
+    expect(checkPolicy(bad).errors.join(" ")).toMatch(/090_cleanup\.sql: politikada kaydı yok ve sınıflandırma 'destructive'/);
     const dup = tempMigrations((d) => fs.writeFileSync(path.join(d, "003_other.sql"), "CREATE TABLE IF NOT EXISTS z (id int);\n"));
     expect(checkPolicy(dup).errors.join(" ")).toMatch(/aynı numaralı/);
   });
@@ -91,29 +94,30 @@ describe("Geçiş politikası (depo denetimi)", () => {
 
 describe("Dağıtım kapısı: canlıda bekleyen geçişler", () => {
   const base = ["001_init.sql", "002_media_jobs_integrity.sql"];
-  it("003 sahip onayı olmadan engellenir; adıyla onay verilince izin", () => {
+  it("003 sahip onayı olmadan engellenir; adıyla onay verilince izin (004 additive, onaysız ilerler)", () => {
     const blocked = evaluatePending(REPO, base, []);
     expect(blocked.allowed).toBe(false);
-    expect(blocked.pending).toEqual(["003_brand_memory_research.sql"]);
+    expect(blocked.pending).toEqual(["003_brand_memory_research.sql", "004_drive_archive.sql"]);
+    expect(blocked.blocked.map((b) => b.name)).toEqual(["003_brand_memory_research.sql"]);
     expect(blocked.blocked[0].reason).toMatch(/bir kerelik açık onayını/);
     const ok = evaluatePending(REPO, base, ["003_brand_memory_research.sql"]);
     expect(ok).toMatchObject({ allowed: true, authorizedUsed: ["003_brand_memory_research.sql"] });
   });
 
   it("bekleyen geçiş yoksa izin; canlı şema sürümden yeniyse engel", () => {
-    const all = [...base, "003_brand_memory_research.sql"];
+    const all = [...base, "003_brand_memory_research.sql", "004_drive_archive.sql"];
     expect(evaluatePending(REPO, all, [])).toMatchObject({ allowed: true, pending: [] });
-    const ahead = evaluatePending(REPO, [...all, "004_future.sql"], []);
+    const ahead = evaluatePending(REPO, [...all, "099_future.sql"], []);
     expect(ahead.allowed).toBe(false);
     expect(ahead.blocked[0].reason).toMatch(/canlıda uygulanmış ama bu sürümde yok/);
   });
 
   it("gelecekteki additive geçiş onaysız otomatik ilerler; yıkıcı olan engellenir", () => {
-    const all = [...base, "003_brand_memory_research.sql"];
-    const add = tempMigrations((d) => fs.writeFileSync(path.join(d, "004_add_notes.sql"), "CREATE TABLE IF NOT EXISTS notes (id uuid PRIMARY KEY);\n"));
-    expect(evaluatePending(add, all, [])).toMatchObject({ allowed: true, pending: ["004_add_notes.sql"] });
-    const drop = tempMigrations((d) => fs.writeFileSync(path.join(d, "004_drop.sql"), "DROP TABLE brand_memory;\n"));
-    const r = evaluatePending(drop, all, ["004_drop.sql"]);
+    const all = [...base, "003_brand_memory_research.sql", "004_drive_archive.sql"];
+    const add = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_add_notes.sql"), "CREATE TABLE IF NOT EXISTS notes (id uuid PRIMARY KEY);\n"));
+    expect(evaluatePending(add, all, [])).toMatchObject({ allowed: true, pending: ["090_add_notes.sql"] });
+    const drop = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_drop.sql"), "DROP TABLE brand_memory;\n"));
+    const r = evaluatePending(drop, all, ["090_drop.sql"]);
     expect(r.allowed).toBe(false);
   });
 });
@@ -137,11 +141,11 @@ describe("Üretimde geçiş uygulama koruması (runMigrations)", () => {
   }
 
   it("yıkıcı kayıtsız geçiş uygulanmaz; önceki geçişler uygulanmış kalır", async () => {
-    const dir = tempMigrations((d) => fs.writeFileSync(path.join(d, "004_drop.sql"), "DROP TABLE brand_memory;\n"));
+    const dir = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_drop.sql"), "DROP TABLE brand_memory;\n"));
     const pool = await fresh();
-    await expect(runMigrations(dir, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).rejects.toThrow(/004_drop\.sql 'destructive'/);
+    await expect(runMigrations(dir, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).rejects.toThrow(/090_drop\.sql 'destructive'/);
     const applied = (await pool.query(`SELECT name FROM schema_migrations ORDER BY name`)).rows.map((r) => r.name);
-    expect(applied).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
+    expect(applied).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql"]);
     expect((await pool.query(`SELECT to_regclass('brand_memory') AS t`)).rows[0].t).toBe("brand_memory");
     await pool.end();
   });
@@ -173,7 +177,7 @@ describe("Üretimde geçiş uygulama koruması (runMigrations)", () => {
 
   it("onaylı geçişler koruma açıkken uygulanır ve ikinci çalıştırma bir şey yapmaz (idempotent)", async () => {
     const pool = await fresh();
-    expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
+    expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql"]);
     // 003 uygulandıktan sonra onay kaldırılsa da sonraki dağıtımlar takılmaz
     expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: [] })).toEqual([]);
     await pool.end();

@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 
 export type ProviderId =
   | "anthropic" | "openai_images" | "video_generation" | "ffmpeg" | "storage"
-  | "shopify" | "instagram" | "tiktok" | "meta_ads";
+  | "shopify" | "instagram" | "tiktok" | "meta_ads" | "google_drive";
 
 export type ProviderInfo = {
   id: ProviderId;
@@ -31,6 +31,7 @@ export const PROVIDERS: ProviderInfo[] = [
   { id: "storage", name: "Dosya depolama", category: "Depolama", scope: "global", capabilities: ["storage"], description: "Yerel klasör veya S3 uyumlu depolama.", howToConnect: "STORAGE_DRIVER=s3 ve S3_* değişkenleri.", docs: "" },
   { id: "shopify", name: "Shopify Admin API", category: "Mağaza", scope: "brand", capabilities: ["store_read", "store_write"], description: "Ürünleri okuma; onaylı değişiklikleri canlı mağazaya yazma.", howToConnect: "Shopify Dev Dashboard'da kendi organizasyonunuzda uygulama oluşturun, mağazanıza kurun; SHOPIFY_CLIENT_ID/SECRET tanımlayın ve marka için mağaza alan adını girin (client credentials grant).", docs: "https://shopify.dev/docs/apps/build/authentication-authorization/client-credentials-grant" },
   { id: "instagram", name: "Instagram (Instagram Login)", category: "Sosyal yayın", scope: "brand", capabilities: ["social_publish_instagram"], description: "Profesyonel (Business/Creator) hesaba onaylı gönderi/reel yayını. Medya herkese açık bir URL'den alınır (S3 gerekir).", howToConnect: "Meta uygulaması oluşturun, INSTAGRAM_APP_ID/SECRET tanımlayın, 'Instagram ile bağlan' ile resmi OAuth akışını tamamlayın. Gerekli izin: instagram_business_content_publish (uygulama incelemesi gerekebilir).", docs: "https://developers.facebook.com/docs/instagram-platform/content-publishing" },
+  { id: "google_drive", name: "Google Drive arşivi (salt okunur)", category: "Marka arşivi", scope: "brand", capabilities: ["archive_index"], description: "Seçtiğiniz tek klasörü (FriBee Master Archive) dizinler: ad, klasör yapısı, tür, boyut, tarih, özet. Yalnızca sizin doğruladığınız görselleri orijinal kalitede medya arşivine alır ve seçtiğiniz metin belgelerini marka hafızasına öneri olarak ekler. Drive'da hiçbir şeyi değiştirmez, silmez veya paylaşıma açmaz.", howToConnect: "Google Cloud'da OAuth istemcisi (Web uygulaması) oluşturun, GOOGLE_DRIVE_CLIENT_ID/SECRET tanımlayın, 'Google Drive ile bağlan' ile yetki verin ve Drive Arşivi sayfasında klasörü seçin. İzin: drive.readonly — salt okuma (ayrıntı: docs/GOOGLE_DRIVE.md).", docs: "https://developers.google.com/workspace/drive/api/guides/api-specific-auth" },
   { id: "tiktok", name: "TikTok Content Posting API", category: "Sosyal yayın", scope: "brand", capabilities: [], description: "Doğrudan yayın, TikTok uygulama denetimi gerektirir; denetimsiz istemciler yalnızca gizli yayın yapabilir. Bu sürümde manuel yayın paketi üretilir.", howToConnect: "Doğrudan yayın bu sürümde desteklenmiyor. Manuel paket (video + açıklama + kapak) indirilip TikTok uygulamasından yüklenir.", docs: "https://developers.tiktok.com/doc/content-posting-api-get-started" },
   { id: "meta_ads", name: "Meta reklam ve performans verileri", category: "Reklam / performans", scope: "brand", capabilities: [], description: "Reklam başlatma ve performans verisi okuma. Adaptör arayüzü hazır; bu sürümde bağlantı kurulmadı.", howToConnect: "Meta Marketing API erişimi ve reklam hesabı gerekir. Bu sürümde desteklenmiyor.", docs: "https://developers.facebook.com/docs/marketing-apis" },
 ];
@@ -114,6 +115,7 @@ export function envConfigured(provider: ProviderId): boolean {
     case "video_generation": return !!config.gemini.apiKey;
     case "shopify": return !!(config.shopify.clientId && config.shopify.clientSecret);
     case "instagram": return !!(config.instagram.appId && config.instagram.appSecret);
+    case "google_drive": return !!(config.googleDrive.clientId && config.googleDrive.clientSecret);
     case "storage": return config.storageDriver === "local" || !!config.s3.bucket;
     case "ffmpeg": return true;
     default: return false;

@@ -7,6 +7,7 @@ import { disconnectAction, retryWaitingAction, testConnectionAction } from "@/ap
 import { q1 } from "@/lib/db/pool";
 import { config } from "@/lib/config";
 import { instagramRedirectUri } from "@/lib/adapters/instagram";
+import { driveRedirectUri } from "@/lib/drive/google";
 import { INTEGRATION_STATE_LABEL, INTEGRATION_STATE_TONE, stateFromConnection, toolCatalog } from "@/lib/services/tool-catalog";
 
 export default async function Integrations({ searchParams }: { searchParams: SP }) {
@@ -36,6 +37,7 @@ export default async function Integrations({ searchParams }: { searchParams: SP 
             {s.connection?.last_checked_at && <p className="text-xs text-muted">Son kontrol: {dt(s.connection.last_checked_at)}</p>}
             <details className="text-xs"><summary className="cursor-pointer text-brand">Nasıl bağlanır?</summary><p className="mt-1">{p.howToConnect}</p>{p.docs && <p className="mt-1 break-all text-muted">Resmi belge: {p.docs}</p>}
               {p.id === "instagram" && <p className="mt-1 text-muted">OAuth yönlendirme adresi: <code>{instagramRedirectUri()}</code></p>}
+              {p.id === "google_drive" && <p className="mt-1 text-muted">OAuth yönlendirme adresi: <code>{driveRedirectUri()}</code></p>}
             </details>
             <div className="flex flex-wrap gap-2">
               {p.id === "shopify" && (
@@ -45,6 +47,7 @@ export default async function Integrations({ searchParams }: { searchParams: SP 
                   <SubmitButton className="btn" disabled={!env} pendingText="Test ediliyor…">{env ? "Bağlan ve test et" : "Bağlantı bekliyor (ortam değişkenleri yok)"}</SubmitButton>
                 </form>
               )}
+              {p.id === "google_drive" && <a href="/drive-arsivi" className="btn">Drive Arşivi'ni aç</a>}
               {p.id === "instagram" && (env ? <a href="/api/integrations/instagram/start" className="btn">Instagram ile bağlan</a> : <button disabled className="btn">Instagram ile bağlan (uygulama bilgileri yok)</button>)}
               {testable.has(p.id) && p.id !== "shopify" && (
                 <form action={testConnectionAction}><input type="hidden" name="provider" value={p.id} /><SubmitButton className="btn" disabled={!env} pendingText="Test ediliyor…">{env ? "Test et" : "Test et (yapılandırılmadı)"}</SubmitButton></form>

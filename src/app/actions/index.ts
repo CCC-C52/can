@@ -32,6 +32,8 @@ import { runResearch, setSourceVerification } from "@/lib/services/research";
 import { COST_PROVIDERS } from "@/lib/services/costs";
 import { addMemory, setMemoryStatus, type MemoryKind, type MemoryStatus } from "@/lib/services/brand-memory";
 import type { AgentId } from "@/lib/agents/schemas";
+import { disconnectDrive, requestDriveScan, selectArchiveFolder, setDrivePaused } from "@/lib/drive/source";
+import { importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds, type ReviewInput } from "@/lib/drive/references";
 
 // ---------------------------------------------------------------- Oturum
 
@@ -400,8 +402,97 @@ export async function disconnectAction(fd: FormData) {
   const brand = await requireBrand();
   const provider = str(fd, "provider") as ProviderId;
   await act("/entegrasyonlar", async () => {
+    if (provider === "google_drive") {
+      const r = await disconnectDrive(brand.id);
+      return r.revoked ? "Google Drive bağlantısı kaldırıldı ve izin Google'da iptal edildi." : "Google Drive bağlantısı kaldırıldı (Google'da iptal doğrulanamadı).";
+    }
     await disconnect(provider, ["shopify", "instagram"].includes(provider) ? brand.id : null);
     return "Bağlantı kaldırıldı.";
+  });
+}
+
+// ---------------------------------------------------------------- Google Drive arşivi
+// Marka kimliği her zaman çerezdeki seçili markadan alınır; form alanlarındaki kimlikler o markada aranır.
+
+const DRIVE_PAGE = "/drive-arsivi";
+
+export async function driveSelectFolderAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(DRIVE_PAGE, async () => {
+    const s = await selectArchiveFolder(brand.id, str(fd, "folderId"));
+    return `Klasör seçildi: ${s.folder_name}. İlk tarama işleyicide arka planda başlar.`;
+  });
+}
+
+export async function driveScanNowAction() {
+  const brand = await requireBrand();
+  await act(DRIVE_PAGE, async () => {
+    const rl = rateLimit(`drive-scan:${brand.id}`, 3, 60_000);
+    if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    await requestDriveScan(brand.id);
+    return "Tarama sıraya alındı; işleyici kaldığı yerden sürdürecek.";
+  });
+}
+
+export async function drivePauseAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(DRIVE_PAGE, async () => {
+    const pause = str(fd, "pause") === "1";
+    await setDrivePaused(brand.id, pause);
+    return pause ? "Tarama duraklatıldı." : "Tarama sürdürülüyor.";
+  });
+}
+
+export async function driveDisconnectAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(DRIVE_PAGE, async () => {
+    const purge = str(fd, "purge") === "1";
+    if (purge && str(fd, "confirm") !== "SIL") throw new Error("Yerel dizini silmek için onay kutusuna SIL yazın. (Drive'daki dosyalar hiçbir durumda silinmez.)");
+    const r = await disconnectDrive(brand.id, { purgeIndex: purge });
+    return `Google Drive bağlantısı kaldırıldı${r.revoked ? " ve izin Google'da iptal edildi" : ""}${purge ? "; yerel dizin silindi" : ""}.`;
+  });
+}
+
+export async function driveSuggestAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${DRIVE_PAGE}?tab=review`, async () => {
+    const rl = rateLimit(`drive-suggest:${brand.id}`, 10, 60_000);
+    if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const r = await suggestReferences(brand.id, fd.getAll("itemIds").map(String), { useThumbnails: str(fd, "useThumbnails") === "1" });
+    return `${r.references.length} görsel inceleme kuyruğuna eklendi (öneriler belirsiz kabul edilir; doğrulama sizde).`;
+  });
+}
+
+export async function driveReviewAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${DRIVE_PAGE}?tab=review`, async () => {
+    const action = str(fd, "action");
+    if (!["verify", "reject", "reset"].includes(action)) throw new Error("Geçersiz işlem.");
+    await reviewReference(brand.id, str(fd, "referenceId"), {
+      action: action as ReviewInput["action"], theme: str(fd, "theme") || null, view: str(fd, "view") || null,
+      artworkConfirmed: str(fd, "artworkConfirmed") === "1", notes: str(fd, "notes") || null,
+    });
+    return action === "verify" ? "Referans doğrulandı; Bilgi Merkezi ve stüdyolar artık kullanabilir." : action === "reject" ? "Referans reddedildi; hiçbir AI isteğinde kullanılmaz." : "Referans incelemeye geri alındı.";
+  });
+}
+
+export async function driveImportAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${DRIVE_PAGE}?tab=hub`, async () => {
+    const rl = rateLimit(`drive-import:${brand.id}`, 20, 60_000);
+    if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const r = await importReferenceOriginal(brand.id, str(fd, "referenceId"));
+    return r.duplicate ? "Bu referans zaten medya arşivinde." : "Orijinal dosya (tam çözünürlük, bayt bayt) medya arşivine alındı; Video ve Görsel Stüdyosu'nda ürün referansı olarak seçilebilir.";
+  });
+}
+
+export async function driveProposeMemoryAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${DRIVE_PAGE}?tab=files`, async () => {
+    const rl = rateLimit(`drive-doc:${brand.id}`, 20, 60_000);
+    if (!rl.ok) throw new Error(`Çok sık istendi; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const r = await proposeMemoryFromDocument(brand.id, str(fd, "itemId"), (str(fd, "kind") || "guideline") as MemoryKind);
+    return `${r.added} bölüm Marka Hafızası'na öneri olarak eklendi${r.skipped ? ` (${r.skipped} bölüm gizli bilgi şüphesiyle atlandı)` : ""}${r.truncated ? "; belge uzun, ilk bölümler alındı" : ""}. Marka Hafızası sayfasında etkinleştirince ajanlar kullanır.`;
   });
 }
 
@@ -592,6 +683,8 @@ export async function videoStudioAction(fd: FormData) {
     const photos = (await brandAssets(brand.id, fd.getAll("photoIds").map(String), "photo")).filter((p) => p.kind === "photo").slice(0, STUDIO_MAX_PHOTOS);
     const lowRes = photos.filter((p) => referenceTooSmall(p.width, p.height));
     if (lowRes.length) throw new Error(`Düşük çözünürlüklü referans: ${lowRes.map((p) => `${p.filename} (${p.width}x${p.height})`).join(", ")}. Kısa kenarı en az ${REFERENCE_MIN_SHORT_SIDE} piksel olan orijinal fotoğraf seçin.`);
+    const unverified = await unverifiedDriveAssetIds(brand.id, photos.map((p) => p.id));
+    if (unverified.length) throw new Error("Seçilen Drive referanslarından biri doğrulanmamış veya reddedilmiş; Drive Arşivi'nde inceleyin.");
     if (mode === "archive" && !videos.length) throw new Error("Arşiv kurgusu için en az bir video seçin.");
     if (mode === "hybrid" && !videos.length && !photos.length) throw new Error("Karma reklam için en az bir ürün fotoğrafı veya arşiv videosu seçin.");
     const min = Number(str(fd, "minSeconds")), max = Number(str(fd, "maxSeconds"));

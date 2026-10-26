@@ -42,6 +42,17 @@ const VIDEO_MAX_POLLS = 120;          // ~30 dk
 const MAX_GENERATED_VIDEO_BYTES = 300 * 1024 * 1024;
 const RASTER = new Set(["image/png", "image/jpeg", "image/webp"]);
 
+/**
+ * Marka kapsamlı medya. Google Drive arşivinden alınmış bir dosyanın referansı sonradan doğrulanmamış/reddedilmiş
+ * duruma geçtiyse dosya hiçbir derlemeye veya AI isteğine giremez (yokmuş gibi davranılır).
+ */
+async function usableMedia(brandId: string, id: string) {
+  const m = await getMedia(brandId, id);
+  if (!m) return null;
+  const blocked = await q1(`SELECT 1 FROM drive_references WHERE brand_id = $1 AND media_asset_id = $2 AND status <> 'verified'`, [brandId, m.id]);
+  return blocked ? null : m;
+}
+
 const clean = (s: string | undefined | null) => String(s ?? "").replace(/\[DEMO\]\s*/g, "");
 
 type Brand = { colors: { name: string; hex: string }[]; fonts: { role: string; family: string }[] };
@@ -88,7 +99,7 @@ export async function renderDesign(ctx: RenderCtx): Promise<RenderOutcome> {
     const photos: MediaAsset[] = [];
     if (mode === "photo_composition") {
       for (const id of b.source_asset_ids ?? []) {
-        const m = await getMedia(task.brand_id, id); // marka kapsamı: başka markanın kimliği bulunamaz
+        const m = await usableMedia(task.brand_id, id); // marka kapsamı: başka markanın kimliği bulunamaz
         if (m && m.kind === "photo") photos.push(m);
       }
       if (!photos.length) o.notes.push(`${b.id}: kaynak ürün fotoğrafı bulunamadı; yalnızca metinli (tipografik) tasarım üretildi.`);
@@ -123,7 +134,7 @@ async function generateImage(ctx: RenderCtx, b: any, o: RenderOutcome) {
   // Referans: arşivdeki gerçek ürün fotoğrafı (ürün görünümü değiştirilmemeli)
   const refs: ReferenceImage[] = [];
   for (const id of (b.source_asset_ids ?? []).slice(0, 2)) {
-    const m = await getMedia(task.brand_id, id);
+    const m = await usableMedia(task.brand_id, id);
     if (m && m.kind === "photo" && RASTER.has(m.mime_type)) refs.push({ buffer: await readMediaFile(m), mime: m.mime_type, filename: `ref-${m.id}.${m.mime_type.split("/")[1]}` });
   }
   const prompt = refs.length
@@ -246,7 +257,7 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       const p = parts[i];
       const text = clean(p.on_screen_text);
       if (p.kind === "ai_scene") {
-        const m = await getMedia(task.brand_id, scenes.get(p.ref)!.result_asset_id!);
+        const m = await usableMedia(task.brand_id, scenes.get(p.ref)!.result_asset_id!);
         if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: parça ${i + 1} — AI sahnesi dosyası bulunamadı`); return; }
         const file = await fileOf(m, `ai${i}`);
         const dur = (await probeVideo(file)).duration;
@@ -254,7 +265,7 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         clips.push({ file, start: 0, duration: Math.round(Math.max(0.5, want) * 1000) / 1000, sourceDuration: dur, text });
         sources.push(m);
       } else if (p.kind === "product_photo") {
-        const m = await getMedia(task.brand_id, String(p.ref)); // marka kapsamı
+        const m = await usableMedia(task.brand_id, String(p.ref)); // marka kapsamı
         if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) { o.failed.push(`${vid.id}: parça ${i + 1} — ürün fotoğrafı bulunamadı`); return; }
         const out = path.join(dir, `photo${i}.mp4`);
         const motion: PhotoMotion = PHOTO_MOTIONS.has(p.motion) ? p.motion : "zoom_in";
@@ -262,7 +273,7 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         clips.push({ file: out, start: 0, duration: r.duration, sourceDuration: r.duration, text });
         sources.push(m);
       } else if (p.kind === "archive_clip") {
-        const m = await getMedia(task.brand_id, String(p.ref));
+        const m = await usableMedia(task.brand_id, String(p.ref));
         if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: parça ${i + 1} — arşiv videosu bulunamadı`); return; }
         const analysis = await latestAnalysis(task.brand_id, m.id);
         const scene = (analysis?.status === "completed" ? analysis.result?.local?.scenes ?? [] : []).find((x: any) => x.index === Number(p.scene_index));
@@ -334,7 +345,7 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         const sg = segments[i];
         let src = files.get(sg.asset_id);
         if (!src) {
-          const m = await getMedia(task.brand_id, String(sg.asset_id)); // marka kapsamı: başka markanın dosyası bulunamaz
+          const m = await usableMedia(task.brand_id, String(sg.asset_id)); // marka kapsamı: başka markanın dosyası bulunamaz
           if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: bölüm ${i + 1} — kaynak video bulunamadı (${sg.asset_id})`); return; }
           const analysis = await latestAnalysis(task.brand_id, m.id);
           if (!analysis || analysis.status !== "completed") { o.failed.push(`${vid.id}: bölüm ${i + 1} — ${m.filename} için tamamlanmış görsel analiz yok; sahne kullanılamaz`); return; }
@@ -359,7 +370,7 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     } else {
       // Eski biçim (sahne bölümü olmayan planlar): dosya başına tek bölüm
       for (let i = 0; i < (vid.selected_asset_ids ?? []).length; i++) {
-        const m = await getMedia(task.brand_id, vid.selected_asset_ids[i]);
+        const m = await usableMedia(task.brand_id, vid.selected_asset_ids[i]);
         if (!m || m.kind !== "video") continue;
         const seg = vid.script?.[i];
         const file = path.join(dir, `src${i}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
@@ -436,7 +447,7 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     const fidelity: (ReferenceFidelity & { asset_id: string })[] = [];
     for (const id of vid.selected_asset_ids ?? []) {
       if (images.length >= MAX_REFERENCE_IMAGES) break;
-      const m = await getMedia(task.brand_id, id);
+      const m = await usableMedia(task.brand_id, id);
       if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) continue;
       try {
         const ref = await prepareReference(await readMediaFile(m), m.mime_type, m.filename);

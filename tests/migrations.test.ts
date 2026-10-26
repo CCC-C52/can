@@ -27,7 +27,7 @@ describe("Veritabanı geçişleri", () => {
   it("temiz veritabanında uygulanır ve tekrar çalıştırmak bir şey değiştirmez", async () => {
     const pool = await freshDb("aiops_mig_clean");
     const first = await runMigrations(undefined, { pool });
-    expect(first).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
+    expect(first).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql"]);
     expect(await runMigrations(undefined, { pool })).toEqual([]);
     const t = await pool.query(`SELECT to_regclass('media_analyses') AS a, to_regclass('upload_sessions') AS u, to_regclass('provider_jobs') AS p`);
     expect(t.rows[0]).toEqual({ a: "media_analyses", u: "upload_sessions", p: "provider_jobs" });
@@ -51,7 +51,7 @@ describe("Veritabanı geçişleri", () => {
     const counts = async () => (await q(`SELECT (SELECT count(*) FROM brands) b, (SELECT count(*) FROM tasks) t, (SELECT count(*) FROM media_assets) m, (SELECT count(*) FROM outputs) o, (SELECT count(*) FROM output_versions) v, (SELECT count(*) FROM approvals) a`)).rows[0];
     const before = await counts();
 
-    expect(await runMigrations(undefined, { pool })).toEqual(["002_media_jobs_integrity.sql", "003_brand_memory_research.sql"]);
+    expect(await runMigrations(undefined, { pool })).toEqual(["002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql"]);
     expect(await counts()).toEqual(before);
     // Etiket düzeltmesi ve proje ilişkisi
     const media = (await q(`SELECT filename, origin, generation_method, project_id FROM media_assets ORDER BY filename`)).rows;

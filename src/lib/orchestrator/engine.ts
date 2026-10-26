@@ -449,14 +449,19 @@ export function videoNeedsArtifact(content: any) {
 
 /**
  * Projenin Video Stüdyosu talebi (proje talimatından; yönetici talimatı yeniden yazsa da korunur).
- * Ürün fotoğrafı kimlikleri yalnızca bu markanın raster fotoğraflarıysa kabul edilir.
+ * Ürün fotoğrafı kimlikleri yalnızca bu markanın raster fotoğraflarıysa kabul edilir. Google Drive arşivinden alınmış
+ * bir fotoğrafın referansı sonradan doğrulanmamış/reddedilmiş duruma geçtiyse o fotoğraf AI isteğine girmez.
  */
 export async function studioForProject(brandId: string, projectId: string): Promise<StudioRequest | null> {
   const project = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [projectId, brandId]);
   const req = parseStudioRequest(project?.instruction);
   if (!req) return null;
   const ok = req.photoIds.length
-    ? await q<{ id: string }>(`SELECT id FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) AND kind = 'photo' AND mime_type = ANY($3::text[])`, [brandId, req.photoIds, ["image/jpeg", "image/png", "image/webp"]])
+    ? await q<{ id: string }>(
+        `SELECT m.id FROM media_assets m WHERE m.brand_id = $1 AND m.id = ANY($2::uuid[]) AND m.kind = 'photo' AND m.mime_type = ANY($3::text[])
+           AND NOT EXISTS (SELECT 1 FROM drive_references r WHERE r.brand_id = m.brand_id AND r.media_asset_id = m.id AND r.status <> 'verified')`,
+        [brandId, req.photoIds, ["image/jpeg", "image/png", "image/webp"]],
+      )
     : [];
   const valid = new Set(ok.map((r) => r.id));
   return { ...req, photoIds: req.photoIds.filter((id) => valid.has(id)) };
