@@ -1,237 +1,195 @@
-import fs from "node:fs";
-import path from "node:path";
-import { describe, it, expect, beforeAll, afterEach } from "vitest";
-import { q, q1 } from "@/lib/db/pool";
-import { createBrand } from "@/lib/services/brands";
-import { listPrEvidence, prAgencyOverview } from "@/lib/services/pr-agency";
+import { describe, it, expect, beforeAll, vi } from "vitest";
+import { q } from "@/lib/db/pool";
+import { createBrand, addBrandFact } from "@/lib/services/brands";
+import { decide, pendingApprovals } from "@/lib/services/outputs";
+import { executeExternalAction, ApprovalRequiredError } from "@/lib/services/gateway";
 import {
-  FRIBEE_COLLECTIONS, PR_EXTERNAL_ACTIONS, PhantomMetricError, WORKSTREAMS, attributedMetric, classifyFreshness, classifySignal,
-  collectionsFor, dedupeEvidence, findUnattributedMetrics, normalizeUrl, prActionAllowed, scoreRelevance, workstreamAvailability,
-  type Evidence,
-} from "@/lib/pr-agency/model";
+  PR_AGENT, PR_KINDS, PrConfigError, brandKnowledge, generateDue, getTrendItems, listFeedHealth, listPrOutputs, mergeItems, pollFeeds, runPrAgencyTick, updatePrConfig,
+} from "@/lib/services/pr-agency";
 
-// PR Ajansı salt okunur iskeleti. Dış çağrı yapılmaz; yalnızca mevcut, marka kapsamlı tablolar okunur.
+// PR ajansı servisi (gerçek PostgreSQL). Ağ çağrısı yok: besleme çekimi sahte fetch ile test edilir.
 
-const env = { ...process.env };
-afterEach(() => {
-  process.env = { ...env };
+const NOW = new Date("2026-10-26T15:00:00Z"); // Pazartesi
+const h = (n: number) => new Date(NOW.getTime() - n * 3_600_000).toUTCString();
+const noFetch = vi.fn(async () => {
+  throw new Error("network must not be called");
 });
 
-const ev = (over: Partial<Evidence> = {}): Evidence => ({
-  id: over.id ?? Math.random().toString(36).slice(2), url: "https://example.com/a", title: null, excerpt: null,
-  retrievedAt: "2026-10-20T00:00:00.000Z", connector: "research_firecrawl", verification: "verified", ...over,
+let a: string;
+let aName: string;
+let b: string;
+
+beforeAll(async () => {
+  aName = `Beeline${Date.now().toString(36)}`;
+  a = (await createBrand({ name: aName })).id;
+  b = (await createBrand({ name: `PR Other ${Date.now()}` })).id;
 });
 
-describe("PR ajansı — tekilleştirme ve kaynak gösterimi", () => {
-  it("izleme parametreleri, www, parça ve sondaki / tekilleştirme anahtarına girmez", () => {
-    expect(normalizeUrl("https://WWW.Example.com/Post/?utm_source=x&b=2&a=1&fbclid=z#top")).toBe("https://example.com/Post?a=1&b=2");
-    expect(normalizeUrl("http://example.com/post/")).toBe(normalizeUrl("https://example.com/post"));
-    expect(normalizeUrl("not a url")).toBe("not a url");
+function rss(items: { title: string; link: string; pub?: string; desc?: string }[]) {
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>${items
+    .map((i) => `<item><title>${i.title}</title><link>${i.link}</link>${i.pub ? `<pubDate>${i.pub}</pubDate>` : ""}<description>${i.desc ?? ""}</description></item>`)
+    .join("")}</channel></rss>`;
+}
+
+describe("PR ajansı: yapılandırma ve marka yalıtımı", () => {
+  it("bilinmeyen kaynak, kaynaksız doğrulanmış tarih ve kaynaksız ölçüm reddedilir", async () => {
+    await expect(updatePrConfig(a, { enabledSources: ["scraper-x"] })).rejects.toThrow(PrConfigError);
+    await expect(updatePrConfig(a, { verifiedDates: { "anime-expo": { date: "2027-07-02", sourceUrl: "" } } })).rejects.toThrow(/kaynak adresi/);
+    await expect(updatePrConfig(a, { measuredMetrics: [{ key: "instagram_followers", value: 10, measuredAt: "2026-10-01", source: "" }] })).rejects.toThrow(/kaynak gerekli/);
+    await expect(updatePrConfig("00000000-0000-0000-0000-000000000000", { enabled: true })).rejects.toThrow(/Marka bulunamadı/);
   });
 
-  it("aynı adresin kopyaları tek kayda iner; doğrulanmış olan tercih edilir ve sayı raporlanır", () => {
-    const items = [
-      ev({ id: "1", url: "https://example.com/p?utm_medium=a", verification: "unverified", retrievedAt: "2026-10-22T00:00:00Z" }),
-      ev({ id: "2", url: "https://www.example.com/p", verification: "verified", retrievedAt: "2026-10-21T00:00:00Z" }),
-      ev({ id: "3", url: "https://other.example/x" }),
-    ];
-    const r = dedupeEvidence(items);
-    expect(r.items.map((i) => i.id)).toEqual(["2", "3"]);
-    expect(r.duplicates).toBe(1);
-  });
-});
-
-describe("PR ajansı — tazelik ve başarısız veri", () => {
-  const now = new Date("2026-10-25T00:00:00Z");
-  it("hiç veri yoksa 'never', 7 günden eskiyse 'stale', yeniyse 'fresh'", () => {
-    expect(classifyFreshness(null, { now })).toBe("never");
-    expect(classifyFreshness("2026-10-24T00:00:00Z", { now })).toBe("fresh");
-    expect(classifyFreshness("2026-10-10T00:00:00Z", { now })).toBe("stale");
-  });
-  it("son çalıştırma başarısızsa eski veri 'güncel' gösterilmez", () => {
-    expect(classifyFreshness("2026-10-24T23:00:00Z", { now, lastRunStatus: "failed" })).toBe("failed");
-  });
-});
-
-describe("PR ajansı — sinyal / spekülasyon ve ilgi puanı", () => {
-  it("doğrulanmamış kaynaklar kanıt sayılmaz; doğrulanmış kanıt yoksa puan null (uydurulmaz)", () => {
-    const r = scoreRelevance([ev({ verification: "unverified", title: "Anime merch boom" }), ev({ verification: "rejected", title: "anime" })], FRIBEE_COLLECTIONS);
-    expect(r.score).toBeNull();
-    expect(r.signal).toBe("speculation");
-    expect(r.matched).toEqual([]);
-  });
-
-  it("tek alan adı 'zayıf sinyal', iki bağımsız alan adı 'sinyal'", () => {
-    expect(classifySignal([ev({ url: "https://a.example/1" }), ev({ url: "https://www.a.example/2" })]).class).toBe("weak_signal");
-    expect(classifySignal([ev({ url: "https://a.example/1" }), ev({ url: "https://b.example/2" })]).class).toBe("signal");
-  });
-
-  it("puan yalnızca doğrulanmış metindeki tam kelime eşleşmelerinden ve teyitten gelir; gerekçe ve kanıt kimliği döner", () => {
-    const r = scoreRelevance([
-      ev({ id: "e1", url: "https://a.example/1", title: "Save the bees campaign", excerpt: "pollinator week" }),
-      ev({ id: "e2", url: "https://b.example/2", title: "Beef prices" }),
-    ], FRIBEE_COLLECTIONS);
-    expect(r.signal).toBe("signal");
-    expect(r.matched).toEqual([{ collection: "Save the Bee", term: "bees", evidenceId: "e1" }]);
-    expect(r.score).toBe(10 + 40);
-    expect(r.basis.join(" ")).toMatch(/2 doğrulanmış kaynak/);
+  it("marka bilgisi yalnızca doğrulanmış kaynaklardan; taahhüt yalnızca doğrulanmış kayıttan", async () => {
+    await addBrandFact(a, { kind: "fact", statement: "We pledge 1% to a pollinator charity (signed 2026)", status: "unverified" });
+    let k = await brandKnowledge(a);
+    expect(k.verifiedCommitments).toEqual([]);
+    await addBrandFact(a, { kind: "fact", statement: "Signed pledge with Hive Trust for 2027", status: "verified", source: "contract" });
+    k = await brandKnowledge(a);
+    expect(k.verifiedCommitments.map((c) => c.title)).toEqual(["Signed pledge with Hive Trust for 2027"]);
+    expect((await brandKnowledge(b)).verifiedCommitments).toEqual([]);
   });
 });
 
-describe("PR ajansı — kaynaksız metrik yok", () => {
-  it("kaynak ve zaman olmadan metrik oluşturulamaz", () => {
-    expect(() => attributedMetric(1000, null)).toThrow(PhantomMetricError);
-    expect(() => attributedMetric(1000, { connector: "news_monitoring", observedAt: "dün" })).toThrow(PhantomMetricError);
-    expect(attributedMetric(5, { connector: "news_monitoring", observedAt: "2026-10-25T00:00:00Z" }).value).toBe(5);
+describe("PR ajansı: eksik besleme ve zamanlanmış üretim", () => {
+  it("kaynak bağlı değilse ağ çağrısı yok; sağlık 'unconnected'", async () => {
+    await updatePrConfig(a, { enabled: true, collections: [{ name: "Hive Hoodies", keywords: ["bee", "hoodies", "streetwear"], sourceRef: "owner" }] });
+    const r = await pollFeeds(a, { now: NOW, fetchImpl: noFetch });
+    expect(r).toEqual([]);
+    expect(noFetch).not.toHaveBeenCalled();
+    expect((await listFeedHealth(a, NOW, {})).every((f) => f.status === "unconnected")).toBe(true);
   });
 
-  it("kaynaksız erişim/etkileşim/duygu/iletişim alanları yakalanır", () => {
-    expect(findUnattributedMetrics({ a: { reach: 12000 }, list: [{ sentiment: "positive" }, { email: "x@y.z" }] })).toEqual(["$.a.reach", "$.list[0].sentiment", "$.list[1].email"]);
-    expect(findUnattributedMetrics({ reach: { value: 1, source: { connector: "rss_feeds", observedAt: "2026-10-25T00:00:00Z" } }, followers: null })).toEqual([]);
+  it("vadesi gelen raporlar ve hazırlık penceresindeki etkinlik planları üretilir; tekrar çalıştırmak çoğaltmaz", async () => {
+    const created = await generateDue(a, { now: NOW, env: {} });
+    const kinds = created.map((c) => c.kind);
+    expect(kinds).toContain(PR_KINDS.daily_brief);
+    expect(kinds).toContain(PR_KINDS.weekly_report);
+    expect(kinds).toContain(PR_KINDS.monthly_presentation);
+    expect(kinds).toContain(PR_KINDS.event_plan);
+    expect(kinds).not.toContain(PR_KINDS.alert); // canlı veri yok → bayrak yok
+    expect(await generateDue(a, { now: NOW, env: {} })).toEqual([]);
+    expect(await generateDue(a, { now: new Date("2026-10-26T18:00:00Z"), env: {} })).toEqual([]);
+
+    const outs = await listPrOutputs(a);
+    const daily = outs.find((o) => o.kind === PR_KINDS.daily_brief)!;
+    expect(daily.content).toMatchObject({ periodKey: "2026-10-26", dataStatus: "no_connected_sources" });
+    expect(daily.content.insights.every((i: any) => i.role !== "trend_analyst")).toBe(true);
+    const plan = outs.find((o) => o.kind === PR_KINDS.event_plan && o.content.eventId === "black-friday-2026")!;
+    expect(plan.content.outreachDrafts.every((d: any) => d.status === "draft" && d.requiresOwnerApproval)).toBe(true);
+    expect(plan.content.budgetProposal.status).toBe("proposal_not_committed");
+
+    // Ertesi gün yalnızca yeni günlük özet
+    const next = await generateDue(a, { now: new Date("2026-10-27T12:30:00Z"), env: {} });
+    expect(next.filter((c) => c.kind !== PR_KINDS.event_plan).map((c) => c.kind)).toEqual([PR_KINDS.daily_brief]);
+  });
+
+  it("taslaklar mevcut onay kuyruğunda; başka marka göremez", async () => {
+    const pending = await pendingApprovals(a);
+    expect(pending.some((p) => p.agent === PR_AGENT)).toBe(true);
+    expect((await pendingApprovals(b)).some((p) => p.agent === PR_AGENT)).toBe(false);
+    expect(await listPrOutputs(b)).toEqual([]);
   });
 });
 
-describe("PR ajansı — onay kapısı (taslak modu)", () => {
-  it("hiçbir dış işlem yürütülemez; onay olsa bile yürütücü yok", () => {
-    for (const a of PR_EXTERNAL_ACTIONS) {
-      expect(prActionAllowed(a).allowed).toBe(false);
-      expect(prActionAllowed(a).reason).toMatch(/ayrı onayı/);
-      const withApproval = prActionAllowed(a, { approvalId: "x", scopes: [a] });
-      expect(withApproval.allowed).toBe(false);
-      expect(withApproval.reason).toMatch(/yürütücüsü yok/);
+describe("PR ajansı: onay kapısı", () => {
+  it("onaylanan PR taslağı yalnızca 'content' kapsamı alır; yayın/reklam dış işlemi yine engellenir", async () => {
+    const plan = (await listPrOutputs(a)).find((o) => o.kind === PR_KINDS.event_plan)!;
+    const approval = await decide(a, plan.version_id, "approved", { scopes: ["publish", "ad_launch"] });
+    expect(approval.scopes).toEqual(["content"]);
+    for (const actionType of ["publish", "ad_launch"] as const) {
+      await expect(executeExternalAction({ brandId: a, outputVersionId: plan.version_id, actionType, idempotencyKey: `pr-test-${actionType}-${Date.now()}` })).rejects.toThrow(ApprovalRequiredError);
     }
-    expect(prActionAllowed("transfer_money").allowed).toBe(false);
+    const ext = await q<{ n: number }>(`SELECT COUNT(*)::int AS n FROM external_actions WHERE brand_id = $1`, [a]);
+    expect(ext[0].n).toBe(0);
   });
 
-  it("modül kodu e-posta, DM, yayın, mağaza, reklam veya ağ çağrısı yapan modülleri içe aktarmaz", () => {
-    for (const f of ["src/lib/pr-agency/model.ts", "src/lib/services/pr-agency.ts", "src/app/(panel)/pr-ajansi/page.tsx"]) {
-      const src = fs.readFileSync(path.resolve(f), "utf8");
-      expect(src).not.toMatch(/adapters\/(instagram|shopify|images|video-generation|http)|services\/(gateway|media|provider-jobs)|runResearch|fetch\(|"use server"/);
-    }
-  });
-});
-
-describe("PR ajansı — çalışma alanları, koleksiyonlar ve gezinme", () => {
-  it("altı çalışma alanı; bağlayıcı yoksa 'veri kaynağı yok', eksikler listelenir", () => {
-    expect(WORKSTREAMS.map((w) => w.name)).toEqual(["Trend Intelligence", "Media Relations", "Influencer Relations", "Reputation / Crisis", "Campaign Strategy", "PR Analytics"]);
-    const none = { research_firecrawl: "needs_credentials", rss_feeds: "not_built", news_monitoring: "not_built", social_listening: "not_built", influencer_discovery: "not_built", shopify_catalog: "needs_credentials" } as const;
-    const trend = workstreamAvailability(WORKSTREAMS[0], none);
-    expect(trend).toEqual({ level: "no_source", available: [], gaps: ["research_firecrawl", "rss_feeds"] });
-    expect(workstreamAvailability(WORKSTREAMS[0], { ...none, research_firecrawl: "available" }).level).toBe("partial");
-  });
-
-  it("dört koleksiyon yalnızca FriBee markasına uygulanır (yazım: FriBee)", () => {
-    expect(collectionsFor({ name: "FriBee", slug: "fribee" }).map((c) => `${c.name}:${c.color}`)).toEqual(["Space Alien:siyah", "Music:beyaz", "Anime:turuncu", "Save the Bee:açık mavi"]);
-    expect(collectionsFor({ name: "Başka Marka", slug: "baska-marka" })).toEqual([]);
-    for (const f of ["src/lib/pr-agency/model.ts", "src/app/(panel)/pr-ajansi/page.tsx", "docs/PR_AGENCY.md"]) {
-      expect(fs.readFileSync(path.resolve(f), "utf8")).not.toMatch(/Fribee|FRIBee|Fri Bee|FriBEE/);
-    }
-  });
-
-  it("gezinmede /pr-ajansi bağlantısı var; sayfa mobilde taşmayı önleyen duyarlı düzen kullanır", () => {
-    expect(fs.readFileSync(path.resolve("src/components/nav.tsx"), "utf8")).toContain(`{ href: "/pr-ajansi", label: "PR Ajansı" }`);
-    const page = fs.readFileSync(path.resolve("src/app/(panel)/pr-ajansi/page.tsx"), "utf8");
-    expect(page).toMatch(/overflow-x-auto/);
-    expect(page).toMatch(/grid-cols-2 gap-3 lg:grid-cols-4/);
-    expect(page).toMatch(/break-all/);
-    expect(fs.readFileSync(path.resolve("tests/http/a11y.ts"), "utf8")).toContain(`"/pr-ajansi"`);
+  it("başka markanın sürümü onaylanamaz", async () => {
+    const plan = (await listPrOutputs(a)).find((o) => o.kind === PR_KINDS.event_plan && !o.approval)!;
+    await expect(decide(b, plan.version_id, "approved")).rejects.toThrow(/Sürüm bulunamadı/);
   });
 });
 
-describe("PR ajansı — marka yalıtımı, kaynak gösterimi ve sayfalama (veritabanı)", () => {
-  let A: { id: string; name: string; slug: string };
-  let B: { id: string; name: string; slug: string };
-  let F: { id: string; name: string; slug: string };
-
-  async function source(brandId: string, url: string, verification: string, opts: { title?: string; at?: string; runStatus?: string } = {}) {
-    const run = (await q1<{ id: string }>(`INSERT INTO research_runs (brand_id, mode, query, provider, status, created_at) VALUES ($1,'search','q','firecrawl',$2, COALESCE($3::timestamptz, now())) RETURNING id`, [brandId, opts.runStatus ?? "completed", opts.at ?? null]))!;
-    return (await q1<{ id: string }>(
-      `INSERT INTO research_sources (run_id, brand_id, url, title, verification, created_at) VALUES ($1,$2,$3,$4,$5, COALESCE($6::timestamptz, now())) RETURNING id`,
-      [run.id, brandId, url, opts.title ?? null, verification, opts.at ?? null],
-    ))!.id;
-  }
-
-  beforeAll(async () => {
-    A = await createBrand({ name: `PR A ${Date.now()}` });
-    B = await createBrand({ name: `PR B ${Date.now()}` });
-    F = await createBrand({ name: `FriBee PR ${Date.now()}` });
-    await source(B.id, "https://b-secret.example/x", "verified", { title: "B gizli kaynak" });
-    for (let i = 0; i < 25; i++) await source(A.id, `https://a.example/post-${i}`, i % 5 === 0 ? "verified" : "unverified", { at: new Date(Date.UTC(2026, 9, 1, i)).toISOString() });
-    await source(A.id, "https://a.example/post-24?utm_source=newsletter", "unverified", { at: new Date(Date.UTC(2026, 9, 1, 23, 30)).toISOString() });
+describe("PR ajansı: besleme köken, kota, hata ve bayat veri", () => {
+  const fetchImpl = vi.fn(async (url: string) => {
+    if (url.includes("hypebeast")) return new Response(rss([
+      { title: `${aName} faces backlash over counterfeit hoodies`, link: "https://hypebeast.com/x1?utm_source=rss", pub: h(1) },
+      { title: "Bee print hoodies dominate streetwear drop season", link: "https://hypebeast.com/x2", pub: h(2) },
+    ]), { status: 200 });
+    return new Response(rss([
+      { title: `Counterfeit ${aName} hoodies spark backlash online`, link: "https://highsnobiety.com/y1", pub: h(3) },
+      { title: "Streetwear drop season: bee print hoodies dominate", link: "https://highsnobiety.com/y2", pub: h(4) },
+    ]), { status: 200 });
   });
 
-  it("A'nın genel bakışı ve kanıt listesi B kaydı içermez", async () => {
-    const o = await prAgencyOverview(A, { now: new Date("2026-10-02T12:00:00Z") });
-    const list = await listPrEvidence(A.id, { pageSize: 50 });
-    const text = JSON.stringify([o, list]);
-    expect(text).not.toContain("b-secret.example");
-    expect(text).not.toContain("B gizli kaynak");
-    expect(o.evidence.total).toBe(26);
-    expect((await listPrEvidence(B.id)).items.map((i) => i.url)).toEqual(["https://b-secret.example/x"]);
+  it("etkin kaynak çekilir; kayıtlar kaynak/URL/zaman ile saklanır; aralık dolmadan tekrar çekilmez", async () => {
+    await updatePrConfig(a, { enabledSources: ["hypebeast", "highsnobiety"] });
+    const r = await pollFeeds(a, { now: NOW, fetchImpl, env: {} });
+    expect(r.map((x) => [x.sourceId, x.status, x.items])).toEqual([["hypebeast", "fetched", 2], ["highsnobiety", "fetched", 2]]);
+    const items = await getTrendItems(a);
+    expect(items).toHaveLength(4);
+    const first = items.find((i) => i.url.startsWith("https://hypebeast.com/x1"))!;
+    expect(first).toMatchObject({ sourceId: "hypebeast", canonicalUrl: "https://hypebeast.com/x1", fetchedAt: NOW.toISOString(), region: "GLOBAL" });
+    expect(first.publishedAt).not.toBeNull();
+    expect(await getTrendItems(b)).toEqual([]);
+
+    const again = await pollFeeds(a, { now: new Date(NOW.getTime() + 60_000), fetchImpl, env: {} });
+    expect(again.every((x) => x.status === "skipped" && /interval/.test(x.reason!))).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect((await listFeedHealth(a, NOW, {})).filter((f) => f.connected).map((f) => f.status)).toEqual(["healthy", "healthy"]);
   });
 
-  it("her kanıt kaynak adresi, bağlayıcı, alım zamanı ve doğrulama durumu taşır", async () => {
-    const { items } = await listPrEvidence(A.id, { pageSize: 5 });
-    for (const e of items) {
-      expect(e.url).toMatch(/^https:\/\/a\.example\//);
-      expect(e.connector).toBe("research_firecrawl");
-      expect(Number.isNaN(Date.parse(e.retrievedAt))).toBe(false);
-      expect(["verified", "unverified", "rejected"]).toContain(e.verification);
-    }
+  it("taze veride kriz ve fırsat uyarıları koşullu olarak bir kez üretilir, kaynak bağlantılarıyla", async () => {
+    const created = await generateDue(a, { now: new Date("2026-10-27T13:30:00Z"), env: {} });
+    // 27 Ekim'in günlük özeti önceki testte üretildi → yeni rapor yok, uyarı da yok (uyarılar raporla birlikte oluşur)
+    expect(created.filter((c) => c.kind === PR_KINDS.alert)).toEqual([]);
+    // Taze veri: yeniden çekim (aynı haberler → pencereye tekrar eklenmez)
+    await pollFeeds(a, { now: new Date("2026-10-28T12:00:00Z"), fetchImpl, env: {} });
+    expect(await getTrendItems(a)).toHaveLength(4);
+    const later = await generateDue(a, { now: new Date("2026-10-28T12:30:00Z"), env: {} });
+    const alerts = later.filter((c) => c.kind === PR_KINDS.alert);
+    expect(alerts.some((x) => x.title.startsWith("Crisis watch"))).toBe(true);
+    const outs = await listPrOutputs(a);
+    const crisis = outs.find((o) => o.kind === PR_KINDS.alert && o.content.type === "crisis_watch")!;
+    expect(crisis.content.severity).toBe("critical");
+    expect(crisis.content.sourceLinks.length).toBeGreaterThan(0);
+    expect(crisis.content.recommendation).toMatch(/without owner approval/);
+    const brief = outs.find((o) => o.kind === PR_KINDS.daily_brief && o.content.periodKey === "2026-10-28")!;
+    expect(brief.content.dataStatus).toBe("fresh");
+    expect(brief.content.flags.some((f: any) => f.type === "crisis_watch")).toBe(true);
+    // Ertesi gün (taze veriyle) aynı küme için yeni uyarı yok
+    await pollFeeds(a, { now: new Date("2026-10-29T12:00:00Z"), fetchImpl, env: {} });
+    const dayAfter = await generateDue(a, { now: new Date("2026-10-29T12:30:00Z"), env: {} });
+    expect(dayAfter.filter((c) => c.kind === PR_KINDS.alert && c.title.startsWith("Crisis watch"))).toEqual([]);
   });
 
-  it("sayfalama: sınırlı sayfa boyutu, kararlı sıralama, filtre; aynı sayfadaki tekrarlar gizlenir ve raporlanır", async () => {
-    const p1 = await listPrEvidence(A.id, { page: 1, pageSize: 10 });
-    expect(p1).toMatchObject({ page: 1, pageSize: 10, total: 26, hasMore: true });
-    // post-24 ve izleme parametreli kopyası ilk sayfada: biri gizlenir
-    expect(p1.duplicatesHidden).toBe(1);
-    expect(p1.items).toHaveLength(9);
-    const p3 = await listPrEvidence(A.id, { page: 3, pageSize: 10 });
-    expect(p3).toMatchObject({ hasMore: false });
-    expect(p3.items).toHaveLength(6);
-    expect((await listPrEvidence(A.id, { pageSize: 1000 })).pageSize).toBe(50);
-    const verified = await listPrEvidence(A.id, { verification: "verified", pageSize: 50 });
-    expect(verified.total).toBe(5);
-    expect(verified.items.every((i) => i.verification === "verified")).toBe(true);
-    expect((await listPrEvidence(A.id, { verification: "bogus" as any })).total).toBe(26);
+  it("çekim hatası: art arda hata sayılır, hata metni saklanır, sağlık 'failing'; bayat veride trend içgörüsü yok", async () => {
+    const failing = vi.fn(async () => new Response("nope", { status: 503 }));
+    const t0 = new Date("2026-11-02T12:00:00Z");
+    for (let i = 0; i < 3; i++) await pollFeeds(a, { now: new Date(t0.getTime() + i * 4 * 3_600_000), fetchImpl: failing, env: {} });
+    const health = (await listFeedHealth(a, new Date(t0.getTime() + 9 * 3_600_000), {})).filter((f) => f.connected);
+    expect(health.every((f) => f.status === "failing" && f.lastError === "HTTP 503")).toBe(true);
+    const created = await generateDue(a, { now: new Date("2026-11-03T12:30:00Z"), env: {} });
+    const daily = (await listPrOutputs(a)).find((o) => o.id === created.find((c) => c.kind === PR_KINDS.daily_brief)!.id)!;
+    expect(daily.content.dataStatus).toBe("stale");
+    expect(daily.content.insights.some((i: any) => i.role === "trend_analyst")).toBe(false);
   });
 
-  it("tazelik: eski kanıt 'stale'; son çalıştırma başarısızsa 'failed'; hiç veri yoksa 'never'", async () => {
-    expect((await prAgencyOverview(A, { now: new Date("2026-10-25T00:00:00Z") })).evidence.freshness).toBe("stale");
-    expect((await prAgencyOverview(A, { now: new Date("2026-10-02T00:00:00Z") })).evidence.freshness).toBe("fresh");
-    const empty = await createBrand({ name: `PR Boş ${Date.now()}` });
-    const e = await prAgencyOverview(empty);
-    expect(e.evidence).toMatchObject({ total: 0, freshness: "never", lastVerifiedAt: null });
-    expect(e.relevance.score).toBeNull();
-    await q(`INSERT INTO research_runs (brand_id, mode, query, provider, status, error, finished_at) VALUES ($1,'search','q','firecrawl','failed','Firecrawl 503', now())`, [A.id]);
-    const failed = await prAgencyOverview(A, { now: new Date("2026-10-02T00:00:00Z") });
-    expect(failed.evidence.freshness).toBe("failed");
-    expect(failed.lastRun).toMatchObject({ status: "failed", error: "Firecrawl 503" });
+  it("trend penceresi: aynı kaynak+URL tekrar eklenmez, 8 günden eski kayıt atılır", async () => {
+    const base = { sourceId: "hypebeast", title: "t", summary: "", region: "GLOBAL" as const, category: "fashion_streetwear" as const, confidence: 0.7 };
+    const now = new Date("2026-12-01T00:00:00Z");
+    const kept = await mergeItems(b, [
+      { ...base, url: "https://x.com/1", canonicalUrl: "https://x.com/1", publishedAt: "2026-11-30T00:00:00Z", fetchedAt: now.toISOString() },
+      { ...base, url: "https://x.com/1?utm_source=a", canonicalUrl: "https://x.com/1", publishedAt: "2026-11-30T00:00:00Z", fetchedAt: now.toISOString() },
+      { ...base, url: "https://x.com/old", canonicalUrl: "https://x.com/old", publishedAt: "2026-11-01T00:00:00Z", fetchedAt: now.toISOString() },
+    ], now);
+    expect(kept.map((i) => i.canonicalUrl)).toEqual(["https://x.com/1"]);
   });
 
-  it("bağlayıcı yokken durum açıkça 'kimlik bilgisi gerekli' / 'bu sürümde yok'; sahte 'canlı' kaynak yok", async () => {
-    delete process.env.FIRECRAWL_API_KEY;
-    const o = await prAgencyOverview(A);
-    const st = Object.fromEntries(o.connectors.map((c) => [c.id, c.availability]));
-    expect(st).toEqual({ research_firecrawl: "needs_credentials", rss_feeds: "not_built", news_monitoring: "not_built", social_listening: "not_built", influencer_discovery: "not_built", shopify_catalog: "needs_credentials" });
-    expect(o.workstreams.every((w) => w.level === "no_source")).toBe(true);
-    expect(JSON.stringify(o)).not.toMatch(/gerçek zamanlı|real-?time|live feed/i);
-  });
-
-  it("genel bakışta kaynaksız metrik ve gizli değer yok", async () => {
-    process.env.FIRECRAWL_API_KEY = "fc-secret-should-not-appear";
-    const o = await prAgencyOverview(F);
-    expect(findUnattributedMetrics(o)).toEqual([]);
-    expect(JSON.stringify(o)).not.toContain("fc-secret-should-not-appear");
-    expect(o.collections).toHaveLength(4);
-    expect((await prAgencyOverview(A)).collections).toEqual([]);
-  });
-
-  it("servis salt okunurdur: genel bakış ve liste hiçbir satırı değiştirmez", async () => {
-    const snap = async () => (await q<{ n: string }>(`SELECT (SELECT COUNT(*) FROM research_sources)::text || '/' || (SELECT COUNT(*) FROM research_runs)::text || '/' || (SELECT COUNT(*) FROM audit_log)::text || '/' || (SELECT COUNT(*) FROM cost_entries)::text AS n`))[0].n;
-    const before = await snap();
-    await prAgencyOverview(A);
-    await listPrEvidence(A.id, { page: 2 });
-    expect(await snap()).toBe(before);
+  it("işleyici adımı yalnızca zamanlaması açık markaları işler", async () => {
+    const unavailable = vi.fn(async () => new Response("", { status: 503 }));
+    const r = await runPrAgencyTick({ now: new Date("2026-11-03T13:00:00Z"), fetchImpl: unavailable, env: {} });
+    expect(r.map((x) => x.brandId)).toContain(a);
+    expect(r.map((x) => x.brandId)).not.toContain(b);
+    expect(r.find((x) => x.brandId === a)!.error).toBeUndefined();
   });
 });
