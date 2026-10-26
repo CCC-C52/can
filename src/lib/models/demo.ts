@@ -26,6 +26,8 @@ export type DemoInput = {
   target?: { agent: string; content: unknown };
   /** Video görevi: analizi doğrulanmış hedef video kimlikleri (öncelik sırası). */
   videoTargets?: string[];
+  /** Video Stüdyosu talebi (marka kapsamında doğrulanmış ürün fotoğraflarıyla). */
+  studio?: import("@/lib/video/studio").StudioRequest | null;
 };
 
 const DEMO_TAG = "[DEMO]";
@@ -346,7 +348,57 @@ export function requestedDurationS(text: string): number | null {
   return one ? Math.min(60, Number(one[1])) : null;
 }
 
+/**
+ * Stüdyo AI/karma modu: Gemini Omni sahneleri (ürün fotoğrafları referans) + gerçek ürün fotoğrafı hareketi +
+ * (karma modda) doğrulanmış bir arşiv sahnesi + marka kapanışı, tek "compose" kurgusunda.
+ */
+function demoStudioVideo(input: DemoInput, studio: import("@/lib/video/studio").StudioRequest): VideoPlanOutput {
+  const { ctx } = input;
+  const t = T[L(ctx.brand.content_language)];
+  const name = focusProducts(ctx, input.instruction).map((p) => p.title).join(" & ") || ctx.brand.name;
+  const photos = studio.photoIds.filter((id) => ctx.media.some((m) => m.id === id && m.kind === "photo"));
+  const shots = [
+    "Slow cinematic dolly-in on the T-shirt worn by a model in a neon-lit city street at night, shallow depth of field, soft rim light.",
+    "Handheld tracking shot of the model walking and turning towards camera, fabric moving naturally, warm sunset light, film look.",
+    "Low-angle hero shot of the model on a rooftop at golden hour, slow orbit around the T-shirt, gentle wind, premium ad style.",
+  ];
+  const scenes = Array.from({ length: studio.aiScenes }, (_, i) => ({
+    id: `scene-${i + 1}`, mode: "generate_new" as const, format: "9:16" as const, duration_s: studio.sceneSeconds,
+    selected_asset_ids: photos, script: [], subtitles: [], generation_prompt: `${shots[i % shots.length]} Vertical 9:16, no on-screen text.`,
+    music_note: "", transition: "cut" as const, framing: "fill" as const, intro_text: "", outro_text: "", segments: [], parts: [],
+  }));
+  const parts: VideoPlanOutput["videos"][number]["parts"] = scenes.map((sc, i) => ({
+    kind: "ai_scene" as const, ref: sc.id, duration_s: studio.sceneSeconds, motion: "none" as const, scene_index: 0, source_start: 0, source_end: 0,
+    on_screen_text: i === 0 ? `${t.newIn}: ${name}` : "",
+  }));
+  if (photos[0]) parts.splice(1, 0, { kind: "product_photo", ref: photos[0], duration_s: 2.5, motion: "zoom_in", scene_index: 0, source_start: 0, source_end: 0, on_screen_text: "" });
+  if (studio.mode === "hybrid") {
+    const clip = ctx.media.find((m) => m.kind === "video" && m.analysis_status === "completed" && (m.analysis as any)?.scenes?.some((sc: any) => sc.end - sc.start >= 1.2));
+    const sc = (clip?.analysis as any)?.scenes?.find((x: any) => x.end - x.start >= 1.2);
+    if (clip && sc) {
+      const start = Math.round((sc.start + 0.01) * 100) / 100, end = Math.round(Math.min(sc.end - 0.01, sc.start + 2) * 100) / 100;
+      parts.push({ kind: "archive_clip", ref: clip.id, duration_s: end - start, motion: "none", scene_index: sc.index, source_start: start, source_end: end, on_screen_text: "" });
+    }
+  }
+  if (parts.length > 1) parts[parts.length - 1].on_screen_text = t.cta;
+  const total = Math.round(parts.reduce((a, p) => a + p.duration_s, 0) * 100) / 100;
+  return {
+    summary: `${DEMO_TAG} ${studio.aiScenes} AI sahne (Gemini Omni${photos.length ? `, ${photos.length} ürün fotoğrafı referanslı` : ""}) ve ${parts.length} parçalı karma kurgu; marka kapanışıyla ${total} sn.`,
+    videos: [
+      ...scenes,
+      {
+        id: "ad-1", mode: "compose", format: "9:16", duration_s: total,
+        selected_asset_ids: [...photos, ...parts.filter((p) => p.kind === "archive_clip").map((p) => p.ref)],
+        script: [], subtitles: [], generation_prompt: "", music_note: "Ses kaldırıldı; lisanslı müzik ekleme sonraki aşama.",
+        transition: "fade", framing: "fill", intro_text: "", outro_text: `${ctx.brand.name} — ${t.cta}`, segments: [], parts,
+      },
+    ],
+    unknowns: brandUnknowns(ctx),
+  };
+}
+
 export function demoVideo(input: DemoInput): VideoPlanOutput {
+  if (input.studio && input.studio.mode !== "archive") return demoStudioVideo(input, input.studio);
   const { ctx } = input;
   const t = T[L(ctx.brand.content_language)];
   const products = focusProducts(ctx, input.instruction);
@@ -395,7 +447,7 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
           id: "reel-1", mode: "edit_existing", format: "9:16", duration_s: total,
           selected_asset_ids: [...new Set(segments.map((sg) => sg.asset_id))],
           script, subtitles: [], generation_prompt: "", music_note: "Ses kaldırıldı; lisanslı müzik ekleme manuel.",
-          transition: "cut", framing: "fit", intro_text: "", outro_text: "", segments,
+          transition: "cut", framing: "fit", intro_text: "", outro_text: "", segments, parts: [],
         }],
         unknowns: brandUnknowns(ctx),
       };
@@ -432,6 +484,7 @@ export function demoVideo(input: DemoInput): VideoPlanOutput {
         intro_text: "",
         outro_text: "",
         segments: [],
+        parts: [],
       },
     ],
     unknowns: [...brandUnknowns(ctx), "Arşivde ürün videosu yok; gerçek ürün görüntüsü için çekim gerekli."],

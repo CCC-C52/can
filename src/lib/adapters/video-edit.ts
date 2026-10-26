@@ -189,6 +189,37 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
   }
 }
 
+export type PhotoMotion = "zoom_in" | "zoom_out" | "pan_left" | "pan_right" | "none";
+
+/**
+ * Gerçek ürün fotoğrafından kamera hareketli kısa klip (Ken Burns). Fotoğraf KIRPILMAZ ve renk değiştirilmez:
+ * hedef formata marka arka plan rengiyle sığdırılır, ardından hafif yakınlaşma/kaydırma uygulanır (en fazla %10).
+ * Çıktı sessiz H.264 klip; kurguya bir bölüm olarak girer.
+ */
+export async function photoMotionClip(args: { photo: string; out: string; format: string; seconds: number; motion: PhotoMotion; bg: string; timeoutMs?: number; signal?: AbortSignal }) {
+  const [W, H] = EDIT_SIZES[args.format] ?? EDIT_SIZES["9:16"];
+  const secs = Math.min(8, Math.max(1, Number(args.seconds) || 2.5));
+  const n = Math.max(2, Math.round(secs * FPS));
+  // Yumuşak hareket için 1,5 kat çözünürlükte çalışılır (zoompan titremesini azaltır, bellek sınırlı kalır)
+  const SW = Math.round((W * 3) / 4) * 2, SH = Math.round((H * 3) / 4) * 2;
+  const bg = /^#[0-9a-f]{6}$/i.test(args.bg) ? args.bg.replace("#", "0x") : "0x111111";
+  const p = `on/${n - 1}`;
+  const zx: Record<PhotoMotion, [string, string, string]> = {
+    zoom_in: [`1+0.10*${p}`, "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"],
+    zoom_out: [`1.10-0.10*${p}`, "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"],
+    pan_left: ["1.10", `(iw-iw/zoom)*(1-${p})`, "ih/2-(ih/zoom/2)"],
+    pan_right: ["1.10", `(iw-iw/zoom)*${p}`, "ih/2-(ih/zoom/2)"],
+    none: ["1", "0", "0"],
+  };
+  const [z, x, y] = zx[args.motion] ?? zx.zoom_in;
+  const vf = `scale=${SW}:${SH}:force_original_aspect_ratio=decrease,pad=${SW}:${SH}:(ow-iw)/2:(oh-ih)/2:color=${bg},setsar=1,` +
+    `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${W}x${H}:fps=${FPS},format=yuv420p`;
+  await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", ...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-i", args.photo,
+    "-vf", vf, "-frames:v", String(n), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", String(FFMPEG_THREADS), "-pix_fmt", "yuv420p", "-r", String(FPS), args.out],
+    { step: "ürün fotoğrafı hareketi", timeoutMs: args.timeoutMs ?? 120_000, signal: args.signal });
+  return { duration: await partDuration(args.out), width: W, height: H };
+}
+
 async function partDuration(file: string) {
   return Math.round((await probeVideo(file)).duration * 1000) / 1000;
 }

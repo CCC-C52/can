@@ -135,6 +135,7 @@ async function main() {
 
     const submitted = await step("Video Stüdyosu: gerçek arşiv videosu seç ve gönder", async () => {
       await page.goto(`${BASE}/studyo/video`);
+      await page.check('input[name="mode"][value="archive"]'); // bu akış arşiv kurgusunu doğrular (Gemini ücretli)
       const boxes = page.locator('input[name="assetIds"]');
       expect(await boxes.count(), "arşivde gerçek video yok");
       await boxes.first().check();

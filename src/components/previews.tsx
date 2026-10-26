@@ -135,7 +135,13 @@ export function OutputPreview({ kind, content, assets, products }: { kind: strin
           <p>{content.summary}</p>
           {content.videos?.map((v: any) => (
             <div key={v.id} className="rounded-lg border border-line p-3">
-              <div className="flex flex-wrap items-center gap-1"><strong>{v.id}</strong><Badge tone={v.mode === "edit_existing" ? "info" : "warn"}>{v.mode === "edit_existing" ? "Mevcut çekimden kurgu" : "Yeni AI video"}</Badge><Badge>{v.format}</Badge><Badge>{v.duration_s} sn</Badge></div>
+              <div className="flex flex-wrap items-center gap-1"><strong>{v.id}</strong><Badge tone={v.mode === "edit_existing" ? "info" : v.mode === "compose" ? "ok" : "warn"}>{v.mode === "edit_existing" ? "Mevcut çekimden kurgu" : v.mode === "compose" ? "Reklam kurgusu (AI + ürün)" : "AI sahnesi (Gemini Omni)"}</Badge><Badge>{v.format}</Badge><Badge>{v.duration_s} sn</Badge></div>
+              {v.mode === "generate_new" && v.generation_prompt && <p className="mt-2 text-xs"><span className="label">Sahne istemi</span> {v.generation_prompt}</p>}
+              {v.mode === "compose" && (v.parts ?? []).length > 0 && (
+                <table className="table mt-2"><thead><tr><th>#</th><th>Parça</th><th>Süre</th><th>Ekran metni</th></tr></thead>
+                  <tbody>{v.parts.map((p: any, i: number) => <tr key={i}><td>{i + 1}</td><td>{p.kind === "ai_scene" ? `AI sahnesi: ${p.ref}` : p.kind === "product_photo" ? `Ürün fotoğrafı (${p.motion})` : `Arşiv sahnesi ${p.scene_index}`}</td><td>{p.duration_s} sn</td><td>{p.on_screen_text}</td></tr>)}</tbody></table>
+              )}
+              {v.mode === "compose" && v.outro_text && <p className="mt-1 text-xs text-muted">Kapanış: {v.outro_text}</p>}
               <table className="table mt-2"><thead><tr><th>Zaman</th><th>Görüntü</th><th>Ekran metni</th></tr></thead>
                 <tbody>{v.script?.map((s: any, i: number) => <tr key={i}><td className="whitespace-nowrap">{s.t_start}–{s.t_end} sn</td><td>{s.visual}</td><td>{s.on_screen_text}</td></tr>)}</tbody></table>
               <div className="label mt-2">Altyazılar</div>

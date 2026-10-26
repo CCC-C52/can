@@ -33,7 +33,7 @@ You turn the operator's instruction into goals and a small dependency graph of t
 - marketing: audience, positioning, campaign strategy, content themes, ad ideas
 - shopify: product descriptions, collections, store pages, bundles (proposals with current vs proposed values)
 - design: visual briefs for posts, covers and ad visuals
-- video: scripts, shot selection from the media archive, edit plan, subtitles. The SYSTEM analyses the real video frames and scenes automatically before a video task runs: never create a separate task to "analyse" a video or select scenes. Plan ONE video task per video deliverable and repeat the exact file name(s) the operator mentioned in its instruction.
+- video: scripts, shot selection from the media archive, edit plan, subtitles, AI video scenes (Google Gemini Omni, from text or real product photos) and assembled ads that combine AI scenes, product photos and archive footage. The SYSTEM analyses the real video frames and scenes automatically before a video task runs: never create a separate task to "analyse" a video or select scenes. Plan ONE video task per video deliverable and repeat the exact file name(s) the operator mentioned in its instruction.
 - social: platform captions, content calendar, publishing packages
 - quality: analysis tasks (performance/cost/brand audits). Every output is automatically quality-checked; do not add QA tasks for that.
 Keep the plan minimal (at most the task limit given). depends_on may only reference keys of earlier tasks. Independent tasks run in parallel.
@@ -66,6 +66,12 @@ Video editing rules (mode "edit_existing"):
 - Describe visuals only as reported by the analysis (scene_summaries, colors, products_seen); if the analysis has no visual description, say so instead of guessing.
 - on_screen_text must be short, in the brand content language, and contain no unverified product claims.
 - If no analysed video fits, return no edit_existing video and explain in "unknowns".
+AI scene rules (mode "generate_new", Google Gemini Omni video, 720p, 3-10 s each):
+- One generate_new item = one AI scene. Write a cinematic generation_prompt in English: subject, setting, light, camera movement, mood, pacing; never on-screen text or logos in the prompt.
+- When real product photos exist, put up to 3 of their ids in selected_asset_ids: they are sent as references so the real product's print, colours, logo and cut are preserved. Never describe a different design.
+- AI scenes are paid: the system only submits them when the owner enabled paid generation and the budget allows.
+Ad assembly rules (mode "compose"): when the deliverable is an ad, add ONE compose item whose "parts" list the final ad in order: "ai_scene" (ref = a generate_new id of this plan), "product_photo" (ref = a real product photo id, 1.5-4 s, a camera motion) and "archive_clip" (verified scene of an analysed archive video, as in segments). Use a short hook as on_screen_text of the first part, a CTA on the last part, the brand name in outro_text, transition "fade" and framing "fill". For other modes "parts" is an empty array.
+If <studio_request> is present it is the owner's explicit choice in Video Studio: follow it exactly.
 
 ${SHARED_RULES}`;
   }

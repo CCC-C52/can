@@ -44,7 +44,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
       `SELECT id, status, error, input_refs FROM tasks WHERE output_id = $1 AND brand_id = $2 AND kind = 'render' ORDER BY created_at DESC LIMIT 1`, [id, brand.id]).then((r) => r[0] ?? null),
   ]);
   const videoArtifacts: any[] = renderTask?.input_refs?.version_id === current.id ? renderTask.input_refs?.result?.artifacts ?? [] : [];
-  const needsMp4 = out.kind === "video_plan" && (current.content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new");
+  const needsMp4 = out.kind === "video_plan" && (current.content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new" || v.mode === "compose");
   const hasMp4 = assets.some((a) => current.asset_ids.includes(a.id) && a.kind === "video" && (a.generation_method === "ffmpeg_edit" || a.generation_method?.startsWith("ai_video:")));
   const latestDecision = approvals.find((a) => a.output_version_id === current.id && !a.revoked_at);
   const scopes = requiredScopes(out.kind, current.content);

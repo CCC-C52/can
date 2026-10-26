@@ -21,6 +21,7 @@ import { getStorage } from "@/lib/storage";
 import { textModelMode } from "@/lib/models";
 import { createPlanTasks, type Task } from "./projects";
 import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation } from "./conversation";
+import { parseStudioRequest, type StudioRequest } from "@/lib/video/studio";
 
 const LEASE_MS = 60_000;
 
@@ -443,7 +444,37 @@ export function effectiveTimeoutMs(task: Pick<Task, "kind">, limits: Limits) {
 
 /** Plan dosya üretimi içeriyor mu (kurgu veya AI video)? */
 export function videoNeedsArtifact(content: any) {
-  return (content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new");
+  return (content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new" || v.mode === "compose");
+}
+
+/**
+ * Projenin Video Stüdyosu talebi (proje talimatından; yönetici talimatı yeniden yazsa da korunur).
+ * Ürün fotoğrafı kimlikleri yalnızca bu markanın raster fotoğraflarıysa kabul edilir.
+ */
+export async function studioForProject(brandId: string, projectId: string): Promise<StudioRequest | null> {
+  const project = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [projectId, brandId]);
+  const req = parseStudioRequest(project?.instruction);
+  if (!req) return null;
+  const ok = req.photoIds.length
+    ? await q<{ id: string }>(`SELECT id FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) AND kind = 'photo' AND mime_type = ANY($3::text[])`, [brandId, req.photoIds, ["image/jpeg", "image/png", "image/webp"]])
+    : [];
+  const valid = new Set(ok.map((r) => r.id));
+  return { ...req, photoIds: req.photoIds.filter((id) => valid.has(id)) };
+}
+
+function studioBlock(st: StudioRequest, limits: Limits) {
+  const data = {
+    mode: st.mode, ai_scenes: st.aiScenes, scene_seconds: st.sceneSeconds, product_photo_ids: st.photoIds,
+    max_ai_video_seconds_per_project: limits.maxVideoGenSeconds, paid_generation_enabled: limits.paidMediaGeneration,
+  };
+  const rules = st.mode === "archive" ? "Use only analysed archive footage (edit_existing)." : [
+    `The owner chose the "${st.mode}" studio mode in Video Studio: a cinematic AI ad, not an archive-only edit.`,
+    `Return exactly ${st.aiScenes} "generate_new" videos (one AI scene each, ${st.sceneSeconds} s, format 9:16) and ONE "compose" video that assembles the final ad.`,
+    `Every generate_new scene: a vivid cinematic generation_prompt in English (subject, setting, light, camera movement, mood; no on-screen text) and selected_asset_ids = the product_photo_ids, so the real product photos are sent as references and the print, colours, logo and cut stay unchanged.`,
+    `The compose video lists "parts" in output order: every AI scene ("ai_scene", ref = its id)${st.photoIds.length ? ', at least one "product_photo" part (ref = a product_photo_id, 1.5-4 s, a camera motion) so the real product is shown as photographed' : ""}${st.mode === "hybrid" ? ', and analysed archive scenes ("archive_clip", inside verified scene limits) when they fit' : ""}.`,
+    `Give the compose video a short hook as on_screen_text of the first part, a CTA on the last part, outro_text with the brand name (closing card with the logo), transition "fade" and framing "fill". Keep the total within the requested length.`,
+  ].join("\n");
+  return `<studio_request>\n<data>${JSON.stringify(data)}</data>\n${rules}\n</studio_request>`;
 }
 
 // ---------------------------------------------------------------- Video analizi kapısı
@@ -529,17 +560,19 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   if (!isSpecialist(task.agent)) throw new PermanentError(`Bilinmeyen uzman: ${task.agent}`);
   const agent = task.agent;
   assertTool(agent, "brand.read");
+  // Video Stüdyosu talebi (AI/karma modunda arşiv analizi beklenmez; yalnızca AI modunda arşiv gerekmez)
+  const studio = agent === "video" ? await studioForProject(task.brand_id, task.project_id) : null;
   // Video: kurgu planından ÖNCE gerçek analiz (kareler, sahneler). Analiz yoksa başlatılır; bitene kadar görev bekler.
-  const video = agent === "video" ? await videoAnalysisGate(ctx, workerId) : null;
+  const video = agent === "video" ? (studio?.mode === "ai" ? { hold: false, targets: [], skipped: [] } as VideoGate : await videoAnalysisGate(ctx, workerId)) : null;
   if (video?.hold) return;
-  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent, includeAssetIds: video?.targets.map((t) => t.id) });
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent, includeAssetIds: [...(video?.targets.map((t) => t.id) ?? []), ...(studio?.photoIds ?? [])] });
   const upstream = await upstreamOutputs(task);
   if (upstream.length) assertTool(agent, "outputs.read");
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
-  const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined].filter(Boolean).join("\n") || undefined;
+  const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined, studio ? studioBlock(studio, ctx.limits) : undefined].filter(Boolean).join("\n") || undefined;
   const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
   const res = await callModel(ctx, agent, "work", schema, user,
-    { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [] },
+    { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [], studio },
     16000, video?.images);
 
   await owned(task, workerId, async (c) => {
@@ -570,7 +603,8 @@ async function runReview(ctx: RunCtx, workerId: string) {
   const v = await getCurrentVersion(task.brand_id, task.output_id);
   if (!v) throw new PermanentError("Çıktı sürümü bulunamadı.");
   const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality", includeAssetIds: referencedAssetIds(task.agent, v.content) });
-  const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo });
+  const studio = task.agent === "video" ? await studioForProject(task.brand_id, task.project_id) : null;
+  const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo, studio });
 
   const user = userPromptParts({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
   const res = await callModel(ctx, "quality", "review", QaReviewSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [], target: { agent: task.agent, content: v.content } }, 6000);

@@ -115,6 +115,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     tools: ["brand.read", "products.read", "media.read", "outputs.read", "video.edit", "video.generate"],
     acceptanceCriteria: [
       "edit_existing yalnızca arşivde bulunan video kimliklerini kullanmalı",
+      "compose parçaları yalnızca bu plandaki AI sahnelerine, markanın ürün fotoğraflarına ve doğrulanmış arşiv sahnelerine dayanmalı",
       "Altyazı zamanları video süresini aşmamalı",
       "AI video servisi bağlı değilse video üretilmiş gibi gösterilmemeli",
     ],

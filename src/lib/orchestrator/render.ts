@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { q1 } from "@/lib/db/pool";
 import { composeDesign } from "@/lib/adapters/compose";
-import { renderEdit, type EditClip } from "@/lib/adapters/video-edit";
+import { photoMotionClip, renderEdit, type EditClip, type PhotoMotion } from "@/lib/adapters/video-edit";
 import { FfmpegError } from "@/lib/adapters/ffmpeg";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
@@ -33,7 +33,7 @@ export type RenderOutcome = {
   failed: string[];       // kesin başarısız öğeler
   uncertain: string[];    // sonucu bilinmeyen ücretli gönderimler
   notes: string[];
-  artifacts: { ref: string; asset_id: string; codec: string | null; width: number; height: number; duration_s: number; bytes: number; segments: number; sources: number; decoded: boolean; audio: string }[];
+  artifacts: { ref: string; asset_id: string; codec: string | null; width: number; height: number; duration_s: number; bytes: number; segments: number; sources: number; decoded: boolean; audio: string; ai_scenes?: number; product_photos?: number; outro?: boolean }[];
 };
 
 const VIDEO_POLL_MS = 15_000;
@@ -195,12 +195,122 @@ async function providerError(ctx: RenderCtx, job: ProviderJob, service: string, 
 export async function renderVideo(ctx: RenderCtx): Promise<RenderOutcome> {
   assertTool("video", "media.read");
   const o: RenderOutcome = { produced: [], waiting: [], inProgress: [], failed: [], uncertain: [], notes: [], artifacts: [] };
-  for (const vid of ctx.content.videos ?? []) {
+  // Önce AI sahneleri (gönder/sorgula/indir), sonra arşiv kurguları, en son bunları birleştiren reklam (compose)
+  const rank = (v: any) => (v.mode === "generate_new" ? 0 : v.mode === "compose" ? 2 : 1);
+  for (const vid of [...(ctx.content.videos ?? [])].sort((a, b) => rank(a) - rank(b))) {
     if (ctx.signal.aborted) throw ctx.signal.reason;
     if (vid.mode === "edit_existing") await editVideo(ctx, vid, o);
+    else if (vid.mode === "compose") await composeVideo(ctx, vid, o);
     else await generateVideo(ctx, vid, o);
   }
   return o;
+}
+
+const PHOTO_MOTIONS = new Set<PhotoMotion>(["zoom_in", "zoom_out", "pan_left", "pan_right", "none"]);
+
+/**
+ * Karma reklam: bu plandaki AI sahneleri (Gemini Omni), hareketlendirilmiş gerçek ürün fotoğrafları ve doğrulanmış
+ * arşiv sahneleri tek kurguda birleştirilir; marka kapanışı (logo) eklenir. AI sahneleri hazır olana kadar bekler;
+ * bir AI sahnesi başarısızsa reklam üretilmez (eksik reklam başarı sayılmaz).
+ */
+async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
+  const { task } = ctx;
+  const parts: any[] = Array.isArray(vid.parts) ? vid.parts : [];
+  if (!parts.length) { o.failed.push(`${vid.id}: birleştirilecek parça yok`); return; }
+  const ready = await capabilityReady("video_edit", task.brand_id);
+  if (!ready.ready) { o.waiting.push(`${vid.id}: video düzenleme — ${ready.reason}`); return; }
+  // AI sahnelerinin durumu (gönderim generateVideo'da yapılır; burada yalnızca sonuç okunur)
+  const scenes = new Map<string, ProviderJob>();
+  for (const p of parts.filter((x) => x.kind === "ai_scene")) {
+    const job = await q1<ProviderJob>(`SELECT * FROM provider_jobs WHERE idempotency_key = $1 AND brand_id = $2`, [`vid:${ctx.versionId}:${p.ref}`, task.brand_id]);
+    if (!job) { o.waiting.push(`${vid.id}: AI sahnesi "${p.ref}" henüz gönderilmedi (ücretli üretim izni, bağlantı veya bütçe bekleniyor)`); return; }
+    if (job.status === "failed" || job.status === "unknown" || job.status === "cancelled") { o.failed.push(`${vid.id}: AI sahnesi "${p.ref}" üretilemedi; reklam eksik sahneyle oluşturulmadı`); return; }
+    if (job.status !== "succeeded" || !job.result_asset_id) { o.inProgress.push(`${vid.id}: AI sahneleri bekleniyor ("${p.ref}" ${job.status})`); return; }
+    scenes.set(p.ref, job);
+  }
+  assertTool("video", "video.edit");
+  const style = await brandStyle(task.brand_id);
+  const brand = await q1<{ name: string }>(`SELECT name FROM brands WHERE id = $1`, [task.brand_id]);
+  const format = vid.format ?? "9:16";
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "compose-"));
+  try {
+    const clips: EditClip[] = [];
+    const sources: MediaAsset[] = [];
+    const fileOf = async (m: MediaAsset, name: string) => {
+      const f = path.join(dir, `${name}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "bin"}`);
+      await getStorage().downloadToFile(m.storage_key, f);
+      return f;
+    };
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      const text = clean(p.on_screen_text);
+      if (p.kind === "ai_scene") {
+        const m = await getMedia(task.brand_id, scenes.get(p.ref)!.result_asset_id!);
+        if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: parça ${i + 1} — AI sahnesi dosyası bulunamadı`); return; }
+        const file = await fileOf(m, `ai${i}`);
+        const dur = (await probeVideo(file)).duration;
+        const want = Number(p.duration_s) > 0 ? Math.min(Number(p.duration_s), dur) : dur;
+        clips.push({ file, start: 0, duration: Math.round(Math.max(0.5, want) * 1000) / 1000, sourceDuration: dur, text });
+        sources.push(m);
+      } else if (p.kind === "product_photo") {
+        const m = await getMedia(task.brand_id, String(p.ref)); // marka kapsamı
+        if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) { o.failed.push(`${vid.id}: parça ${i + 1} — ürün fotoğrafı bulunamadı`); return; }
+        const out = path.join(dir, `photo${i}.mp4`);
+        const motion: PhotoMotion = PHOTO_MOTIONS.has(p.motion) ? p.motion : "zoom_in";
+        const r = await photoMotionClip({ photo: await fileOf(m, `p${i}`), out, format, seconds: Number(p.duration_s) || 2.5, motion, bg: style.bg, signal: ctx.signal });
+        clips.push({ file: out, start: 0, duration: r.duration, sourceDuration: r.duration, text });
+        sources.push(m);
+      } else if (p.kind === "archive_clip") {
+        const m = await getMedia(task.brand_id, String(p.ref));
+        if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: parça ${i + 1} — arşiv videosu bulunamadı`); return; }
+        const analysis = await latestAnalysis(task.brand_id, m.id);
+        const scene = (analysis?.status === "completed" ? analysis.result?.local?.scenes ?? [] : []).find((x: any) => x.index === Number(p.scene_index));
+        const start = Number(p.source_start), end = Number(p.source_end);
+        if (!scene || !(end - start >= 0.5) || start < scene.start - SCENE_TOLERANCE_S || end > scene.end + SCENE_TOLERANCE_S) {
+          o.failed.push(`${vid.id}: parça ${i + 1} — arşiv sahnesi doğrulanamadı (sahne ${p.scene_index}, ${start}–${end} sn)`);
+          return;
+        }
+        const file = await fileOf(m, `clip${i}`);
+        const dur = (await probeVideo(file)).duration;
+        clips.push({ file, start, duration: Math.round((Math.min(end, dur) - start) * 1000) / 1000, sourceDuration: dur, text });
+        sources.push(m);
+      } else { o.failed.push(`${vid.id}: parça ${i + 1} — bilinmeyen tür ${p.kind}`); return; }
+    }
+    const outro = clean(vid.outro_text).trim() || brand?.name || "";
+    let r;
+    try {
+      r = await renderEdit({
+        clips, format, framing: vid.framing ?? "fill", transition: vid.transition ?? "fade",
+        subtitles: (vid.subtitles ?? []).map((x: any) => ({ start: x.start, end: x.end, text: clean(x.text) })),
+        intro: clean(vid.intro_text).trim() ? { text: clean(vid.intro_text), bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined,
+        outro: outro ? { text: outro, bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined,
+        signal: ctx.signal, timeoutMs: Math.max(ctx.limits.taskTimeoutMs, ctx.limits.renderTimeoutMs ?? 0) - 15_000,
+      });
+    } catch (err) {
+      if (err instanceof FfmpegError) { o.failed.push(`${vid.id}: ${err.message}`); return; }
+      throw err;
+    }
+    const aiCount = parts.filter((x) => x.kind === "ai_scene").length;
+    const photoCount = parts.filter((x) => x.kind === "product_photo").length;
+    const common = { taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId, productId: sources.find((x) => x.product_id)?.product_id ?? null, sourceAssetIds: [...new Set(sources.map((x) => x.id))] };
+    const video = await saveDerivedAsset(task.brand_id, {
+      ...common, buffer: r.video, filename: `${vid.id}-${format.replace(":", "x")}.mp4`, origin: "edited", generationMethod: "ffmpeg_edit",
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: `AI sahne:${aiCount}`, source: "system" }, { tag: `ürün fotoğrafı:${photoCount}`, source: "system" }, { tag: "karma reklam kurgusu", source: "system" }],
+    });
+    const thumb = await saveDerivedAsset(task.brand_id, {
+      ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
+    });
+    if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) { o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`); return; }
+    o.produced.push(video.id, thumb.id);
+    o.artifacts.push({
+      ref: vid.id, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
+      bytes: r.video.length, segments: clips.length, ai_scenes: aiCount, product_photos: photoCount, sources: sources.length, decoded: true, outro: !!outro,
+      audio: "kaldırıldı (müzik katmanı sonraki aşama)",
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
 
 /** Sahne sınırı toleransı (sn): analizdeki sahne sınırları kare zamanlarına yuvarlanmıştır. */

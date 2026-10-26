@@ -22,6 +22,7 @@ import { testShopify, syncShopifyProducts } from "@/lib/adapters/shopify";
 import { testInstagram } from "@/lib/adapters/instagram";
 import { testOpenAIImages } from "@/lib/adapters/images";
 import { testGeminiOmniVideo } from "@/lib/adapters/video-generation";
+import { STUDIO_MAX_AI_SCENES, STUDIO_MAX_PHOTOS, STUDIO_MODES, buildStudioInstruction, type StudioMode } from "@/lib/video/studio";
 import { releaseJob } from "@/lib/services/provider-jobs";
 import { testAnthropic } from "@/lib/models/test";
 import { audit } from "@/lib/audit";
@@ -588,21 +589,30 @@ export async function videoStudioAction(fd: FormData) {
   await act("/studyo/video", async () => {
     const rl = rateLimit(`studio:${brand.id}`, 10, 60_000);
     if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const mode = (STUDIO_MODES as readonly string[]).includes(str(fd, "mode")) ? (str(fd, "mode") as StudioMode) : "archive";
     const videos = await brandAssets(brand.id, fd.getAll("assetIds").map(String), "video");
-    if (!videos.length) throw new Error("En az bir video seçin.");
+    const photos = (await brandAssets(brand.id, fd.getAll("photoIds").map(String), "photo")).filter((p) => p.kind === "photo").slice(0, STUDIO_MAX_PHOTOS);
+    if (mode === "archive" && !videos.length) throw new Error("Arşiv kurgusu için en az bir video seçin.");
+    if (mode === "hybrid" && !videos.length && !photos.length) throw new Error("Karma reklam için en az bir ürün fotoğrafı veya arşiv videosu seçin.");
     const min = Number(str(fd, "minSeconds")), max = Number(str(fd, "maxSeconds"));
     if (!Number.isFinite(min) || !Number.isFinite(max) || min < 3 || max > 90 || min > max) throw new Error("Süre 3–90 sn arasında olmalı ve en az ≤ en çok.");
-    const platform = str(fd, "platform") === "tiktok" ? "TikTok (9:16)" : "Instagram Reels (9:16)";
-    const transition = str(fd, "transition") === "fade" ? "yumuşak geçiş" : "kesme";
-    const goal = str(fd, "goal").trim().slice(0, 1500);
-    const instruction = [
-      `Video Stüdyosu talebi: ${videos.map((v) => v.filename).join(", ")} dosyalarından ${min}-${max} saniyelik ${platform} videosu hazırla.`,
-      `Yalnızca bu gerçek çekimleri ve doğrulanmış sahne analizini kullan; geçiş türü: ${transition}. Ürünün rengini ve görünümünü değiştirme.`,
-      goal ? `Amaç ve notlar: ${goal}` : "",
-      "Ekran yazıları ve altyazı marka içerik dilinde olsun. Yayınlama; onay için hazırla.",
-    ].filter(Boolean).join("\n");
+    const aiScenes = Math.round(Number(str(fd, "aiScenes")) || 2), sceneSeconds = Math.round(Number(str(fd, "sceneSeconds")) || 6);
+    if (mode !== "archive") {
+      if (aiScenes < 1 || aiScenes > STUDIO_MAX_AI_SCENES) throw new Error(`AI sahne sayısı 1–${STUDIO_MAX_AI_SCENES} olmalı.`);
+      if (sceneSeconds < 3 || sceneSeconds > 10) throw new Error("AI sahne süresi 3–10 sn olmalı (Gemini Omni sınırı).");
+      const limits = await getLimits();
+      if (aiScenes * sceneSeconds > limits.maxVideoGenSeconds) {
+        throw new Error(`Toplam AI süresi ${aiScenes * sceneSeconds} sn; proje sınırı ${limits.maxVideoGenSeconds} sn. Sahne sayısını/süresini azaltın veya Ayarlar'dan sınırı artırın.`);
+      }
+    }
+    const instruction = buildStudioInstruction({
+      mode, videos, photos, minSeconds: min, maxSeconds: max,
+      platform: str(fd, "platform") === "tiktok" ? "TikTok (9:16)" : "Instagram Reels (9:16)",
+      transition: str(fd, "transition") === "fade" ? "fade" : "cut",
+      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500),
+    });
     const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
-    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : "Video talebi Ana Yönetici'ye gönderildi.", to: `/projeler/${r.project.id}` };
+    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : mode === "archive" ? "Video talebi Ana Yönetici'ye gönderildi." : "AI reklam talebi Ana Yönetici'ye gönderildi (Gemini Omni sahneleri ücretli; izin ve bütçe kontrolünden geçer).", to: `/projeler/${r.project.id}` };
   });
 }
 

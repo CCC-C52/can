@@ -194,7 +194,7 @@ export async function decide(
     if (v.version !== v.current_version) throw new ValidationError("Yalnızca en güncel sürüm onaylanabilir veya reddedilebilir.");
     if (contentHashOf(v.content) !== v.content_hash) throw new ValidationError("İçerik bütünlüğü doğrulanamadı.");
     // Video planı: doğrulanmış bir MP4 üretilmeden onay verilemez (ret her zaman mümkün)
-    if (decision === "approved" && v.kind === "video_plan" && (v.content?.videos ?? []).some((x: any) => x.mode === "edit_existing" || x.mode === "generate_new")) {
+    if (decision === "approved" && v.kind === "video_plan" && (v.content?.videos ?? []).some((x: any) => x.mode === "edit_existing" || x.mode === "generate_new" || x.mode === "compose")) {
       const mp4 = await q1<{ id: string; storage_key: string }>(
         `SELECT id, storage_key FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) AND kind = 'video'
            AND (generation_method = 'ffmpeg_edit' OR generation_method LIKE 'ai_video:%') AND size_bytes > 0 LIMIT 1`,

@@ -1,3 +1,4 @@
+import type { StudioRequest } from "@/lib/video/studio";
 import type { BrandContext } from "./context";
 import { UNKNOWN } from "./context";
 import type { QaReview } from "./schemas";
@@ -82,7 +83,7 @@ export function detectLanguage(text: string): "tr" | "en" | "unknown" {
   return "unknown";
 }
 
-export function runRuleChecks(agent: string, content: Record<string, any>, ctx: BrandContext, opts: { isDemo: boolean }): QaReview {
+export function runRuleChecks(agent: string, content: Record<string, any>, ctx: BrandContext, opts: { isDemo: boolean; studio?: StudioRequest | null }): QaReview {
   const checks: Check[] = [];
   const required: string[] = [];
   const texts = customerStrings(agent, content);
@@ -237,14 +238,36 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
         } else if (segs.length) {
           checks.push({ name: "Sahne doğrulaması", status: "pass", detail: `${v.id}: ${segs.length} bölüm doğrulanmış analiz sahneleriyle uyumlu.` });
         }
+      } else if (v.mode === "compose") {
+        composeChecks(v, content, mediaById, checks, required);
       } else {
         checks.push({ name: "AI video", status: "warn", detail: `${v.id}: yeni AI görüntüsü üretimi planlandı; gerçek ürün görüntüsü yerine geçmez.` });
+        if (!String(v.generation_prompt ?? "").trim()) {
+          checks.push({ name: "AI sahne istemi", status: "fail", detail: `${v.id}: generation_prompt boş; sahne üretilemez.` });
+          required.push("Her generate_new sahnesi için sinematik bir generation_prompt yazın.");
+        }
+        const photos = (v.selected_asset_ids ?? []).filter((id: string) => mediaById.get(id)?.kind === "photo");
+        if (opts.studio?.photoIds.length && !photos.length) {
+          checks.push({ name: "Ürün referansı", status: "fail", detail: `${v.id}: sahibin seçtiği ürün fotoğrafları referans olarak verilmedi; ürün baskısı ve rengi korunamaz.` });
+          required.push("generate_new sahnelerinde selected_asset_ids olarak stüdyoda seçilen ürün fotoğraflarını verin.");
+        }
       }
       const late = (v.subtitles ?? []).filter((s: any) => s.end > v.duration_s + 0.01 || s.start >= s.end);
       if (late.length) {
         checks.push({ name: "Altyazı zamanlaması", status: "fail", detail: `${v.id}: ${late.length} altyazı süre dışında veya hatalı.` });
         required.push("Altyazı zamanlarını video süresi içinde tutun.");
       }
+    }
+  }
+  if (agent === "video" && opts.studio && opts.studio.mode !== "archive") {
+    const vids: any[] = content.videos ?? [];
+    const gen = vids.filter((v) => v.mode === "generate_new");
+    const comp = vids.filter((v) => v.mode === "compose");
+    if (!gen.length || !comp.length) {
+      checks.push({ name: "Stüdyo talebi", status: "fail", detail: `Sahip Video Stüdyosu'nda "${opts.studio.mode}" modunu seçti; plan ${gen.length} AI sahnesi ve ${comp.length} birleştirme (compose) içeriyor. Yalnızca arşiv kurgusu kabul edilmez.` });
+      required.push(`${opts.studio.aiScenes} adet generate_new AI sahnesi ve bunları birleştiren bir compose videosu planlayın.`);
+    } else {
+      checks.push({ name: "Stüdyo talebi", status: "pass", detail: `${gen.length} AI sahnesi ve ${comp.length} birleştirme planlandı.` });
     }
   }
   if (agent === "social") {
@@ -300,7 +323,47 @@ export function mergeReviews(rule: QaReview, model: QaReview | null, modelSource
 /** Bir çıktının başvurduğu medya kimlikleri (kalite kontrol bağlamına sınırdan bağımsız eklenir). */
 export function referencedAssetIds(agent: string, content: any): string[] {
   const ids: string[] = [];
-  if (agent === "video") for (const v of content?.videos ?? []) { ids.push(...(v.selected_asset_ids ?? []), ...(v.segments ?? []).map((s: any) => s.asset_id)); }
+  if (agent === "video") for (const v of content?.videos ?? []) { ids.push(...(v.selected_asset_ids ?? []), ...(v.segments ?? []).map((s: any) => s.asset_id), ...(v.parts ?? []).filter((x: any) => x.kind !== "ai_scene").map((x: any) => x.ref)); }
   if (agent === "design") for (const b of content?.briefs ?? []) ids.push(...(b.source_asset_ids ?? []));
   return [...new Set(ids.filter((x) => typeof x === "string"))];
+}
+
+/** compose: parçalar bu plandaki AI sahnelerine, markanın ürün fotoğraflarına veya doğrulanmış arşiv sahnelerine dayanmalı. */
+function composeChecks(v: any, content: any, mediaById: Map<string, any>, checks: Check[], required: string[]) {
+  const parts: any[] = Array.isArray(v.parts) ? v.parts : [];
+  const genIds = new Set((content.videos ?? []).filter((x: any) => x.mode === "generate_new").map((x: any) => x.id));
+  if (!parts.length) {
+    checks.push({ name: "Reklam parçaları", status: "fail", detail: `${v.id}: compose için parça (parts) yok.` });
+    required.push("compose videosunda AI sahnelerini, ürün fotoğraflarını ve arşiv sahnelerini parts olarak sırayla listeleyin.");
+    return;
+  }
+  const bad: string[] = [];
+  parts.forEach((p, i) => {
+    const d = Number(p.duration_s);
+    let why: string | null = null;
+    if (p.kind === "ai_scene") why = genIds.has(p.ref) ? null : `"${p.ref}" bu planda bir generate_new sahnesi değil`;
+    else if (p.kind === "product_photo") {
+      const m = mediaById.get(p.ref);
+      why = !m || m.kind !== "photo" ? "arşivde olmayan veya fotoğraf olmayan dosya" : !(d >= 1 && d <= 8) ? "süre 1-8 sn olmalı" : null;
+    } else if (p.kind === "archive_clip") {
+      const m = mediaById.get(p.ref);
+      const a = m?.analysis as any;
+      const scene = a?.scenes?.find((x: any) => x.index === p.scene_index);
+      why = !m || m.kind !== "video" ? "arşivde olmayan video"
+        : !scene ? "analizde bu sahne yok (uydurma sahne)"
+        : !(p.source_end > p.source_start) || p.source_end - p.source_start < 0.5 ? "geçersiz/0,5 sn'den kısa aralık"
+        : p.source_start < scene.start - 0.15 || p.source_end > scene.end + 0.15 ? `sahne sınırları (${scene.start}–${scene.end} sn) dışında`
+        : null;
+    } else why = "bilinmeyen parça türü";
+    if (why) bad.push(`parça ${i + 1}: ${why}`);
+  });
+  if (bad.length) {
+    checks.push({ name: "Reklam parçaları", status: "fail", detail: `${v.id}: ${bad.slice(0, 5).join("; ")}` });
+    required.push("compose parçalarını yalnızca bu plandaki AI sahnelerinden, markanın ürün fotoğraflarından ve doğrulanmış arşiv sahnelerinden oluşturun.");
+  } else {
+    checks.push({ name: "Reklam parçaları", status: "pass", detail: `${v.id}: ${parts.length} parça (${parts.filter((p) => p.kind === "ai_scene").length} AI sahnesi).` });
+  }
+  if (!String(v.outro_text ?? "").trim()) {
+    checks.push({ name: "Marka kapanışı", status: "warn", detail: `${v.id}: outro_text boş; kapanışta marka adı kullanılacak.` });
+  }
 }

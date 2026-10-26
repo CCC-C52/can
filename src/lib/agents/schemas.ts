@@ -130,7 +130,7 @@ export const VideoPlanSchema = z.object({
   videos: z.array(
     z.object({
       id: z.string(),
-      mode: z.enum(["edit_existing", "generate_new"]).describe("Mevcut çekimi düzenleme ile yeni AI görüntüsü ayrı işlemlerdir"),
+      mode: z.enum(["edit_existing", "generate_new", "compose"]).describe("edit_existing: arşiv çekiminden kurgu; generate_new: tek bir AI video sahnesi (Gemini Omni, 3-10 sn); compose: AI sahnelerini, gerçek ürün fotoğraflarını ve arşiv sahnelerini tek reklamda birleştiren son kurgu"),
       format: z.enum(["9:16", "1:1", "16:9", "4:5"]),
       duration_s: z.number(),
       selected_asset_ids: z.array(z.string()),
@@ -152,6 +152,16 @@ export const VideoPlanSchema = z.object({
         on_screen_text: z.string().describe("Bu bölüm boyunca ekranda görünecek kısa metin; yoksa boş"),
         purpose: z.string().describe("Bu bölümün kurgudaki amacı (ör. açılış, ürün detayı)"),
       })).describe("edit_existing için kurgu bölümleri, çıktı sırasıyla. Çıktı zaman çizelgesi bu sıradan hesaplanır; kaynak zamanları ile karıştırılmaz.").default([]),
+      parts: z.array(z.object({
+        kind: z.enum(["ai_scene", "product_photo", "archive_clip"]).describe("ai_scene: bu plandaki bir generate_new videosu; product_photo: gerçek ürün fotoğrafı (hareketlendirilir); archive_clip: analizi tamamlanmış arşiv videosundan sahne"),
+        ref: z.string().describe("ai_scene: generate_new video id; product_photo: fotoğraf kimliği; archive_clip: video kimliği"),
+        duration_s: z.number().describe("Bu parçanın çıktıdaki süresi (sn). ai_scene için en fazla sahnenin süresi; product_photo için 1.5-6"),
+        motion: z.enum(["zoom_in", "zoom_out", "pan_left", "pan_right", "none"]).describe("Yalnızca product_photo: kamera hareketi"),
+        scene_index: z.number().describe("Yalnızca archive_clip: analizdeki sahne numarası; diğerlerinde 0"),
+        source_start: z.number().describe("Yalnızca archive_clip: KAYNAK başlangıç (sn); diğerlerinde 0"),
+        source_end: z.number().describe("Yalnızca archive_clip: KAYNAK bitiş (sn); diğerlerinde 0"),
+        on_screen_text: z.string().describe("Bu parça boyunca ekranda görünecek kısa metin; yoksa boş"),
+      })).describe("Yalnızca compose: çıktı sırasıyla reklam parçaları; diğer modlarda boş dizi").default([]),
     }),
   ),
   unknowns: Unknowns,
