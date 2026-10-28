@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { config } from "@/lib/config";
 import { completeDriveOAuth, consumeDriveState, safeError } from "@/lib/drive/source";
 import { upsertConnection } from "@/lib/services/connections";
 
@@ -7,7 +8,7 @@ export const runtime = "nodejs";
 /** Google OAuth dönüşü. Marka, istemciden değil sunucuda saklanan tek kullanımlık state'ten alınır. Kod/belirteç günlüğe yazılmaz. */
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const back = (kind: "ok" | "err", msg: string) => NextResponse.redirect(new URL(`/drive-arsivi?${kind}=${encodeURIComponent(msg)}`, req.url));
+  const back = (kind: "ok" | "err", msg: string) => NextResponse.redirect(new URL(`/drive-arsivi?${kind}=${encodeURIComponent(msg)}`, config.publicBaseUrl));
   const brandId = await consumeDriveState(url.searchParams.get("state") ?? "");
   if (!brandId) return back("err", "Geçersiz veya süresi dolmuş yetkilendirme isteği.");
   const denied = url.searchParams.get("error");
