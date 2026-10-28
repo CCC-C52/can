@@ -9,6 +9,7 @@ import { submitInstruction, listTasks } from "@/lib/orchestrator/projects";
 import { createBrand, createProduct } from "@/lib/services/brands";
 import { uploadMedia } from "@/lib/services/media";
 import { upsertConnection } from "@/lib/services/connections";
+import { getCurrentVersion } from "@/lib/services/outputs";
 import { setSetting, DEFAULT_LIMITS } from "@/lib/settings";
 import { setTextModelOverride } from "@/lib/models";
 import { DemoAdapter } from "@/lib/models/demo";
@@ -450,7 +451,9 @@ describe("ffmpeg kurgu", () => {
     expect(Number(video.duration_s)).toBeCloseTo(6, 0); // 2 + 2 + 2 sn kapanış kartı
   });
 
-  it("sahne bölümü olmayan (eski biçim) kurgu planı kalite kontrolünde reddedilir; MP4 üretilmez", async () => {
+  it("sahne bölümü olmayan (eski biçim) plan: AI'ya geri gönderilmez; bölümler seçili videoların doğrulanmış sahnelerinden kurulur ve MP4 üretilir", async () => {
+    // P0 (28 Ekim 2026): eski davranış planı reddedip AI'ya yeniden üretime gönderiyordu (MP4 yok). Artık deterministik
+    // doğrulayıcı, seçili ve analizi tamamlanmış videoların sahnelerinden bölüm kurar; sahne uydurulmaz.
     setTextModelOverride(new ScriptedModel(videoPlan, { video: { summary: "s", unknowns: [], videos: [{
       id: "ev", mode: "edit_existing", format: "4:5", duration_s: 4, selected_asset_ids: clipIds,
       script: [{ t_start: 0, t_end: 2, visual: "", voiceover: "", on_screen_text: "Red" }], subtitles: [], generation_prompt: "", music_note: "",
@@ -460,8 +463,19 @@ describe("ffmpeg kurgu", () => {
     await drive(new Engine("edit-w2"));
     const tasks = await listTasks(brandId, { projectId: project.id });
     const v = tasks.find((t) => t.key === "video")!;
-    expect(v.status).toBe("failed");
-    expect(v.error).toMatch(/segments/);
-    expect(tasks.some((t) => t.kind === "render")).toBe(false);
+    expect(v.status).toBe("approval_pending");
+    expect(v.regen_count).toBe(0);
+    const ver = (await getCurrentVersion(brandId, v.output_id!))!;
+    expect(ver.created_by).toBe("system:plan-validator");
+    const segs = ver.content.videos[0].segments as { asset_id: string; scene_index: number; source_start: number; source_end: number }[];
+    expect(segs.length).toBeGreaterThan(0);
+    const { latestAnalysis } = await import("@/lib/media-analysis");
+    for (const sg of segs) {
+      expect(clipIds).toContain(sg.asset_id);
+      const sc = (await latestAnalysis(brandId, sg.asset_id))!.result.local.scenes.find((x: any) => x.index === sg.scene_index);
+      expect(sg.source_start).toBeGreaterThanOrEqual(sc.start);
+      expect(sg.source_end).toBeLessThanOrEqual(sc.end);
+    }
+    expect(tasks.find((t) => t.kind === "render")!.status).toBe("completed");
   });
 });
