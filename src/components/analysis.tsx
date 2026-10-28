@@ -27,7 +27,7 @@ export function AnalysisPanel({ a, assetId }: { a: MediaAnalysis | null; assetId
         <Badge tone={a.level === "vision" ? "info" : "neutral"}>{a.level === "vision" ? `Piksel + görsel model (${a.model ?? a.provider})` : "Yalnızca yerel piksel analizi"}</Badge>
         <span className="text-xs text-muted">sürüm {a.analysis_version} · deneme {a.attempts}/{a.max_attempts} · {dt(a.completed_at ?? a.created_at)}{a.cost_usd !== null ? ` · maliyet ${usd(a.cost_usd)}` : a.cost_unknown ? " · maliyet bilinmiyor" : ""}</span>
       </div>
-      {a.error && <p className="text-xs text-red-700">{a.error}</p>}
+      {a.error && <p className="text-xs text-danger">{a.error}</p>}
       {a.level === "local" && a.status === "completed" && <p className="text-xs text-muted">Ürün türü, baskı, poz gibi anlamsal bilgiler için görsel model (AIOPS_ANTHROPIC_API_KEY) gerekir; tahmin üretilmez.</p>}
       {local && a.kind === "image" && (
         <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -49,7 +49,7 @@ export function AnalysisPanel({ a, assetId }: { a: MediaAnalysis | null; assetId
             <div><dt className="label">Hareket</dt><dd>{local.motion.level}</dd></div>
             <div><dt className="label">Kullanılabilirlik</dt><dd>{local.usability.score}/100</dd></div>
           </dl>
-          {local.usability.issues.length > 0 && <p className="text-xs text-amber-800">Sorunlar: {local.usability.issues.join(", ")}</p>}
+          {local.usability.issues.length > 0 && <p className="text-xs text-warning">Sorunlar: {local.usability.issues.join(", ")}</p>}
           <div className="label">Sahneler ve incelenen kareler</div>
           <ul className="grid grid-cols-2 gap-2 md:grid-cols-3">
             {local.frames.map((f: any) => (
@@ -65,7 +65,7 @@ export function AnalysisPanel({ a, assetId }: { a: MediaAnalysis | null; assetId
         </div>
       )}
       {v && (
-        <div className="rounded-lg bg-blue-50/50 p-3">
+        <div className="rounded-lg bg-info-soft/50 p-3">
           <div className="label">Görsel model analizi</div>
           <p>{v.summary}</p>
           {a.kind === "image" ? (
@@ -81,7 +81,7 @@ export function AnalysisPanel({ a, assetId }: { a: MediaAnalysis | null; assetId
               {v.marketing_uses.length > 0 && <li>Pazarlama kullanımı: {v.marketing_uses.join(", ")}</li>}
             </ul>
           )}
-          {v.uncertain?.length > 0 && <p className="mt-2 text-xs text-amber-800">Belirsiz: {v.uncertain.join("; ")}</p>}
+          {v.uncertain?.length > 0 && <p className="mt-2 text-xs text-warning">Belirsiz: {v.uncertain.join("; ")}</p>}
         </div>
       )}
     </div>

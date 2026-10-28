@@ -22,6 +22,8 @@ const KIND_LABEL: Record<string, string> = {
   [PR_KINDS.daily_brief]: "Günlük trend özeti",
   [PR_KINDS.weekly_report]: "Haftalık PR raporu",
   [PR_KINDS.monthly_presentation]: "Aylık yönetici sunumu",
+  [PR_KINDS.quarterly_review]: "Çeyreklik stratejik inceleme",
+  [PR_KINDS.annual_review]: "Yıllık yol haritası değerlendirmesi",
   [PR_KINDS.alert]: "Uyarı (kriz/fırsat)",
   [PR_KINDS.event_plan]: "Etkinlik planı",
 };
@@ -37,6 +39,8 @@ export async function Automation({ brandId }: { brandId: string }) {
           <li>Günlük trend özeti: her gün {SCHEDULE.daily_brief.hourUtc}:00 UTC</li>
           <li>Haftalık PR raporu: Pazartesi {SCHEDULE.weekly_report.hourUtc}:00 UTC</li>
           <li>Aylık yönetici sunumu: ayın 1&apos;i {SCHEDULE.monthly_presentation.hourUtc}:00 UTC</li>
+          <li>Çeyreklik stratejik inceleme: çeyrek başı {SCHEDULE.quarterly_review.hourUtc}:00 UTC</li>
+          <li>Yıllık yol haritası değerlendirmesi: 1 Ocak {SCHEDULE.annual_review.hourUtc}:00 UTC</li>
           <li>Etkinlik planları: hazırlık penceresi açılınca (90/45/21 gün önce)</li>
         </ul>
         <form action={prConfigAction} className="space-y-2 text-sm">
@@ -63,7 +67,7 @@ export async function Automation({ brandId }: { brandId: string }) {
             <table className="w-full text-xs">
               <thead><tr className="text-left text-muted"><th className="py-1">Kaynak</th><th>Durum</th><th>Son başarılı</th><th>Kota (bugün)</th><th>Hata</th></tr></thead>
               <tbody>{feeds.map((f) => (
-                <tr key={f.sourceId} className="border-t border-line"><td className="py-1 pr-2">{f.name}</td><td className="pr-2"><Badge tone={FEED_STATUS[f.status].tone}>{FEED_STATUS[f.status].label}</Badge></td><td className="pr-2">{dt(f.lastSuccessAt)}</td><td className="pr-2">{f.budget.used}/{f.budget.limit}</td><td className="text-red-700">{f.lastError ?? ""}</td></tr>
+                <tr key={f.sourceId} className="border-t border-line"><td className="py-1 pr-2">{f.name}</td><td className="pr-2"><Badge tone={FEED_STATUS[f.status].tone}>{FEED_STATUS[f.status].label}</Badge></td><td className="pr-2">{dt(f.lastSuccessAt)}</td><td className="pr-2">{f.budget.used}/{f.budget.limit}</td><td className="text-danger">{f.lastError ?? ""}</td></tr>
               ))}</tbody>
             </table>
           </div>
@@ -145,11 +149,12 @@ export async function Strategy({ brandId }: { brandId: string }) {
   const okr = buildRoadmap(cfg.roadmapStart ?? new Date().toISOString().slice(0, 10), cfg.measuredMetrics);
   return (
     <div className="space-y-4">
+      <p className="rounded-2xl border border-line bg-surface-2/70 px-4 py-3 text-sm text-ink-soft">Bu bölüm arşiv kaynaklı 24 aylık bilinirlik planıdır. Uzun vadeli çerçeve (2026–2034 vizyon, aşamalar, yıllık hedefler, OKR'ler) için <a href="/pr-ajansi/strateji" className="link">Marka Stratejisi</a> sayfasına bakın.</p>
       <section className="card">
         <h2 className="h2 mb-1">24 aylık marka bilinirliği stratejisi ({plan.period.start} → {plan.period.end})</h2>
         <Badge tone="warn">Öneri — gerçek değil</Badge> {plan.sourceBacked ? <Badge tone="ok">Arşiv kaynaklı</Badge> : <Badge tone="warn">Arşiv kaynakları eksik</Badge>}
         <p className="mt-2 text-xs text-muted">{plan.disclaimer}</p>
-        {plan.missingSources.length > 0 && <p className="mt-1 text-xs text-amber-800">Eksik arşiv kategorileri: {plan.missingSources.join(", ")}</p>}
+        {plan.missingSources.length > 0 && <p className="mt-1 text-xs text-warning">Eksik arşiv kategorileri: {plan.missingSources.join(", ")}</p>}
         <ol className="mt-3 grid gap-3 md:grid-cols-2">
           {plan.quarters.map((q) => (
             <li key={q.n} className="rounded-lg border border-line p-3">
@@ -174,7 +179,7 @@ export async function Strategy({ brandId }: { brandId: string }) {
             ))}</tbody>
           </table>
         </div>
-        {okr.dataGaps.length > 0 && <ul className="mt-2 list-disc pl-5 text-xs text-amber-800">{okr.dataGaps.map((g) => <li key={g}>{g}</li>)}</ul>}
+        {okr.dataGaps.length > 0 && <ul className="mt-2 list-disc pl-5 text-xs text-warning">{okr.dataGaps.map((g) => <li key={g}>{g}</li>)}</ul>}
       </section>
     </div>
   );

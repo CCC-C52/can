@@ -5,12 +5,25 @@ import { FRIBEE_COLLECTIONS_SOURCE, PR_AGENCY_PATH, PR_EXTERNAL_ACTIONS, STALE_A
 import { Badge, Empty, Flash, PageHeader, Stat, dt } from "@/components/ui";
 import type { Tone } from "@/lib/labels";
 import { Automation, Calendar, Strategy } from "./tabs";
+import { Icon, type IconName } from "@/components/icons";
+import { SPECIALISTS, specialistReadiness } from "@/lib/pr-agency/specialists";
+import { listIntegrations } from "@/lib/integrations/service";
+import { agentName } from "@/lib/agents/registry";
+
+const HUB: { href: string; title: string; text: string; icon: IconName }[] = [
+  { href: "/pr-ajansi/strateji", title: "Marka Stratejisi 2026–2034", text: "Vizyon, aşamalar, yıllık hedefler, OKR'ler", icon: "strategy" },
+  { href: "/pr-ajansi/istihbarat", title: "Pazar İstihbaratı", text: "Trendler, rakipler, kültür", icon: "radar" },
+  { href: "/pr-ajansi/medya-iliskileri", title: "Medya İlişkileri", text: "Basın taslakları ve kapsam", icon: "mic" },
+  { href: "/pr-ajansi/influencer", title: "Influencer Ağı", text: "Beyanlı iş birliği önerileri", icon: "users" },
+  { href: "/pr-ajansi/takvim", title: "İçerik Takvimi", text: "ABD 12 aylık takvim", icon: "calendar" },
+  { href: "/pr-ajansi/kutuphane", title: "Bilgi Kütüphanesi", text: "AMEC, Barcelona 4.0, CBBE, SCCT…", icon: "library" },
+];
 
 const TABS = [
   { id: "overview", label: "Genel bakış" },
   { id: "automation", label: "Otomasyon ve raporlar" },
   { id: "calendar", label: "ABD 12 aylık takvim" },
-  { id: "strategy", label: "24 aylık strateji" },
+  { id: "strategy", label: "24 aylık bilinirlik planı" },
 ] as const;
 
 export const dynamic = "force-dynamic";
@@ -48,7 +61,8 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
   const filter = (["verified", "unverified", "rejected"] as const).find((v) => v === one("durum")) ?? null;
   const tab = TABS.find((t) => t.id === one("tab"))?.id ?? "overview";
   const page = Number(one("sayfa")) || 1;
-  const [o, ev] = await Promise.all([prAgencyOverview(brand), listPrEvidence(brand.id, { page, pageSize: 20, verification: filter })]);
+  const [o, ev, integrations] = await Promise.all([prAgencyOverview(brand), listPrEvidence(brand.id, { page, pageSize: 20, verification: filter }), listIntegrations(brand.id)]);
+  const verified = new Set(integrations.filter((i) => i.state === "verified" || i.state === "degraded").map((i) => i.def.id));
   const link = (p: { durum?: string | null; sayfa?: number }) => {
     const sp = new URLSearchParams();
     if (p.durum) sp.set("durum", p.durum);
@@ -59,19 +73,53 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
   return (
     <div>
       <PageHeader
+        eyebrow="AI PR Ajansı"
         title="PR Ajansı"
-        subtitle={`${o.brand.name} için PR komuta merkezi: trend izleme, ABD takvimi, 24 aylık strateji ve zamanlanmış raporlar. Gösterilen her bilgi kaynağı ve alım zamanıyla birlikte gelir; kaynağı olmayan erişim, etkileşim veya duygu verisi gösterilmez.`}
+        subtitle={`${o.brand.name} için kalıcı marka yönetimi ve halkla ilişkiler departmanı: araştırma, yürütme, koordinasyon, doğrulama, ölçüm ve raporlama. Gösterilen her bilgi kaynağı ve alım zamanıyla gelir; kaynağı olmayan erişim, etkileşim veya duygu verisi gösterilmez.`}
+        actions={<><Link href="/pr-ajansi/strateji" className="btn-primary"><Icon name="strategy" />Marka Stratejisi</Link><Link href="/otomasyon" className="btn"><Icon name="bolt" />Otomasyon</Link></>}
       />
+      {tab === "overview" && (
+        <>
+          <ul className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {HUB.map((h) => (
+              <li key={h.href}>
+                <Link href={h.href} className="card card-interactive flex items-start gap-3">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand/10 text-brand ring-1 ring-brand/25 ring-inset"><Icon name={h.icon} className="h-5 w-5" /></span>
+                  <span className="min-w-0"><span className="block font-medium text-ink">{h.title}</span><span className="block text-xs text-muted">{h.text}</span></span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <section className="mb-6" aria-labelledby="team-title">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div><div className="eyebrow mb-1">Uzman kadrosu</div><h2 id="team-title" className="h2">AI PR Direktörü ve ekibi</h2></div>
+              <p className="max-w-xl text-xs text-muted">Uzmanlar mevcut görev motoru ajanlarına ve zamanlanmış rollere eşlenir; paralel bir sistem yoktur. Koordinasyon görev motoru ve Onay Merkezi üzerinden yürür.</p>
+            </div>
+            <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {SPECIALISTS.map((s) => {
+                const r = specialistReadiness(s, verified);
+                return (
+                  <li key={s.id} className="card">
+                    <div className="flex items-start justify-between gap-2"><h3 className="font-medium">{s.titleTr}</h3><Badge tone={r.state === "ready" ? "ok" : r.state === "partial" ? "info" : "warn"}>{r.state === "ready" ? "Hazır" : r.state === "partial" ? "Kısmi veri" : "İç verilerle"}</Badge></div>
+                    <p className="mt-1 text-xs leading-relaxed text-muted">{s.mission}</p>
+                    <p className="mt-2 text-[11px] text-ink-soft">{s.engineAgents.length ? `Ajan: ${s.engineAgents.map((a) => agentName(a)).join(", ")}` : "Zamanlanmış işler"}{s.integrations.length ? ` · Platform: ${s.integrations.join(", ")}` : ""}</p>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        </>
+      )}
       <Flash ok={ok} err={err} />
       <nav className="mb-4 flex flex-wrap gap-2" aria-label="PR Ajansı bölümleri">
-        {TABS.map((t) => <Link key={t.id} href={`${PR_AGENCY_PATH}?tab=${t.id}`} className={t.id === tab ? "btn-primary" : "btn"} aria-current={t.id === tab ? "page" : undefined}>{t.label}</Link>)}
+        {TABS.map((t) => <Link key={t.id} href={`${PR_AGENCY_PATH}?tab=${t.id}`} className={t.id === tab ? "chip-active" : "chip"} aria-current={t.id === tab ? "page" : undefined}>{t.label}</Link>)}
       </nav>
       {tab === "automation" && <Automation brandId={brand.id} />}
       {tab === "calendar" && <Calendar brandId={brand.id} />}
       {tab === "strategy" && <Strategy brandId={brand.id} />}
       {tab === "overview" && (<>
 
-      <div role="note" className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200">
+      <div role="note" className="mb-4 rounded-lg bg-warning-soft px-3 py-2 text-sm text-warning ring-1 ring-warning-line">
         Taslak modu: bu modül e-posta/DM göndermez, yayın yapmaz, Shopify&apos;ı değiştirmez, reklam bütçesi harcamaz ve dağıtım yapmaz.
         Her dış işlem sahibin ayrı onayını gerektirir. Gerçek zamanlı akış yoktur; veri yalnızca aşağıda &quot;Kullanılabilir&quot; görünen kaynaklardan gelir.
       </div>
@@ -86,7 +134,7 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
       {o.lastRun && (
         <p className="mb-4 text-xs text-muted">
           Son araştırma çalıştırması: {dt(o.lastRun.createdAt)} — {o.lastRun.status}
-          {o.lastRun.error ? <span className="text-red-700"> · {o.lastRun.error}</span> : null}
+          {o.lastRun.error ? <span className="text-danger"> · {o.lastRun.error}</span> : null}
         </p>
       )}
 
@@ -102,7 +150,7 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
               <p className="mt-1 text-sm text-muted">{ws.summary}</p>
               <p className="mt-2 text-xs"><span className="font-medium">Planlanan taslaklar:</span> {ws.drafts.join(" · ")}</p>
               {ws.gaps.length > 0 && (
-                <p className="mt-1 text-xs text-amber-800">
+                <p className="mt-1 text-xs text-warning">
                   <span className="font-medium">Eksik kaynak:</span> {ws.gaps.map((g) => o.connectors.find((c) => c.id === g)?.name ?? g).join(", ")}
                 </p>
               )}
@@ -141,9 +189,9 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h2 id="ev-title" className="h2">Kanıt kaynakları</h2>
               <nav aria-label="Doğrulama filtresi" className="flex flex-wrap gap-2 text-xs">
-                <Link href={link({})} aria-current={filter === null ? "page" : undefined} className={filter === null ? "font-medium text-brand" : "text-gray-700"}>Tümü ({o.evidence.total})</Link>
+                <Link href={link({})} aria-current={filter === null ? "page" : undefined} className={filter === null ? "font-medium text-brand" : "text-ink-soft"}>Tümü ({o.evidence.total})</Link>
                 {(["verified", "unverified", "rejected"] as const).map((v) => (
-                  <Link key={v} href={link({ durum: v })} aria-current={filter === v ? "page" : undefined} className={filter === v ? "font-medium text-brand" : "text-gray-700"}>{VERIFICATION[v].label}</Link>
+                  <Link key={v} href={link({ durum: v })} aria-current={filter === v ? "page" : undefined} className={filter === v ? "font-medium text-brand" : "text-ink-soft"}>{VERIFICATION[v].label}</Link>
                 ))}
               </nav>
             </div>

@@ -71,7 +71,7 @@ export default async function Diagnostics() {
             <li>İşleyiciler: {workerCommits.length === 0 ? "sinyal yok" : workerCommits.map((w, i) => (
               <span key={i} className="mr-2"><code>{short(w.info?.commit)}</code> {Date.now() - new Date(w.last_seen).getTime() < WORKER_LIVE_MS ? "canlı" : "eski sinyal"}</span>
             ))}</li>
-            {webCommit && workerCommits[0]?.info?.commit && workerCommits[0].info.commit !== webCommit && <li className="text-amber-800">Web ve işleyici farklı commit&apos;lerde çalışıyor.</li>}
+            {webCommit && workerCommits[0]?.info?.commit && workerCommits[0].info.commit !== webCommit && <li className="text-warning">Web ve işleyici farklı commit&apos;lerde çalışıyor.</li>}
             <li>Dağıtım hattı durum ucu: {releaseApiEnabled() ? "açık (belirteçli)" : "kapalı (RELEASE_STATUS_TOKEN tanımlı değil)"}</li>
           </ul>
           {releases.length === 0 ? (
@@ -116,7 +116,7 @@ export default async function Diagnostics() {
               {d.failures.map((f) => (
                 <li key={f.id}>
                   <Link className="font-medium text-brand underline" href={`/gorevler/${f.id}`}>{f.title}</Link> <span className="text-muted">· {f.brand_name} · {agentName(f.agent)}{f.failure_class ? ` · ${f.failure_class}` : ""}</span>
-                  {f.error && <div className="break-words text-red-700">{f.error}</div>}
+                  {f.error && <div className="break-words text-danger">{f.error}</div>}
                 </li>
               ))}
             </ul>

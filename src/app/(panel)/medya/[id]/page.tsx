@@ -12,6 +12,7 @@ import { SubmitButton } from "@/components/client";
 import { MediaThumb } from "@/components/previews";
 import { MEDIA_ORIGIN_LABEL, RIGHTS_LABEL } from "@/lib/labels";
 import { config } from "@/lib/config";
+import { heroSelectAction } from "@/app/actions/agency";
 
 export default async function MediaDetail({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SP }) {
   const { id } = await params;
@@ -24,7 +25,8 @@ export default async function MediaDetail({ params, searchParams }: { params: Pr
   const userTags = m.tags.filter((t) => t.source === "user").map((t) => t.tag).join(", ");
   return (
     <div>
-      <PageHeader title={m.filename} subtitle={<span className="flex flex-wrap gap-1"><Badge tone={m.origin === "ai_generated" ? "warn" : "neutral"}>{MEDIA_ORIGIN_LABEL[m.origin] ?? m.origin}</Badge><Badge>{m.kind}</Badge><Badge>v{m.version}</Badge><Badge tone={m.rights_status === "restricted" ? "bad" : m.rights_status === "unknown" ? "warn" : "ok"}>Hak: {RIGHTS_LABEL[m.rights_status]}</Badge></span>} />
+      <PageHeader title={m.filename} subtitle={<span className="flex flex-wrap gap-1"><Badge tone={m.origin === "ai_generated" ? "warn" : "neutral"}>{MEDIA_ORIGIN_LABEL[m.origin] ?? m.origin}</Badge><Badge>{m.kind}</Badge><Badge>v{m.version}</Badge><Badge tone={m.rights_status === "restricted" ? "bad" : m.rights_status === "unknown" ? "warn" : "ok"}>Hak: {RIGHTS_LABEL[m.rights_status]}</Badge></span>}
+        actions={m.kind === "photo" && m.origin !== "ai_generated" && /^image\/(jpeg|png|webp)$/.test(m.mime_type) ? <form action={heroSelectAction}><input type="hidden" name="mediaId" value={m.id} /><SubmitButton className="btn">Ana ekran kapağı yap</SubmitButton></form> : undefined} />
       <Flash ok={ok} err={err} />
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">

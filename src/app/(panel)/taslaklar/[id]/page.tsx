@@ -65,8 +65,8 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
         actions={<AutoRefresh active={!!busy} />}
       />
       <Flash ok={ok} err={err} />
-      {!isCurrent && <div className="mb-3 rounded-lg bg-amber-50 p-2 text-sm text-amber-900 ring-1 ring-amber-200">Eski bir sürümü görüntülüyorsunuz. Onay ve dış işlemler yalnızca güncel sürüm (v{current.version}) için yapılabilir. <Link className="underline" href={`/taslaklar/${id}`}>Güncel sürüme git</Link></div>}
-      {shown.is_demo && <div className="mb-3 rounded-lg bg-fuchsia-50 p-2 text-sm text-fuchsia-900 ring-1 ring-fuchsia-200">Bu sürüm DEMO şablonla üretildi; gerçek AI üretimi değildir. DEMO içerik dış platforma gönderilemez — düzenleyip kendi sürümünüzü oluşturabilirsiniz.</div>}
+      {!isCurrent && <div className="mb-3 rounded-lg bg-warning-soft p-2 text-sm text-warning ring-1 ring-warning-line">Eski bir sürümü görüntülüyorsunuz. Onay ve dış işlemler yalnızca güncel sürüm (v{current.version}) için yapılabilir. <Link className="underline" href={`/taslaklar/${id}`}>Güncel sürüme git</Link></div>}
+      {shown.is_demo && <div className="mb-3 rounded-lg bg-demo-soft p-2 text-sm text-demo ring-1 ring-demo-line">Bu sürüm DEMO şablonla üretildi; gerçek AI üretimi değildir. DEMO içerik dış platforma gönderilemez — düzenleyip kendi sürümünüzü oluşturabilirsiniz.</div>}
 
       <div className="grid gap-4 xl:grid-cols-3">
         <section className="card xl:col-span-2">
@@ -84,7 +84,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
             <section className="card space-y-3">
               <h2 className="h2">Onay</h2>
               {needsMp4 && !hasMp4 && (
-                <p className="rounded bg-amber-50 p-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                <p className="rounded bg-warning-soft p-2 text-xs text-warning ring-1 ring-warning-line">
                   Bu sürüm için doğrulanmış MP4 henüz yok{renderTask ? ` (render: ${TASK_STATUS_LABEL[renderTask.status as keyof typeof TASK_STATUS_LABEL] ?? renderTask.status}${renderTask.error ? ` — ${renderTask.error.slice(0, 160)}` : ""})` : ""}. Onay MP4 üretilip doğrulandıktan sonra verilebilir; reddedebilir veya revizyon isteyebilirsiniz.
                 </p>
               )}
@@ -106,7 +106,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
                     {scopes.map((s) => (
                       <label key={s} className="flex items-center gap-2"><input type="checkbox" name="scopes" value={s} defaultChecked={s === "content"} disabled={s === "content"} />{APPROVAL_SCOPE_LABEL[s] ?? s}</label>
                     ))}
-                    {scopes.includes("price_change") && <p className="text-xs text-amber-800">Bu öneri fiyat değişikliği içeriyor; canlıya uygulamak için “Fiyat / indirim değişikliği” kapsamı da gerekir.</p>}
+                    {scopes.includes("price_change") && <p className="text-xs text-warning">Bu öneri fiyat değişikliği içeriyor; canlıya uygulamak için “Fiyat / indirim değişikliği” kapsamı da gerekir.</p>}
                   </fieldset>
                   <input name="note" className="input" placeholder="Not / ret gerekçesi (isteğe bağlı)" aria-label="Not" />
                   {task && <label className="flex items-center gap-2 text-xs"><input type="checkbox" name="revise" defaultChecked /> Reddedersem bu notla yeni sürüm üretilsin (yeniden üretim hakkı: {task.regen_count}/{limits.maxRegenerations})</label>}
@@ -123,7 +123,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
             <section className="card space-y-2">
               <h2 className="h2">Canlı mağazaya uygula</h2>
               <p className="text-xs text-muted">Sunucu; onayı, sürümü, içerik özetini ve Shopify bağlantısını kontrol eder. Bağlantı yoksa işlem yapılmaz.</p>
-              {containsDemo && <p className="text-xs text-fuchsia-800">DEMO içerik gönderilemez.</p>}
+              {containsDemo && <p className="text-xs text-demo">DEMO içerik gönderilemez.</p>}
               <form action={externalAction}>
                 <IdempotencyField /><input type="hidden" name="outputId" value={id} /><input type="hidden" name="versionId" value={current.id} /><input type="hidden" name="actionType" value="store_update" />
                 <SubmitButton className="btn" confirm="Onaylı değişiklikler canlı Shopify mağazasına yazılsın mı?">Shopify'a uygula</SubmitButton>
@@ -192,13 +192,13 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
               <p className="text-xs text-muted">Ücretli sağlayıcıya yapılan her gönderim tek kayıttır; yeniden deneme veya işleyici yeniden başlatması ikinci gönderim yapmaz.</p>
               <ul className="space-y-2 text-xs">
                 {jobs.map((j) => (
-                  <li key={j.id} className="rounded bg-gray-50 p-2">
+                  <li key={j.id} className="rounded bg-surface-2 p-2">
                     <div className="flex flex-wrap items-center gap-1">
                       <Badge tone={j.status === "succeeded" ? "ok" : j.status === "failed" ? "bad" : "warn"}>{PROVIDER_JOB_STATUS_LABEL[j.status] ?? j.status}</Badge>
                       {j.item_ref} · {j.kind === "video_generation" ? "AI video" : "AI görsel"} · {j.provider}
                     </div>
                     <div className="text-muted">{dt(j.created_at)} · tahmini {j.cost_estimated_usd === null ? "bilinmiyor" : `$${Number(j.cost_estimated_usd).toFixed(3)}`}{j.cost_actual_usd !== null ? ` · gerçekleşen $${Number(j.cost_actual_usd).toFixed(3)}` : ""}{j.poll_count ? ` · ${j.poll_count} sorgu` : ""}</div>
-                    {j.error && <div className="text-red-700">{j.error}</div>}
+                    {j.error && <div className="text-danger">{j.error}</div>}
                     {j.result_asset_id && <Link className="text-brand underline" href={`/medya/${j.result_asset_id}`}>Üretilen dosya</Link>}
                     {(j.status === "failed" || j.status === "unknown") && !j.idempotency_key.includes(":released:") && (
                       <form action={releaseProviderJobAction} className="mt-1">
@@ -258,10 +258,10 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
               <h3 className="mt-4 text-sm font-medium">Dış işlemler</h3>
               <ul className="mt-1 space-y-2 text-xs">
                 {actions.map((a) => (
-                  <li key={a.id} className="rounded bg-gray-50 p-2">
+                  <li key={a.id} className="rounded bg-surface-2 p-2">
                     <div className="flex flex-wrap items-center gap-1"><Badge tone={a.status === "succeeded" ? "ok" : a.status === "failed" ? "bad" : "warn"}>{EXTERNAL_ACTION_STATUS_LABEL[a.status] ?? a.status}</Badge> {a.action_type} → {a.provider} · v{a.version}</div>
                     <div className="text-muted">{dt(a.created_at)}{a.request?.target?.postId ? ` · ${a.request.target.postId}` : ""}</div>
-                    {a.error && <div className="text-red-700">{a.error}</div>}
+                    {a.error && <div className="text-danger">{a.error}</div>}
                     {a.status === "manual_export" && <a className="text-brand underline" href={`/api/exports/${a.id}`}>Paketi indir (.zip)</a>}
                     {a.status === "unknown" && (
                       <form action={reconcileAction_} className="mt-1 flex gap-1"><input type="hidden" name="actionId" value={a.id} /><input type="hidden" name="back" value={`/taslaklar/${id}`} />

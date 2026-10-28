@@ -36,10 +36,10 @@ export default async function ChatPage({ searchParams }: { searchParams: SP }) {
           {messages.length === 0 && <p className="muted">Henüz konuşma yok. Aşağıdan ilk talimatınızı verin.</p>}
           {messages.map((m) => (
             <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div className={`max-w-[90%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-brand text-white" : "bg-gray-100 text-ink"}`}>
+              <div className={`max-w-[90%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-brand text-on-brand" : "bg-surface-3 text-ink"}`}>
                 <div className="mb-1 flex items-center gap-2 text-[11px] opacity-95">
                   {m.role === "user" ? "Siz" : "Ana yönetici"} · {dt(m.created_at)}
-                  {m.data?.isDemo && <span className="rounded bg-fuchsia-100 px-1 text-fuchsia-700">DEMO plan</span>}
+                  {m.data?.isDemo && <span className="rounded bg-demo-soft px-1 text-demo">DEMO plan</span>}
                 </div>
                 {m.content}
                 {m.project_id && m.role !== "user" && (

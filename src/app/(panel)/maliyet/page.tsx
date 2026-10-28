@@ -58,7 +58,7 @@ export default async function CostPage({ searchParams }: { searchParams: SP }) {
         </section>
         <section className="card">
           <h2 className="h2 mb-2">Web araştırması (Firecrawl)</h2>
-          {!firecrawlConfigured() && <p className="mb-2 text-xs text-amber-800">FIRECRAWL_API_KEY sunucuda tanımlı değil; açık olsa bile araştırma yapılamaz.</p>}
+          {!firecrawlConfigured() && <p className="mb-2 text-xs text-warning">FIRECRAWL_API_KEY sunucuda tanımlı değil; açık olsa bile araştırma yapılamaz.</p>}
           <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="webResearch" defaultChecked={limits.webResearch} className="mt-1" /> <span>Araştırma Merkezi&apos;nde ücretli web araştırmasına izin ver (yalnızca sahip başlatır; ajanlar web çağrısı yapamaz).</span></label>
           <label className="mt-2 block max-w-xs text-sm"><span className="label">Aylık kredi üst sınırı</span><input name="researchMonthlyCredits" type="number" min={0} max={100000} defaultValue={limits.researchMonthlyCredits} className="input" /></label>
         </section>

@@ -39,7 +39,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
           <ul className="space-y-1 text-sm">
             {facts.map((f) => (
               <li key={f.id} className="flex items-start justify-between gap-2"><span><Badge tone={f.status === "verified" ? "ok" : "warn"}>{f.status === "verified" ? "Doğrulandı" : "Doğrulanmadı"}</Badge> <strong>{f.attribute}:</strong> {f.value} <span className="text-xs text-muted">({f.source ?? "kaynak yok"})</span></span>
-                <form action={deleteProductFactAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="productId" value={p.id} /><button className="text-xs text-red-700">Sil</button></form></li>
+                <form action={deleteProductFactAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="productId" value={p.id} /><button className="text-xs text-danger">Sil</button></form></li>
             ))}
           </ul>
           <form action={addProductFactAction} className="mt-3 space-y-2">
@@ -54,7 +54,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
           <div tabIndex={0} className="overflow-x-auto"><table className="table"><thead><tr><th>Ad</th><th>SKU</th><th>Renk</th><th>Beden</th><th>Fiyat</th><th>Stok</th><th></th></tr></thead>
             <tbody>{variants.map((v) => (
               <tr key={v.id}><td>{v.title}</td><td><Val v={v.sku} /></td><td><Val v={v.color} /></td><td><Val v={v.size} /></td><td><Val v={v.price} /></td><td><Val v={v.inventory_quantity} /></td>
-                <td><form action={deleteVariantAction}><input type="hidden" name="id" value={v.id} /><input type="hidden" name="productId" value={p.id} /><button className="text-xs text-red-700">Sil</button></form></td></tr>
+                <td><form action={deleteVariantAction}><input type="hidden" name="id" value={v.id} /><input type="hidden" name="productId" value={p.id} /><button className="text-xs text-danger">Sil</button></form></td></tr>
             ))}</tbody></table></div>
           <form action={addVariantAction} className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-7">
             <input type="hidden" name="productId" value={p.id} />

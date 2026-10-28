@@ -146,13 +146,14 @@ async function main() {
       expect((r.headers.get("location") ?? "").includes("/login"), "login'e gitmedi");
     });
     await check("oturumsuz: yeni bölümler (hafıza, araştırma, maliyet, stüdyolar, kampanyalar, PR ajansı) giriş ister", async () => {
-      for (const u of ["/hafiza", "/arastirma", "/maliyet", "/studyo/video", "/studyo/gorsel", "/projeler", "/pr-ajansi"]) {
+      for (const u of ["/hafiza", "/arastirma", "/maliyet", "/studyo/video", "/studyo/gorsel", "/projeler", "/pr-ajansi", "/pr-ajansi/strateji", "/pr-ajansi/kutuphane", "/koleksiyonlar", "/is/satis", "/otomasyon", "/entegrasyonlar"]) {
         const r = await fetch(BASE + u, { redirect: "manual" });
         expect((r.status === 307 || r.status === 302) && (r.headers.get("location") ?? "").includes("/login"), `${u} durum ${r.status}`);
       }
     });
     for (const [name, url, method] of [
       ["medya dosyası", `/api/media/${s.mediaA.id}/file`, "GET"],
+      ["medya önizlemesi", `/api/media/${s.mediaA.id}/preview?w=640`, "GET"],
       ["tanılama", `/api/diagnostics`, "GET"],
       ["yükleme başlatma", `/api/uploads`, "POST"],
       ["yükleme durumu", `/api/uploads/${s.upB.id}`, "GET"],
@@ -163,6 +164,19 @@ async function main() {
         expect(r.status === 401, `durum ${r.status}`);
       });
     }
+    await check("oturumsuz: PWA dosyaları açık ama özel veri içermez; service worker sayfa/API önbelleğe almaz", async () => {
+      const m = await fetch(`${BASE}/manifest.webmanifest`);
+      expect(m.status === 200, `manifest ${m.status}`);
+      const mt = await m.text();
+      expect(JSON.parse(mt).display === "standalone", "standalone değil");
+      for (const [k, v] of Object.entries(secrets)) expect(!mt.includes(v), `${k} manifestte`);
+      const icon = await fetch(`${BASE}/app-icon/192`);
+      expect(icon.status === 200 && icon.headers.get("content-type") === "image/png", `simge ${icon.status}`);
+      expect((await fetch(`${BASE}/app-icon/999`)).status === 404, "geçersiz simge boyutu");
+      const sw = await (await fetch(`${BASE}/sw.js`)).text();
+      expect(sw.includes("/_next/static/") && !/cache\.put\([^)]*api/i.test(sw), "service worker kapsamı");
+      expect((await fetch(`${BASE}/offline.html`)).status === 200, "çevrimdışı sayfa");
+    });
     await check("oturumsuz: sahte oturum çerezi reddedilir", async () => {
       const forged = `${Math.floor(Date.now() / 1000) + 3600}.abcd.${"A".repeat(43)}`;
       const r = await fetch(`${BASE}/api/diagnostics`, { headers: { cookie: `__Host-aiops_session=${forged}` } });
@@ -241,6 +255,7 @@ async function main() {
     for (const [name, method, url, body] of [
       ["B'nin medya dosyası", "GET", `/api/media/${s.mediaB.id}/file`, undefined],
       ["B'nin analiz karesi", "GET", `/api/media/${s.mediaB.id}/analysis-frame/0`, undefined],
+      ["B'nin medya önizlemesi", "GET", `/api/media/${s.mediaB.id}/preview?w=640`, undefined],
       ["B'nin yükleme oturumu", "GET", `/api/uploads/${s.upB.id}`, undefined],
       ["B'nin yükleme parça adresi", "POST", `/api/uploads/${s.upB.id}/targets`, { parts: [1] }],
       ["B'nin yükleme parçası", "PUT", `/api/uploads/${s.upB.id}/parts/1`, "x".repeat(1024)],

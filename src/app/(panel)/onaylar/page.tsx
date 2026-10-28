@@ -40,10 +40,10 @@ export default async function Approvals({ searchParams }: { searchParams: SP }) 
           {actions.length === 0 ? <p className="muted">Henüz dış işlem yok.</p> : (
             <ul className="space-y-2 text-sm">
               {actions.map((a) => (
-                <li key={a.id} className="rounded-lg bg-gray-50 p-2">
+                <li key={a.id} className="rounded-lg bg-surface-2 p-2">
                   <div className="flex flex-wrap items-center gap-1"><Badge tone={a.status === "succeeded" ? "ok" : a.status === "failed" ? "bad" : "warn"}>{EXTERNAL_ACTION_STATUS_LABEL[a.status] ?? a.status}</Badge> {a.action_type} → {a.provider}</div>
                   <div className="text-xs text-muted">{dt(a.created_at)}</div>
-                  {a.error && <div className="text-xs text-red-700">{a.error}</div>}
+                  {a.error && <div className="text-xs text-danger">{a.error}</div>}
                   {a.status === "manual_export" && <a href={`/api/exports/${a.id}`} className="text-xs text-brand underline">Paketi indir</a>}
                   {a.status === "unknown" && (
                     <form action={reconcileAction_} className="mt-1 flex flex-wrap items-center gap-1 text-xs"><input type="hidden" name="actionId" value={a.id} /><input type="hidden" name="back" value="/onaylar" />Platformda kontrol ettim:

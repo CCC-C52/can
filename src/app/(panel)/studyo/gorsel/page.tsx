@@ -38,7 +38,7 @@ export default async function ImageStudio({ searchParams }: { searchParams: SP }
               <ul className="grid max-h-96 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
                 {real.map((p) => (
                   <li key={p.id}>
-                    <label className="flex cursor-pointer flex-col gap-1 rounded-lg border border-line p-2 text-xs hover:bg-gray-50">
+                    <label className="flex cursor-pointer flex-col gap-1 rounded-lg border border-line p-2 text-xs hover:bg-surface-2">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={`/api/media/${p.id}/file`} alt={p.alt_text ?? p.filename} className="h-24 w-full rounded object-cover" loading="lazy" />
                       <span className="flex items-center gap-1"><input type="checkbox" name="assetIds" value={p.id} /> <span className="truncate">{p.filename}</span></span>

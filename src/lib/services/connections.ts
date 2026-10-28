@@ -10,7 +10,9 @@ const execFileAsync = promisify(execFile);
 
 export type ProviderId =
   | "anthropic" | "openai_images" | "video_generation" | "ffmpeg" | "storage"
-  | "shopify" | "instagram" | "tiktok" | "meta_ads" | "google_drive";
+  | "shopify" | "instagram" | "tiktok" | "meta_ads" | "google_drive"
+  // Stratejik platformlar (Entegrasyon Merkezi; src/lib/integrations). PROVIDERS listesinde değildir.
+  | "brandwatch" | "muck_rack" | "metricool" | "runway" | "adobe";
 
 export type ProviderInfo = {
   id: ProviderId;

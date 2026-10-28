@@ -149,17 +149,17 @@ export function Uploader({ products }: { products: { id: string; title: string }
               <li key={it.key} className="rounded-lg border border-line p-2 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate font-medium">{it.name}</span>
-                  <span className={it.phase === "failed" ? "text-red-700" : it.phase === "completed" ? "text-emerald-700" : "text-muted"}>{LABEL[it.phase]}{it.phase === "uploading" ? ` · %${pct}` : ""}</span>
+                  <span className={it.phase === "failed" ? "text-danger" : it.phase === "completed" ? "text-success" : "text-muted"}>{LABEL[it.phase]}{it.phase === "uploading" ? ` · %${pct}` : ""}</span>
                 </div>
-                <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-gray-100" role="progressbar" aria-label={`${it.name} yükleme ilerlemesi`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-surface-3" role="progressbar" aria-label={`${it.name} yükleme ilerlemesi`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
                   <div className={`h-full ${it.phase === "failed" ? "bg-red-500" : "bg-brand"}`} style={{ width: `${it.phase === "uploading" || it.phase === "preparing" ? pct : it.phase === "aborted" ? 0 : 100}%` }} />
                 </div>
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-muted">
                   <span>{(it.sent / 1e6).toFixed(1)} / {(it.size / 1e6).toFixed(1)} MB{it.note ? ` · ${it.note}` : ""}</span>
-                  {active && it.phase !== "verifying" && it.phase !== "processing" && <button type="button" className="text-red-700 underline" onClick={() => cancel(it)}>İptal</button>}
+                  {active && it.phase !== "verifying" && it.phase !== "processing" && <button type="button" className="text-danger underline" onClick={() => cancel(it)}>İptal</button>}
                   {it.assetId && <a className="text-brand underline" href={`/medya/${it.assetId}`}>Dosyayı aç</a>}
                 </div>
-                {it.error && <p className="mt-1 text-red-700">{it.error}</p>}
+                {it.error && <p className="mt-1 text-danger">{it.error}</p>}
               </li>
             );
           })}

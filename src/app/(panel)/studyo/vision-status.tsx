@@ -8,7 +8,7 @@ export async function VisionStatus() {
   const visionOn = await getSetting<boolean>("vision_on_upload", true);
   if (!model) {
     return (
-      <div className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200">
+      <div className="mb-4 rounded-lg bg-warning-soft px-3 py-2 text-sm text-warning ring-1 ring-warning-line">
         <Badge tone="warn">AI görsel anlama engelli</Badge>{" "}
         Gerçek görsel model bağlı değil. Dosyalar yalnızca yerel olarak ölçülür (çözünürlük, renk, parlaklık, sahne sınırları). Ajanlar
         görüntüde ne olduğunu bilmez ve tarif etmez; çıktıda bunu “bilinmeyen” olarak belirtir.

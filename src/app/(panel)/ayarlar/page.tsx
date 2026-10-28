@@ -43,7 +43,7 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
             <label className="block"><span className="label">Görev başına bütçe (USD, boş = sınırsız)</span><input name="perTaskBudgetUsd" defaultValue={limits.perTaskBudgetUsd ?? ""} className="input" /></label>
             <label className="block"><span className="label">Günlük AI bütçesi (USD, boş = sınırsız)</span><input name="dailyBudgetUsd" defaultValue={limits.dailyBudgetUsd ?? ""} className="input" /></label>
             <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" name="blockUnknownCost" defaultChecked={limits.blockUnknownCost} /> Maliyeti tahmin edilemeyen ücretli işlemleri engelle (bütçe sınırı varken)</label>
-            <fieldset className="rounded-lg border border-amber-300 bg-amber-50 p-3 sm:col-span-2">
+            <fieldset className="rounded-lg border border-warning-line bg-warning-soft p-3 sm:col-span-2">
               <legend className="px-1 text-sm font-semibold">Ücretli AI medya üretimi (sahip izni)</legend>
               <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="paidMediaGeneration" defaultChecked={limits.paidMediaGeneration} className="mt-1" /> <span>AI görsel (OpenAI Images) ve AI video (Google Gemini Omni Video) üretimine izin ver. Kapalıyken bu işler hiç gönderilmez ve &quot;izin bekliyor&quot; olarak kalır. Açıkken her gönderim yukarıdaki bütçe sınırlarına tabidir; sonucu belirsiz kalan gönderimler otomatik tekrarlanmaz.</span></label>
               <div className="mt-2 max-w-xs">{num("maxVideoGenSeconds", "Proje başına AI video sınırı (saniye)", limits.maxVideoGenSeconds, "Veo bir videoda 4-8 sn üretir.")}</div>
@@ -73,13 +73,13 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
               <ul className="text-xs">
                 <li>Günlük, UTC {config.backup.hourUtc}:00 sonrası · {config.backup.retentionDays} gün saklama · kova: {config.backup.bucket}</li>
                 <li>Son başarılı: {backupOk ? `${dt(backupOk.at)} (${((backupOk.dbBytes ?? 0) / 1024).toFixed(0)} KB, ${backupOk.mediaCopied ?? 0} dosya)` : "henüz yok"}</li>
-                {backupLast && !backupLast.ok && <li className="text-red-700">Son deneme başarısız ({dt(backupLast.at)}): {backupLast.error}</li>}
+                {backupLast && !backupLast.ok && <li className="text-danger">Son deneme başarısız ({dt(backupLast.at)}): {backupLast.error}</li>}
               </ul>
-            ) : <p className="text-xs text-amber-800">Kapalı — {backupCfg.reason}</p>}
+            ) : <p className="text-xs text-warning">Kapalı — {backupCfg.reason}</p>}
             <form action={requestBackupAction} className="mt-1"><SubmitButton className="btn px-2 py-1 text-xs" disabled={!backupCfg.ok}>Şimdi yedekle</SubmitButton></form>
           </div>
           <div><div className="label">İşleyiciler</div>
-            <ul className="text-xs">{workers.map((w) => <li key={w.worker_id}>{w.worker_id} · son sinyal {dt(w.last_seen)} · aktif {w.info?.active ?? 0}</li>)}{workers.length === 0 && <li className="text-amber-700">Çalışan işleyici yok.</li>}</ul></div>
+            <ul className="text-xs">{workers.map((w) => <li key={w.worker_id}>{w.worker_id} · son sinyal {dt(w.last_seen)} · aktif {w.info?.active ?? 0}</li>)}{workers.length === 0 && <li className="text-warning">Çalışan işleyici yok.</li>}</ul></div>
         </section>
         <section className="card lg:col-span-3">
           <div className="mb-2 flex items-center justify-between"><h2 className="h2">İşlem geçmişi</h2>

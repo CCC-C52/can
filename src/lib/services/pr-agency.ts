@@ -14,6 +14,8 @@ import {
 import { buildBriefing } from "@/lib/pr-agency/briefings";
 import { dueReports, type ReportKind } from "@/lib/pr-agency/roles";
 import { buildRoadmap, type MeasuredMetric } from "@/lib/pr-agency/roadmap";
+import { operationEvidence } from "@/lib/orchestrator/verification";
+import { strategyContext } from "@/lib/services/strategy";
 
 import { firecrawlConfigured } from "@/lib/adapters/firecrawl";
 import { researchBlockedReason } from "@/lib/services/research";
@@ -37,6 +39,8 @@ export const PR_KINDS = {
   daily_brief: "pr_daily_brief",
   weekly_report: "pr_weekly_report",
   monthly_presentation: "pr_monthly_presentation",
+  quarterly_review: "pr_quarterly_review",
+  annual_review: "pr_annual_review",
   alert: "pr_alert",
   event_plan: "pr_event_plan",
 } as const;
@@ -248,7 +252,56 @@ const REPORT_KIND_TO_OUTPUT: Record<ReportKind, string> = {
   daily_brief: PR_KINDS.daily_brief,
   weekly_report: PR_KINDS.weekly_report,
   monthly_presentation: PR_KINDS.monthly_presentation,
+  quarterly_review: PR_KINDS.quarterly_review,
+  annual_review: PR_KINDS.annual_review,
 };
+
+/** Başarısız operasyon yeniden denemesi: üstel bekleme (5 dk, 15 dk, 45 dk, …), dönem başına en fazla 5 deneme. */
+export const OP_MAX_ATTEMPTS = 5;
+export function opBackoffMs(attempts: number) {
+  return Math.min(6 * 3_600_000, 5 * 60_000 * 3 ** Math.max(0, attempts - 1));
+}
+
+/** Operasyon kaydı: rapor kaydedildikten sonra kanıt doğrulanır; ancak doğrulanınca "completed". */
+async function recordOperation(brandId: string, operation: string, periodKey: string, outputId: string, c: Queryable) {
+  const ev = await q1<{ versions: number; period: string | null }>(
+    `SELECT COUNT(*)::int AS versions, MAX(content->>'periodKey') AS period FROM output_versions WHERE output_id = $1`,
+    [outputId],
+    c,
+  );
+  const check = operationEvidence({ outputId, savedVersions: ev?.versions ?? 0, periodKey, contentPeriodKey: ev?.period ?? null });
+  await q(
+    `INSERT INTO pr_operation_runs (brand_id, operation, period_key, stage, output_id, evidence, error, attempts, started_at, finished_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,1, now(), now())
+     ON CONFLICT (brand_id, operation, period_key) DO UPDATE SET stage = EXCLUDED.stage, output_id = EXCLUDED.output_id, evidence = EXCLUDED.evidence,
+       error = EXCLUDED.error, attempts = pr_operation_runs.attempts + 1, next_attempt_at = NULL, finished_at = now(), updated_at = now()`,
+    [brandId, operation, periodKey, check.ok ? "completed" : "output_produced", outputId, JSON.stringify({ kind: "saved_report", outputId, savedVersions: ev?.versions ?? 0, periodKey: ev?.period ?? null, verifiedAt: check.ok ? new Date().toISOString() : null }), check.reason],
+    c,
+  );
+  return check.ok;
+}
+
+/** Başarısız çalıştırma: hata ve bir sonraki deneme zamanı kaydedilir (rapor üretimi geri alınmıştır). */
+export async function recordOperationFailure(brandId: string, operation: string, periodKey: string, error: string, now = new Date(), db: Queryable = getPool()) {
+  const row = await q1<{ attempts: number }>(
+    `INSERT INTO pr_operation_runs (brand_id, operation, period_key, stage, error, attempts, started_at, finished_at)
+     VALUES ($1,$2,$3,'failed',$4,1,$5,$5)
+     ON CONFLICT (brand_id, operation, period_key) DO UPDATE SET stage = 'failed', error = EXCLUDED.error, attempts = pr_operation_runs.attempts + 1, finished_at = EXCLUDED.finished_at, updated_at = now()
+     WHERE pr_operation_runs.stage <> 'completed'
+     RETURNING attempts`,
+    [brandId, operation, periodKey, redact(error).slice(0, 2000), now.toISOString()],
+    db,
+  );
+  if (row) await q(`UPDATE pr_operation_runs SET next_attempt_at = $4 WHERE brand_id = $1 AND operation = $2 AND period_key = $3`, [brandId, operation, periodKey, new Date(now.getTime() + opBackoffMs(row.attempts)).toISOString()], db);
+}
+
+export async function listOperationRuns(brandId: string, limit = 30, db: Queryable = getPool()) {
+  return q<{ id: string; operation: string; period_key: string; stage: string; output_id: string | null; evidence: any; error: string | null; attempts: number; next_attempt_at: string | null; finished_at: string | null; created_at: string }>(
+    `SELECT id, operation, period_key, stage, output_id, evidence, error, attempts, next_attempt_at, finished_at, created_at FROM pr_operation_runs WHERE brand_id = $1 ORDER BY COALESCE(finished_at, created_at) DESC LIMIT $2`,
+    [brandId, limit],
+    db,
+  );
+}
 
 async function createDraft(brandId: string, kind: string, title: string, content: unknown, db: Queryable) {
   const out = await createOutput({ brandId, projectId: null, taskId: null, agent: PR_AGENT, kind, title: title.slice(0, 200) }, db);
@@ -307,11 +360,20 @@ export async function generateDue(brandId: string, opts: { now?: Date; env?: Rec
       c,
     );
     const roadmap = buildRoadmap(cfg.roadmapStart ?? today, cfg.measuredMetrics);
-    for (const due of dueReports(now, new Set([...keys].map((k) => k.replace(/^pr_(daily_brief|weekly_report|monthly_presentation):/, "$1:"))))) {
-      const briefing = buildBriefing({ kind: due.kind, periodKey: due.periodKey, now, brandName: knowledge.brandName, feeds, clusters, upcoming, pendingApprovals: pendingRow?.n ?? 0, roadmap });
+    const strategy = await strategyContext(brandId, now, c);
+    // Başarısız olup bekleme süresi dolmamış veya deneme hakkı bitmiş operasyonlar bu turda atlanır
+    const blocked = new Set((await q<{ operation: string; period_key: string }>(
+      `SELECT operation, period_key FROM pr_operation_runs WHERE brand_id = $1 AND stage = 'failed' AND (attempts >= $2 OR next_attempt_at > $3)`,
+      [brandId, OP_MAX_ATTEMPTS, now.toISOString()],
+      c,
+    )).map((r) => `${r.operation}:${r.period_key}`));
+    for (const due of dueReports(now, new Set([...keys].map((k) => k.replace(/^pr_(daily_brief|weekly_report|monthly_presentation|quarterly_review|annual_review):/, "$1:"))))) {
+      if (blocked.has(`${due.kind}:${due.periodKey}`)) continue;
+      const briefing = buildBriefing({ kind: due.kind, periodKey: due.periodKey, now, brandName: knowledge.brandName, feeds, clusters, upcoming, pendingApprovals: pendingRow?.n ?? 0, roadmap, strategy });
       const out = await createDraft(brandId, REPORT_KIND_TO_OUTPUT[due.kind], briefing.title, briefing, c);
       keys.add(`${REPORT_KIND_TO_OUTPUT[due.kind]}:${due.periodKey}`);
       created.push({ kind: REPORT_KIND_TO_OUTPUT[due.kind], id: out.id, title: out.title });
+      await recordOperation(brandId, due.kind, due.periodKey, out.id, c);
 
       // 3) Koşullu uyarılar (yalnızca taze/kısmi veride bayrak oluşur; aynı küme için bir kez)
       for (const flag of briefing.flags) {
@@ -350,12 +412,20 @@ export async function runPrAgencyTick(opts: { now?: Date; fetchImpl?: FetchLike;
   for (const r of rows) {
     const brandId = r.key.slice("pr_agency:config:".length);
     if (!(await getBrand(brandId))) continue;
+    let polled: Awaited<ReturnType<typeof pollFeeds>> = [];
     try {
-      const polled = await pollFeeds(brandId, opts);
+      polled = await pollFeeds(brandId, opts);
       const created = await generateDue(brandId, opts);
       out.push({ brandId, polled: polled.filter((p) => p.status === "fetched").length, created: created.length });
     } catch (err) {
-      out.push({ brandId, polled: 0, created: 0, error: redact((err as Error).message) });
+      const msg = redact((err as Error).message);
+      // Üretim işlemi geri alındı: vadesi gelen her operasyon için hata + yeniden deneme zamanı kaydedilir
+      const now = opts.now ?? new Date();
+      const keys = await existingKeys(brandId, getPool()).catch(() => new Set<string>());
+      for (const due of dueReports(now, new Set([...keys].map((k) => k.replace(/^pr_(daily_brief|weekly_report|monthly_presentation|quarterly_review|annual_review):/, "$1:"))))) {
+        await recordOperationFailure(brandId, due.kind, due.periodKey, msg, now).catch(() => {});
+      }
+      out.push({ brandId, polled: polled.filter((p) => p.status === "fetched").length, created: 0, error: msg });
     }
   }
   return out;

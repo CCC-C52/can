@@ -28,25 +28,11 @@ export function AutoRefresh({ active, intervalMs = 3000 }: { active: boolean; in
     return () => clearInterval(t);
   }, [active, intervalMs, router]);
   if (!active) return null;
-  return <span className="inline-flex items-center gap-1 text-xs text-muted"><span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />Canlı güncelleniyor</span>;
+  return <span className="inline-flex items-center gap-1 text-xs text-muted"><span className="h-2 w-2 animate-pulse rounded-full bg-info" />Canlı güncelleniyor</span>;
 }
 
 /** Her form gösteriminde benzersiz istek anahtarı üretir (çift gönderimi önler). */
 export function IdempotencyField({ name = "idempotencyKey" }: { name?: string }) {
   const [k] = useState(() => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   return <input type="hidden" name={name} value={k} />;
-}
-
-export function MobileNavToggle({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button className="btn md:hidden" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Menü">
-        {open ? "Kapat" : "Menü"}
-      </button>
-      <div className={`${open ? "block" : "hidden"} absolute inset-x-0 top-14 z-30 border-b border-line bg-white p-3 shadow-lg md:hidden`} onClick={() => setOpen(false)}>
-        {children}
-      </div>
-    </>
-  );
 }

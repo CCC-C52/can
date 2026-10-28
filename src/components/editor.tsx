@@ -50,9 +50,9 @@ function Field({ name, value, onChange, depth }: { name: string; value: J; onCha
         <legend className="px-1 text-xs font-medium text-muted">{label} ({value.length})</legend>
         <div className="space-y-3">
           {value.map((item, i) => (
-            <div key={i} className="rounded-lg bg-gray-50 p-2">
+            <div key={i} className="rounded-lg bg-surface-2 p-2">
               <div className="mb-1 flex justify-between text-xs text-muted"><span>#{i + 1}</span>
-                <button type="button" className="text-red-700" onClick={() => onChange(value.filter((_, j) => j !== i))}>Kaldır</button></div>
+                <button type="button" className="text-danger" onClick={() => onChange(value.filter((_, j) => j !== i))}>Kaldır</button></div>
               <Field name={name} value={item} depth={depth + 1} onChange={(v) => onChange(value.map((x, j) => (j === i ? v : x)))} />
             </div>
           ))}

@@ -10,6 +10,8 @@ import { Badge, Flash, PageHeader, dt, usd } from "@/components/ui";
 import { AutoRefresh, SubmitButton } from "@/components/client";
 import { cancelTaskAction, retryTaskAction } from "@/app/actions";
 import type { AgentId } from "@/lib/agents/schemas";
+import { taskStage } from "@/lib/orchestrator/evidence";
+import { EVIDENCE_LABEL, STAGES, STAGE_LABEL } from "@/lib/orchestrator/verification";
 
 export default async function TaskDetail({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SP }) {
   const { id } = await params;
@@ -17,7 +19,8 @@ export default async function TaskDetail({ params, searchParams }: { params: Pro
   const brand = await requireBrand();
   const t = await getTask(brand.id, id);
   if (!t) notFound();
-  const [attempts, deps, events, costs] = await Promise.all([
+  const [stage, attempts, deps, events, costs] = await Promise.all([
+    taskStage(brand.id, t),
     taskAttempts(t.id),
     q<{ id: string; title: string; status: string; key: string }>(`SELECT u.id, u.title, u.status, u.key FROM task_dependencies d JOIN tasks u ON u.id = d.depends_on_task_id WHERE d.task_id = $1`, [t.id]),
     q<{ id: number; actor: string; message: string; created_at: string }>(`SELECT id, actor, message, created_at FROM audit_log WHERE task_id = $1 ORDER BY created_at DESC LIMIT 50`, [t.id]),
@@ -38,14 +41,29 @@ export default async function TaskDetail({ params, searchParams }: { params: Pro
         </>}
       />
       <Flash ok={ok} err={err} />
+      <section className="card mb-4" aria-labelledby="stage-title">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div><div className="eyebrow mb-1">Gerçek yürütme ve doğrulama</div><h2 id="stage-title" className="h2">{STAGE_LABEL[stage.stage]}</h2></div>
+          <Badge tone={stage.stage === "completed" ? "ok" : stage.stage === "failed" ? "bad" : stage.satisfied ? "info" : "warn"}>{stage.satisfied ? "Kanıt mevcut" : "Kanıt bekleniyor"}</Badge>
+        </div>
+        <ol className="mt-4 flex flex-wrap gap-2" aria-label="Yürütme aşamaları">
+          {STAGES.filter((x) => x !== "failed").map((x) => {
+            const reached = stage.reached.includes(x);
+            return <li key={x} className={`rounded-full px-3 py-1 text-xs ring-1 ring-inset ${reached ? "bg-success-soft text-success ring-success-line" : "bg-surface-2 text-muted ring-line"}`} aria-current={stage.stage === x ? "step" : undefined}>{reached ? "✓ " : ""}{STAGE_LABEL[x]}</li>;
+          })}
+          {stage.stage === "failed" && <li className="rounded-full bg-danger-soft px-3 py-1 text-xs text-danger ring-1 ring-danger-line ring-inset">{STAGE_LABEL.failed}</li>}
+        </ol>
+        <p className="mt-3 text-xs text-muted">Gereken kanıt: <strong className="text-ink-soft">{EVIDENCE_LABEL[stage.required]}</strong>. Metin yanıtı, JSON veya plan tek başına dış işlemin gerçekleştiğini kanıtlamaz.</p>
+        {stage.evidenceMissing && <p className="mt-2 text-sm text-danger">Durum “tamamlandı” olarak kayıtlı ancak gereken kanıt bulunamadı — bu görev başarılı sayılmaz.</p>}
+      </section>
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="card lg:col-span-2">
           <div className="label">Talimat</div>
           <p className="whitespace-pre-wrap text-sm">{t.instruction}</p>
           {t.feedback && <><div className="label mt-3">Geri bildirim (yeniden üretim)</div><p className="whitespace-pre-wrap text-sm">{t.feedback}</p></>}
-          {t.error && <><div className="label mt-3">{t.status === "ready" ? "Durum" : "Hata / not"}</div><p className={`whitespace-pre-wrap text-sm ${t.status === "ready" ? "text-muted" : "text-red-700"}`}>{t.error}</p></>}
+          {t.error && <><div className="label mt-3">{t.status === "ready" ? "Durum" : "Hata / not"}</div><p className={`whitespace-pre-wrap text-sm ${t.status === "ready" ? "text-muted" : "text-danger"}`}>{t.error}</p></>}
           {t.failure_class && FAILURE_ACTION[t.failure_class as FailureClass] && (
-            <div className="mt-2 rounded-lg bg-amber-50 p-2 text-sm text-amber-900 ring-1 ring-amber-200">
+            <div className="mt-2 rounded-lg bg-warning-soft p-2 text-sm text-warning ring-1 ring-warning-line">
               <strong>{FAILURE_ACTION[t.failure_class as FailureClass].label}</strong>{FAILURE_ACTION[t.failure_class as FailureClass].blocks ? " (projeyi engeller)" : ""} — {FAILURE_ACTION[t.failure_class as FailureClass].action}
             </div>
           )}
@@ -63,7 +81,7 @@ export default async function TaskDetail({ params, searchParams }: { params: Pro
           </dl>
           <div className="label mt-4">Bağımlılıklar</div>
           {deps.length ? <ul className="text-sm">{deps.map((d) => <li key={d.id}><Link className="text-brand" href={`/gorevler/${d.id}`}>{d.title}</Link> — {TASK_STATUS_LABEL[d.status as keyof typeof TASK_STATUS_LABEL]}</li>)}</ul> : <p className="muted">Yok</p>}
-          {t.input_refs && Object.keys(t.input_refs).length > 0 && (<><div className="label mt-4">Girdi/çıktı referansları</div><pre tabIndex={0} className="overflow-x-auto rounded bg-gray-50 p-2 text-xs">{JSON.stringify(t.input_refs, null, 2)}</pre></>)}
+          {t.input_refs && Object.keys(t.input_refs).length > 0 && (<><div className="label mt-4">Girdi/çıktı referansları</div><pre tabIndex={0} className="overflow-x-auto rounded bg-surface-2 p-2 text-xs">{JSON.stringify(t.input_refs, null, 2)}</pre></>)}
         </section>
         <section className="card">
           <h2 className="h2">{def?.name ?? t.agent}</h2>
@@ -76,7 +94,7 @@ export default async function TaskDetail({ params, searchParams }: { params: Pro
         <section className="card lg:col-span-2">
           <h2 className="h2 mb-2">Deneme ve hata kaydı</h2>
           <table className="table"><thead><tr><th>#</th><th>Aşama</th><th>Sonuç</th><th>Hata</th><th>Zaman</th></tr></thead>
-            <tbody>{attempts.map((a, i) => <tr key={i}><td>{a.attempt}</td><td>{a.phase}</td><td>{a.outcome ?? "sürüyor"}</td><td className="max-w-xs text-xs text-red-700">{a.error}</td><td className="text-xs">{dt(a.started_at)}</td></tr>)}</tbody>
+            <tbody>{attempts.map((a, i) => <tr key={i}><td>{a.attempt}</td><td>{a.phase}</td><td>{a.outcome ?? "sürüyor"}</td><td className="max-w-xs text-xs text-danger">{a.error}</td><td className="text-xs">{dt(a.started_at)}</td></tr>)}</tbody>
           </table>
         </section>
         <section className="card">

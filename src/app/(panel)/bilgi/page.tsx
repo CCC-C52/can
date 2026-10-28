@@ -133,7 +133,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: SP
           </form>
           {search && (
             <div className="mt-3 space-y-2 text-sm">
-              {search.warnings.map((w) => <p key={w} className="text-xs text-amber-800">{w}</p>)}
+              {search.warnings.map((w) => <p key={w} className="text-xs text-warning">{w}</p>)}
               {search.entities.map((e) => (
                 <div key={e.id}><strong>{e.name}</strong> <span className="text-xs text-muted">({e.type})</span>
                   <ul className="list-disc pl-5 text-xs">{e.facts.map((f, i) => <li key={i}>{f.attribute}: {f.value.slice(0, 160)} <Badge tone={STATUS[f.status]?.tone ?? "neutral"}>{STATUS[f.status]?.label ?? f.status}</Badge>{f.flags.length ? ` ⚠ ${f.flags.join(", ")}` : ""}</li>)}</ul>

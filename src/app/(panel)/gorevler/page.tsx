@@ -30,9 +30,9 @@ export default async function TaskBoard({ searchParams }: { searchParams: SP }) 
       />
       <Flash ok={ok} err={err} />
       <div className="mb-3 flex flex-wrap gap-1 text-sm">
-        <Link href="/gorevler" className={`rounded-full px-3 py-1 ${!status ? "bg-ink text-white" : "bg-white ring-1 ring-line"}`}>Tümü</Link>
+        <Link href="/gorevler" className={`rounded-full px-3 py-1 ${!status ? "bg-brand text-on-brand" : "bg-panel ring-1 ring-line"}`}>Tümü</Link>
         {COLUMNS.map((c) => (
-          <Link key={c} href={`/gorevler?status=${c}`} className={`rounded-full px-3 py-1 ${status === c ? "bg-ink text-white" : "bg-white ring-1 ring-line"}`}>{TASK_STATUS_LABEL[c]} ({tasks.filter((t) => t.status === c).length})</Link>
+          <Link key={c} href={`/gorevler?status=${c}`} className={`rounded-full px-3 py-1 ${status === c ? "bg-brand text-on-brand" : "bg-panel ring-1 ring-line"}`}>{TASK_STATUS_LABEL[c]} ({tasks.filter((t) => t.status === c).length})</Link>
         ))}
       </div>
       {tasks.length === 0 ? <Empty>Görev yok. <Link className="text-brand" href="/sohbet">Ana yöneticiye talimat verin.</Link></Empty> : (
@@ -49,7 +49,7 @@ export default async function TaskBoard({ searchParams }: { searchParams: SP }) 
                       <Link href={`/gorevler/${t.id}`} className="block text-sm font-medium hover:text-brand">{t.title}</Link>
                       <div className="mt-1 text-xs text-muted">{agentName(t.agent)} · {t.kind === "render" ? "dosya üretimi" : t.kind === "plan" ? "planlama" : t.kind === "report" ? "rapor" : t.phase === "review" ? "kalite kontrol" : "üretim"}</div>
                       <Link href={`/projeler/${t.project_id}`} className="mt-1 block truncate text-xs text-muted hover:underline">{t.project_title}</Link>
-                      {t.error && <p className="mt-1 line-clamp-3 text-xs text-red-700">{t.error}</p>}
+                      {t.error && <p className="mt-1 line-clamp-3 text-xs text-danger">{t.error}</p>}
                       <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted">
                         <span>{dt(t.updated_at)} · deneme {t.attempts}/{t.max_attempts}{t.regen_count ? ` · yeniden üretim ${t.regen_count}` : ""}</span>
                       </div>

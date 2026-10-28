@@ -309,19 +309,26 @@ describe("Roller, zamanlama ve yol haritası", () => {
       expect(r.canSpend).toBe(false);
     }
     const owned = PR_ROLES.flatMap((r) => r.ownsJobs);
-    for (const k of ["daily_brief", "weekly_report", "monthly_presentation", "feed_poll", "trend_cluster", "calendar_refresh"]) expect(owned).toContain(k);
+    for (const k of ["daily_brief", "weekly_report", "monthly_presentation", "quarterly_review", "annual_review", "feed_poll", "trend_cluster", "calendar_refresh"]) expect(owned).toContain(k);
   });
 
   it("dönem anahtarları ve vadesi gelen raporlar (idempotent, telafi eder)", () => {
     expect(isoWeekKey(new Date("2026-10-26T00:00:00Z"))).toBe("2026-W44");
     expect(isoWeekKey(new Date("2027-01-01T00:00:00Z"))).toBe("2026-W53");
     expect(periodKey("monthly_presentation", NOW)).toBe("2026-10");
-    // Pazartesi 15:00 UTC: günlük + haftalık vadeli; aylık bu ay için (1'inden sonra) telafi
-    expect(dueReports(NOW, new Set()).map((d) => d.kind).sort()).toEqual(["daily_brief", "monthly_presentation", "weekly_report"]);
-    expect(dueReports(NOW, new Set(["daily_brief:2026-10-26", "weekly_report:2026-W44", "monthly_presentation:2026-10"]))).toEqual([]);
+    expect(periodKey("quarterly_review", NOW)).toBe("2026-Q4");
+    expect(periodKey("annual_review", NOW)).toBe("2026");
+    // Pazartesi 15:00 UTC: günlük + haftalık vadeli; aylık, çeyreklik ve yıllık dönem içinde telafi edilir
+    expect(dueReports(NOW, new Set()).map((d) => d.kind).sort()).toEqual(["annual_review", "daily_brief", "monthly_presentation", "quarterly_review", "weekly_report"]);
+    const done = ["daily_brief:2026-10-26", "weekly_report:2026-W44", "monthly_presentation:2026-10", "quarterly_review:2026-Q4", "annual_review:2026"];
+    expect(dueReports(NOW, new Set(done))).toEqual([]);
     // Saatten önce günlük özet yok; Pazartesi saatinden önce haftalık yok
-    expect(dueReports(new Date("2026-10-26T08:00:00Z"), new Set(["monthly_presentation:2026-10"]))).toEqual([]);
-    expect(dueReports(new Date("2026-10-27T08:00:00Z"), new Set(["monthly_presentation:2026-10"])).map((d) => d.kind)).toEqual(["weekly_report"]);
+    const periodic = ["monthly_presentation:2026-10", "quarterly_review:2026-Q4", "annual_review:2026"];
+    expect(dueReports(new Date("2026-10-26T08:00:00Z"), new Set(periodic))).toEqual([]);
+    expect(dueReports(new Date("2026-10-27T08:00:00Z"), new Set(periodic)).map((d) => d.kind)).toEqual(["weekly_report"]);
+    // Çeyreğin ilk günü saatinden önce çeyreklik inceleme vadesi gelmez; sonra gelir
+    expect(dueReports(new Date("2027-01-01T10:00:00Z"), new Set(["daily_brief:2027-01-01", "weekly_report:2026-W53", "monthly_presentation:2027-01"])).map((d) => d.kind)).toEqual([]);
+    expect(dueReports(new Date("2027-01-01T16:30:00Z"), new Set(["daily_brief:2027-01-01", "weekly_report:2026-W53", "monthly_presentation:2027-01"])).map((d) => d.kind).sort()).toEqual(["annual_review", "quarterly_review"]);
   });
 
   it("24 ay, 8 çeyrek; ölçülmüş metrik kaynakla başlangıç olur, diğerleri 'unknown'", () => {

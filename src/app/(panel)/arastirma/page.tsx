@@ -88,7 +88,7 @@ export default async function ResearchPage({ searchParams }: { searchParams: SP 
                     <tr key={r.id} className="border-t border-line align-top">
                       <td className="py-1 pr-2 whitespace-nowrap">{new Date(r.created_at).toLocaleString("tr-TR")}</td>
                       <td className="pr-2">{r.mode === "scrape" ? "Sayfa" : "Arama"}</td>
-                      <td className="pr-2 break-all">{r.query}{r.error && <div className="text-xs text-red-700">{r.error}</div>}</td>
+                      <td className="pr-2 break-all">{r.query}{r.error && <div className="text-xs text-danger">{r.error}</div>}</td>
                       <td className="pr-2"><Badge tone={RUN_STATUS[r.status].tone}>{RUN_STATUS[r.status].label}</Badge></td>
                       <td>{r.credits_used ?? (r.credits_estimated !== null ? `~${r.credits_estimated}` : "—")}</td>
                     </tr>

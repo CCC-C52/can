@@ -4,9 +4,10 @@ import { config as appConfig } from "@/lib/config";
 import { requestIdFrom } from "@/lib/log";
 
 // Kimlik doğrulama ve temel güvenlik başlıkları. Webhook uçları imza ile doğrulanır, oturum gerektirmez.
-// Herkese açık olanlar: giriş sayfası, imza doğrulamalı webhook'lar, bilgi sızdırmayan sağlık kontrolü, statik derleme dosyaları.
+// Herkese açık olanlar: giriş sayfası, imza doğrulamalı webhook'lar, bilgi sızdırmayan sağlık kontrolü, statik derleme dosyaları, PWA dosyaları.
 // /api/release/: dağıtım hattının uçları; oturum yerine RELEASE_STATUS_TOKEN ile korunur (belirteç yoksa uç kapalıdır).
-const PUBLIC = ["/login", "/api/webhooks/", "/api/health", "/api/release/", "/_next/static/", "/favicon"];
+// PWA: bildirim, uygulama simgesi (yalnızca marka logosu), service worker, çevrimdışı sayfa ve yazı tipleri — özel veri içermez.
+const PUBLIC = ["/login", "/api/webhooks/", "/api/health", "/api/release/", "/_next/static/", "/favicon", "/manifest.webmanifest", "/app-icon/", "/sw.js", "/offline.html", "/fonts/"];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

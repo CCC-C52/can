@@ -1,33 +1,142 @@
 @import "tailwindcss";
 
+/*
+ * FriBee AI Operations Studio — tasarım sistemi (koyu, premium).
+ * Arayüz vurgu renkleri (altın, mor, mavi, turuncu, yeşil) markanın resmî renkleri DEĞİLDİR; marka renkleri
+ * Marka Yönetimi'nde tutulur ve ürün görsellerine asla uygulanmaz.
+ * Yazı tipleri yerelde barındırılır (SIL Open Font License 1.1, public/fonts/*-OFL.txt); dış istek yapılmaz.
+ */
+
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 300 800; font-display: swap; src: url(/fonts/inter-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 300 800; font-display: swap; src: url(/fonts/inter-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Playfair Display"; font-style: normal; font-weight: 400 800; font-display: swap; src: url(/fonts/playfair-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Playfair Display"; font-style: normal; font-weight: 400 800; font-display: swap; src: url(/fonts/playfair-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Playfair Display"; font-style: italic; font-weight: 400 600; font-display: swap; src: url(/fonts/playfair-italic-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Playfair Display"; font-style: italic; font-weight: 400 600; font-display: swap; src: url(/fonts/playfair-italic-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+
 @theme {
-  --color-ink: #16202c;
-  --color-muted: #5b6676;
-  --color-line: #e3e6eb;
-  --color-panel: #ffffff;
-  --color-canvas: #f5f6f8;
-  --color-brand: #1f4fd6;
+  /* Yüzeyler (koyudan açığa) */
+  --color-canvas: #09090b;
+  --color-panel: #121215;
+  --color-surface-2: #18181d;
+  --color-surface-3: #212127;
+  --color-line: #27272e;
+  --color-line-strong: #3a3a44;
+  /* Metin */
+  --color-ink: #f4f1ea;
+  --color-ink-soft: #d4d0c8;
+  --color-muted: #a1a0a8;
+  /* Arayüz vurgusu: altın (birincil eylem, etkin menü, bağlantı) */
+  --color-brand: #d8b26a;
+  --color-brand-strong: #e9c886;
+  --color-on-brand: #17130a;
+  /* İkincil vurgular (grafik, rozet, ajan kimliği) */
+  --color-violet: #a99bf7;
+  --color-sky: #7fb5ff;
+  --color-ember: #f3a066;
+  --color-mint: #5ad3a6;
+  /* Durumlar: metin / zemin / çizgi */
+  --color-success: #79e2b8;
+  --color-success-soft: #0f251d;
+  --color-success-line: #1f4a3a;
+  --color-danger: #ffa8a8;
+  --color-danger-soft: #2b1315;
+  --color-danger-line: #5a2329;
+  --color-warning: #f8d18f;
+  --color-warning-soft: #281f0f;
+  --color-warning-line: #574219;
+  --color-info: #9cc7ff;
+  --color-info-soft: #101d33;
+  --color-info-line: #24406a;
+  --color-demo: #f2b2fb;
+  --color-demo-soft: #28112d;
+  --color-demo-line: #52235b;
+
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Playfair Display", "Didot", "Bodoni 72", "Iowan Old Style", Georgia, serif;
+
+  --radius-card: 1.125rem;
+  --shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -18px rgb(0 0 0 / 0.65);
+  --shadow-pop: 0 24px 60px -20px rgb(0 0 0 / 0.75);
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
 html, body { background: var(--color-canvas); color: var(--color-ink); }
-body { -webkit-font-smoothing: antialiased; }
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+  background-image:
+    radial-gradient(1200px 600px at 85% -10%, rgb(216 178 106 / 0.07), transparent 60%),
+    radial-gradient(900px 500px at -10% 10%, rgb(169 155 247 / 0.05), transparent 60%);
+  background-attachment: fixed;
+}
+::selection { background: rgb(216 178 106 / 0.35); color: var(--color-ink); }
+input[type="checkbox"], input[type="radio"], progress { accent-color: var(--color-brand); }
+:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; border-radius: 6px; }
+details > summary { cursor: pointer; }
+hr { border-color: var(--color-line); }
+
+/* İnce, koyu kaydırma çubukları */
+* { scrollbar-width: thin; scrollbar-color: #34343c transparent; }
 
 @layer components {
-  .card { @apply rounded-xl border border-line bg-panel p-4; }
-  .btn { @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-sm font-medium text-ink hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50; }
-  .btn-primary { @apply inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50; }
-  .btn-danger { @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50; }
-  .input { @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100; }
+  .card {
+    @apply rounded-[var(--radius-card)] border border-line bg-panel p-4 sm:p-5;
+    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.025), rgb(255 255 255 / 0) 40%);
+    box-shadow: var(--shadow-card);
+  }
+  .card-interactive { @apply transition-[border-color,transform,background-color] duration-200 hover:border-line-strong motion-safe:hover:-translate-y-0.5; }
+  .btn {
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-line bg-surface-2 px-3.5 py-2 text-sm font-medium text-ink transition-colors duration-150 hover:border-line-strong hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold text-on-brand transition-[filter,box-shadow] duration-150 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50;
+    background-image: linear-gradient(180deg, var(--color-brand-strong), var(--color-brand));
+    box-shadow: 0 1px 0 0 rgb(255 255 255 / 0.35) inset, 0 8px 20px -10px rgb(216 178 106 / 0.6);
+  }
+  .btn-danger {
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-danger-line bg-transparent px-3.5 py-2 text-sm font-medium text-danger transition-colors duration-150 hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-ghost { @apply inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-ink-soft transition-colors hover:bg-surface-3 hover:text-ink; }
+  .input {
+    @apply w-full rounded-xl border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-muted/80 focus:border-brand focus:ring-2 focus:ring-brand/25 disabled:opacity-60;
+  }
   .label { @apply mb-1 block text-xs font-medium text-muted; }
-  .h1 { @apply text-xl font-semibold tracking-tight; }
-  .h2 { @apply text-base font-semibold; }
+  .h1 { @apply font-display text-[1.75rem] leading-tight font-semibold tracking-tight text-ink sm:text-[2.1rem]; }
+  .h2 { @apply text-[15px] font-semibold tracking-tight text-ink; }
+  .eyebrow { @apply text-[11px] font-semibold tracking-[0.18em] text-muted uppercase; }
   .muted { @apply text-sm text-muted; }
   .table { @apply w-full text-left text-sm; }
   .table th { @apply border-b border-line px-2 py-2 text-xs font-medium text-muted; }
   .table td { @apply border-b border-line px-2 py-2 align-top; }
+  .chip { @apply inline-flex items-center rounded-full border border-line bg-surface-2 px-3 py-1 text-ink-soft transition-colors hover:border-line-strong hover:text-ink; }
+  .chip-active { @apply inline-flex items-center rounded-full border border-brand/60 bg-brand/15 px-3 py-1 font-medium text-brand-strong; }
+  .link { @apply text-brand underline decoration-brand/40 underline-offset-2 hover:text-brand-strong hover:decoration-brand; }
+  .divider { @apply border-t border-line; }
+  .skeleton { @apply animate-pulse rounded-lg bg-surface-3; }
 }
+
+/* Tablolar: koyu zeminde ince satır çizgileri */
+table thead tr { color: var(--color-muted); }
+table tbody tr { border-color: var(--color-line); }
 
 /* Izgara öğeleri içerikleri (tablolar, uzun metinler) yüzünden taşmasın */
 .grid > * { min-width: 0; }
 code { overflow-wrap: anywhere; }
+code:not(pre code) { @apply rounded bg-surface-3 px-1 py-px text-[0.85em] text-ink-soft; }
+
+/* Görünüm geçişleri: sakin, kısa; hareket azaltma tercihine saygı */
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.animate-rise { animation: rise-in 0.45s var(--ease-out-soft) both; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* iOS ana ekran (PWA) güvenli alanlar */
+.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }

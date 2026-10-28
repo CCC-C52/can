@@ -21,7 +21,7 @@ export default function AgentsPage() {
             <div><div className="label">Teslim ölçütleri</div><ul className="list-disc pl-5 text-xs">{a.acceptanceCriteria.map((c) => <li key={c}>{c}</li>)}</ul></div>
             {a.id in OUTPUT_SCHEMAS && (
               <details><summary className="cursor-pointer text-xs text-brand">Yapılandırılmış çıktı şeması</summary>
-                <pre tabIndex={0} className="mt-1 max-h-64 overflow-auto rounded bg-gray-50 p-2 text-[11px]">{JSON.stringify(toStrictJsonSchema((OUTPUT_SCHEMAS as any)[a.id]), null, 2)}</pre></details>
+                <pre tabIndex={0} className="mt-1 max-h-64 overflow-auto rounded bg-surface-2 p-2 text-[11px]">{JSON.stringify(toStrictJsonSchema((OUTPUT_SCHEMAS as any)[a.id]), null, 2)}</pre></details>
             )}
           </section>
         ))}

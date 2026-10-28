@@ -96,7 +96,7 @@ async function Overview({ env, connected, connStatus, connError, dash, brandId }
       <section className="card h-fit space-y-3">
         <h2 className="h2">Bağlantı</h2>
         {!env && (
-          <p className="text-sm text-red-700">
+          <p className="text-sm text-danger">
             Google OAuth istemcisi tanımlı değil. Render ortamına GOOGLE_DRIVE_CLIENT_ID ve GOOGLE_DRIVE_CLIENT_SECRET ekleyin (adımlar: docs/GOOGLE_DRIVE.md).
           </p>
         )}
@@ -106,7 +106,7 @@ async function Overview({ env, connected, connStatus, connError, dash, brandId }
           </Badge>
           {src?.account_email && <span className="muted">{src.account_email}</span>}
         </div>
-        {connError && <p className="text-xs text-red-700">{connError}</p>}
+        {connError && <p className="text-xs text-danger">{connError}</p>}
         {env ? (
           <a href="/api/integrations/google-drive/start" className={connected ? "btn" : "btn-primary"}>{connected ? "Yeniden bağlan" : "Google Drive ile bağlan"}</a>
         ) : (
@@ -115,7 +115,7 @@ async function Overview({ env, connected, connStatus, connError, dash, brandId }
         <p className="text-xs text-muted">İzin: Drive dosyalarını görüntüleme (salt okuma). Uygulama Drive'da dosya oluşturamaz, değiştiremez, silemez veya paylaşamaz.</p>
         {src && src.status !== "disconnected" && (
           <details className="text-sm">
-            <summary className="cursor-pointer text-red-700">Bağlantıyı kaldır</summary>
+            <summary className="cursor-pointer text-danger">Bağlantıyı kaldır</summary>
             <form action={driveDisconnectAction} className="mt-2 space-y-2">
               <label className="flex items-center gap-2 text-xs"><input type="checkbox" name="purge" value="1" /> Bu uygulamadaki dizini de sil (Drive'daki dosyalar silinmez)</label>
               <input name="confirm" className="input" placeholder="Dizini silmek için SIL yazın" maxLength={10} />
@@ -130,7 +130,7 @@ async function Overview({ env, connected, connStatus, connError, dash, brandId }
           <section className="card space-y-2">
             <h2 className="h2">Arşiv klasörünü seçin</h2>
             <p className="text-sm muted">Hesapta adı tam olarak “{config.googleDrive.folderName}” olan klasörler. Doğru klasörü siz seçersiniz; sistem tahmin etmez.</p>
-            {candidateError && <p className="text-sm text-red-700">{candidateError}</p>}
+            {candidateError && <p className="text-sm text-danger">{candidateError}</p>}
             {!candidateError && candidates.length === 0 && <Empty>Bu adla klasör bulunamadı. Klasörün adını kontrol edin veya bu hesapla paylaşıldığından emin olun.</Empty>}
             <ul className="space-y-2">
               {candidates.map((c) => (
@@ -153,7 +153,7 @@ async function Overview({ env, connected, connStatus, connError, dash, brandId }
               <Badge tone={dash.phase === "incremental" ? "ok" : "warn"}>{dash.phase === "incremental" ? "Güncel (yalnız değişiklikler izleniyor)" : dash.phase === "initial_scan" ? `İlk tarama sürüyor (${dash.queueLength} klasör sırada)` : `Alt klasörler taranıyor (${dash.queueLength})`}</Badge>
               {dash.freshness.stale && src.status === "active" && <Badge tone="warn">Son başarılı tarama eski</Badge>}
             </div>
-            {src.last_error && <p className="text-sm text-red-700">{src.last_error}</p>}
+            {src.last_error && <p className="text-sm text-danger">{src.last_error}</p>}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Stat label="Klasör" value={dash.counts.folders} />
               <Stat label="Dosya" value={dash.counts.files} />
@@ -185,7 +185,7 @@ async function Overview({ env, connected, connStatus, connError, dash, brandId }
                     <tr key={r.id} className="border-t border-line align-top">
                       <td className="py-1 pr-2 whitespace-nowrap">{dt(r.started_at)}</td>
                       <td className="pr-2">{r.kind === "full" ? "Tam" : "Artımlı"}</td>
-                      <td className="pr-2"><Badge tone={r.status === "completed" ? "ok" : r.status === "failed" ? "bad" : "neutral"}>{r.status === "completed" ? "Tamam" : r.status === "failed" ? "Hata" : r.status === "partial" ? "Sürüyor" : "Çalışıyor"}</Badge>{r.error && <div className="text-xs text-red-700">{r.error}</div>}</td>
+                      <td className="pr-2"><Badge tone={r.status === "completed" ? "ok" : r.status === "failed" ? "bad" : "neutral"}>{r.status === "completed" ? "Tamam" : r.status === "failed" ? "Hata" : r.status === "partial" ? "Sürüyor" : "Çalışıyor"}</Badge>{r.error && <div className="text-xs text-danger">{r.error}</div>}</td>
                       <td className="pr-2">{r.pages}</td><td className="pr-2">{r.items_seen}</td><td className="pr-2">{r.items_upserted}</td><td>{r.items_removed}</td>
                     </tr>
                   ))}
@@ -237,7 +237,7 @@ async function Files({ brandId, search, filter, page }: { brandId: string; searc
                     </td>
                     <td className="pr-2 text-xs">
                       {i.mime_type}
-                      {i.image_width && i.image_height ? <div className={lowRes ? "text-red-700" : ""}>{i.image_width}x{i.image_height}{lowRes ? ` — düşük (< ${REFERENCE_MIN_SHORT_SIDE})` : ""}</div> : null}
+                      {i.image_width && i.image_height ? <div className={lowRes ? "text-danger" : ""}>{i.image_width}x{i.image_height}{lowRes ? ` — düşük (< ${REFERENCE_MIN_SHORT_SIDE})` : ""}</div> : null}
                     </td>
                     <td className="pr-2 text-xs">
                       {i.state === "removed" ? <Badge tone="neutral">Kaldırıldı</Badge> : i.state === "malformed" ? <Badge tone="bad">Bozuk</Badge> : i.state === "pending_checksum" ? <Badge tone="warn">Yükleme sürüyor</Badge> : null}
@@ -308,7 +308,7 @@ async function Review({ brandId, page }: { brandId: string; page: number }) {
                     <label className="block cursor-pointer">
                       <span className="flex items-center gap-1"><input type="checkbox" name="sel" value={i.ref_id!} aria-label={`${i.name} seç`} /> <span className="truncate">{i.name}</span></span>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={`/api/drive/thumb/${i.id}`} alt={i.name} loading="lazy" className="mt-1 aspect-[4/5] w-full rounded bg-gray-100 object-contain" />
+                      <img src={`/api/drive/thumb/${i.id}`} alt={i.name} loading="lazy" className="mt-1 aspect-[4/5] w-full rounded bg-surface-3 object-contain" />
                     </label>
                     <select name={`theme:${i.ref_id}`} className="input py-1 text-xs" defaultValue={i.ref_theme ?? ""} aria-label={`${i.name} koleksiyon`}>
                       <option value="">Koleksiyon…</option>
@@ -320,7 +320,7 @@ async function Review({ brandId, page }: { brandId: string; page: number }) {
                     </select>
                     <div className="flex flex-wrap gap-1">
                       <a href={driveLink(i.file_id)} target="_blank" rel="noopener noreferrer" className="text-brand underline">Drive&apos;da aç</a>
-                      {i.image_width && i.image_height ? <span className={lowRes ? "text-red-700" : "text-muted"}>{i.image_width}x{i.image_height}</span> : null}
+                      {i.image_width && i.image_height ? <span className={lowRes ? "text-danger" : "text-muted"}>{i.image_width}x{i.image_height}</span> : null}
                     </div>
                   </li>
                 );

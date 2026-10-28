@@ -52,7 +52,7 @@ export default async function BrandPage({ params, searchParams }: { params: Prom
               {facts.map((f) => (
                 <li key={f.id} className="flex items-start justify-between gap-2">
                   <div><Badge tone={f.kind === "forbidden_claim" ? "bad" : f.kind === "decision" ? "info" : "ok"}>{KIND[f.kind] ?? f.kind}</Badge> <span>{f.statement}</span></div>
-                  <form action={deleteBrandFactAction}><input type="hidden" name="id" value={f.id} /><button className="text-xs text-red-700">Sil</button></form>
+                  <form action={deleteBrandFactAction}><input type="hidden" name="id" value={f.id} /><button className="text-xs text-danger">Sil</button></form>
                 </li>
               ))}
               {facts.length === 0 && <li className="muted">Kayıt yok.</li>}

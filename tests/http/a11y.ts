@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { chromium } from "playwright";
 
 const BASE = process.env.A11Y_BASE ?? "http://127.0.0.1:3000";
-const PAGES = ["/", "/sohbet", "/gorevler", "/taslaklar", "/onizlemeler", "/onaylar", "/takvim", "/markalar", "/urunler", "/medya", "/entegrasyonlar", "/raporlar", "/ajanlar", "/tanilama", "/ayarlar", "/login", "/projeler", "/studyo/video", "/studyo/gorsel", "/hafiza", "/arastirma", "/maliyet", "/pr-ajansi", "/pr-ajansi?tab=automation", "/pr-ajansi?tab=calendar", "/pr-ajansi?tab=strategy", "/bilgi", "/drive-arsivi", "/drive-arsivi?tab=files", "/drive-arsivi?tab=review", "/drive-arsivi?tab=hub"];
+const PAGES = ["/", "/sohbet", "/gorevler", "/taslaklar", "/onizlemeler", "/onaylar", "/takvim", "/markalar", "/urunler", "/medya", "/entegrasyonlar", "/raporlar", "/ajanlar", "/tanilama", "/ayarlar", "/login", "/projeler", "/studyo/video", "/studyo/gorsel", "/hafiza", "/arastirma", "/maliyet", "/pr-ajansi", "/pr-ajansi?tab=automation", "/pr-ajansi?tab=calendar", "/pr-ajansi?tab=strategy", "/bilgi", "/drive-arsivi", "/drive-arsivi?tab=files", "/drive-arsivi?tab=review", "/drive-arsivi?tab=hub", "/pr-ajansi/strateji", "/pr-ajansi/istihbarat", "/pr-ajansi/medya-iliskileri", "/pr-ajansi/influencer", "/pr-ajansi/takvim", "/pr-ajansi/kutuphane", "/koleksiyonlar", "/is/e-ticaret", "/is/musteriler", "/is/satis", "/otomasyon"];
 const require = createRequire(import.meta.url);
 
 async function main() {

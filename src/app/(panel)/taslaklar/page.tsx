@@ -17,8 +17,8 @@ export default async function Drafts({ searchParams }: { searchParams: SP }) {
       <PageHeader title="İçerik taslakları" subtitle="Ajanların ürettiği tüm çıktılar ve sürümleri." />
       <Flash ok={ok} err={err} />
       <div className="mb-3 flex flex-wrap gap-1 text-sm">
-        <Link href="/taslaklar" className={`rounded-full px-3 py-1 ${!kind ? "bg-ink text-white" : "bg-white ring-1 ring-line"}`}>Tümü ({all.length})</Link>
-        {Object.entries(KIND).map(([k, l]) => <Link key={k} href={`/taslaklar?kind=${k}`} className={`rounded-full px-3 py-1 ${kind === k ? "bg-ink text-white" : "bg-white ring-1 ring-line"}`}>{l} ({all.filter((o) => o.kind === k).length})</Link>)}
+        <Link href="/taslaklar" className={`rounded-full px-3 py-1 ${!kind ? "bg-brand text-on-brand" : "bg-panel ring-1 ring-line"}`}>Tümü ({all.length})</Link>
+        {Object.entries(KIND).map(([k, l]) => <Link key={k} href={`/taslaklar?kind=${k}`} className={`rounded-full px-3 py-1 ${kind === k ? "bg-brand text-on-brand" : "bg-panel ring-1 ring-line"}`}>{l} ({all.filter((o) => o.kind === k).length})</Link>)}
       </div>
       {outputs.length === 0 ? <Empty>Henüz çıktı yok.</Empty> : (
         <div tabIndex={0} className="card overflow-x-auto p-0">

@@ -32,6 +32,20 @@ export type Briefing = {
   calendar: { id: string; name: string; date: string; kind: string; approvalDeadline: string; daysToApprovalDeadline: number }[];
   feedHealth: FeedHealth[];
   slides?: { title: string; bullets: string[] }[];
+  /** Operasyon bölümleri (haftalık kampanya incelemesi, çeyreklik OKR değerlendirmesi vb.). Yalnızca kayıtlı veriden. */
+  sections?: { title: string; bullets: string[] }[];
+};
+
+/** Strateji ve iç operasyon verisi (yalnızca veritabanındaki kayıtlı/ölçülmüş bilgiler). */
+export type StrategyContext = {
+  phase: { title: string; label: string; focus: string[] } | null;
+  annual: { periodKey: string; title: string; status: string; keyResults: { label: string; target: string; state: "unmeasured" | "baseline_only" | "tracking"; baseline: number | null; current: number | null; source: string | null }[] }[];
+  quarter: { periodKey: string; title: string; status: string; keyResults: { label: string; target: string; state: "unmeasured" | "baseline_only" | "tracking"; baseline: number | null; current: number | null; source: string | null }[] }[];
+  nextAnnual: { periodKey: string; title: string }[];
+  budget: { spent30dUsd: number | null; dailyLimitUsd: number | null; unknownCostEntries: number };
+  activeCampaigns: { title: string; status: string }[];
+  drafts: { social: number; outreach: number; creative: number };
+  measuredKpis: number;
 };
 
 export type BriefingInput = {
@@ -45,9 +59,10 @@ export type BriefingInput = {
   upcoming: { event: Observance; approvalDeadline: string }[];
   pendingApprovals: number;
   roadmap?: Roadmap;
+  strategy?: StrategyContext;
 };
 
-const WINDOW_DAYS: Record<ReportKind, number> = { daily_brief: 14, weekly_report: 45, monthly_presentation: 120 };
+const WINDOW_DAYS: Record<ReportKind, number> = { daily_brief: 14, weekly_report: 45, monthly_presentation: 120, quarterly_review: 180, annual_review: 365 };
 
 export function dataStatus(feeds: FeedHealth[]): { status: Briefing["dataStatus"]; note: string } {
   const connected = feeds.filter((f) => f.connected);
@@ -114,6 +129,8 @@ export function buildBriefing(input: BriefingInput): Briefing {
     daily_brief: `Daily PR intelligence brief — ${input.periodKey}`,
     weekly_report: `Weekly strategic PR report — ${input.periodKey}`,
     monthly_presentation: `Monthly PR presentation — ${input.periodKey}`,
+    quarterly_review: `Quarterly strategic review — ${input.periodKey}`,
+    annual_review: `Annual roadmap evaluation — ${input.periodKey}`,
   };
 
   const b: Briefing = {
@@ -132,5 +149,59 @@ export function buildBriefing(input: BriefingInput): Briefing {
       { title: "Decisions needed from owner", bullets: [`${input.pendingApprovals} item(s) in approval queue`, "All outbound messages, paid media and budgets remain drafts until approved."] },
     ];
   }
+  if (input.strategy) b.sections = strategySections(kind, input, insights, calendar, risks);
   return b;
+}
+
+const fmtKr = (k: StrategyContext["quarter"][number]["keyResults"][number]) =>
+  k.state === "unmeasured" ? `${k.label}: not measured yet — target "${k.target}" cannot be evaluated`
+    : k.state === "baseline_only" ? `${k.label}: baseline ${k.baseline} (${k.source}); no current measurement yet — target "${k.target}"`
+      : `${k.label}: ${k.baseline ?? "no baseline"} → ${k.current} (${k.source}) — target "${k.target}"`;
+
+/** Rapor türüne göre operasyon bölümleri. Ölçülmemiş hiçbir şey sayı olarak yazılmaz. */
+export function strategySections(kind: ReportKind, input: BriefingInput, insights: Insight[], calendar: Briefing["calendar"], risks: string[]): { title: string; bullets: string[] }[] {
+  const st = input.strategy!;
+  const kpiNote = st.measuredKpis ? `${st.measuredKpis} measured KPI value(s) on record (see Brand Strategy → key results).` : "No measured KPI values on record — performance cannot be evaluated until baselines are measured with a source.";
+  const campaigns = st.activeCampaigns.length ? st.activeCampaigns.map((c) => `${c.title} — ${c.status}`) : ["No active campaign projects."];
+  const budget = [
+    st.budget.spent30dUsd === null ? "AI spend (30 days): no recorded actual cost." : `AI spend (30 days, recorded actuals): $${st.budget.spent30dUsd.toFixed(2)}.`,
+    st.budget.dailyLimitUsd === null ? "Daily AI budget limit: not set." : `Daily AI budget limit: $${st.budget.dailyLimitUsd.toFixed(2)}.`,
+    ...(st.budget.unknownCostEntries ? [`${st.budget.unknownCostEntries} cost entr(y/ies) with unknown amount — review in Cost Management.`] : []),
+    "Paid media spend is not connected and is not reported.",
+  ];
+  const creator = insights.filter((i) => /creator|influenc|collab/i.test(`${i.title} ${i.detail}`));
+  if (kind === "weekly_report") {
+    return [
+      { title: "Campaign review", bullets: campaigns },
+      { title: "Social content planning (next 14 days)", bullets: calendar.filter((c) => c.daysToApprovalDeadline >= 0 && c.daysToApprovalDeadline <= 14).map((c) => `${c.date} ${c.name} — approve by ${c.approvalDeadline}`).concat(`${st.drafts.social} social publishing draft(s) awaiting review.`) },
+      { title: "Influencer opportunities", bullets: creator.length ? creator.map((i) => i.title) : ["No source-backed creator opportunities this week (creator data source not connected or no matching signals)."] },
+      { title: "Performance summary", bullets: [kpiNote] },
+    ];
+  }
+  if (kind === "monthly_presentation") {
+    return [
+      { title: "PR performance", bullets: [kpiNote, `${st.drafts.outreach} outreach draft(s) prepared; nothing was sent without approval.`] },
+      { title: "Brand positioning review", bullets: st.phase ? [`Current phase: ${st.phase.title} (${st.phase.label})`, ...st.phase.focus.map((f) => `Focus: ${f}`)] : ["Strategy framework not created yet."] },
+      { title: "Campaign recommendations", bullets: insights.slice(0, 5).map((i) => i.title).concat(insights.length ? [] : ["No source-backed recommendations this month."]) },
+      { title: "Content production planning", bullets: calendar.slice(0, 6).map((c) => `${c.name} (${c.date}): plan content from verified product imagery; approve by ${c.approvalDeadline}`).concat(`${st.drafts.creative} creative draft(s) in progress.`) },
+    ];
+  }
+  if (kind === "quarterly_review") {
+    return [
+      { title: "Strategic review", bullets: st.phase ? [`Phase: ${st.phase.title} (${st.phase.label})`, ...st.annual.map((a) => `${a.periodKey} objective: ${a.title} — ${a.status}`)] : ["Strategy framework not created yet."] },
+      { title: "OKR evaluation", bullets: st.quarter.length ? st.quarter.flatMap((q) => [`${q.periodKey}: ${q.title} — ${q.status}`, ...q.keyResults.map(fmtKr)]) : ["No OKRs recorded for this quarter."] },
+      { title: "Budget assessment", bullets: budget },
+      { title: "Brand growth analysis", bullets: [kpiNote] },
+      { title: "Risks", bullets: risks.length ? risks : ["None identified from available data."] },
+    ];
+  }
+  if (kind === "annual_review") {
+    return [
+      { title: "Eight-year roadmap evaluation", bullets: st.phase ? [`Current phase: ${st.phase.title} (${st.phase.label})`, ...st.annual.flatMap((a) => [`${a.periodKey}: ${a.title} — ${a.status}`, ...a.keyResults.map(fmtKr)])] : ["Strategy framework not created yet."] },
+      { title: "Market positioning review", bullets: [kpiNote, "Positioning changes are proposals until the owner approves them."] },
+      { title: "Strategic priorities", bullets: st.nextAnnual.length ? st.nextAnnual.map((a) => `${a.periodKey}: ${a.title}`) : ["No next-year objective recorded."] },
+      { title: "Budget assessment", bullets: budget },
+    ];
+  }
+  return [];
 }

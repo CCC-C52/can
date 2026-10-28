@@ -68,7 +68,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
                 {photos.map((p) => {
                   const low = referenceTooSmall(p.width, p.height);
                   return (
-                    <li key={p.id}><label className={`flex items-center gap-2 rounded-lg px-2 py-1 text-sm ${low ? "opacity-60" : "hover:bg-gray-50"}`}><input type="checkbox" name="photoIds" value={p.id} disabled={low} /><span className="min-w-0 flex-1 truncate">{p.filename}</span>{p.width && p.height ? <span className="text-xs text-muted">{p.width}x{p.height}</span> : null}{low && <Badge tone="warn">Düşük çözünürlük</Badge>}</label></li>
+                    <li key={p.id}><label className={`flex items-center gap-2 rounded-lg px-2 py-1 text-sm ${low ? "opacity-60" : "hover:bg-surface-2"}`}><input type="checkbox" name="photoIds" value={p.id} disabled={low} /><span className="min-w-0 flex-1 truncate">{p.filename}</span>{p.width && p.height ? <span className="text-xs text-muted">{p.width}x{p.height}</span> : null}{low && <Badge tone="warn">Düşük çözünürlük</Badge>}</label></li>
                   );
                 })}
               </ul>
@@ -86,7 +86,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
                   const a = analyses[i];
                   return (
                     <li key={v.id}>
-                      <label className="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-gray-50">
+                      <label className="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-surface-2">
                         <input type="checkbox" name="assetIds" value={v.id} />
                         <span className="min-w-0 flex-1 basis-40 truncate">{v.filename}</span>
                         <span className="text-xs text-muted">{v.duration_s ? `${Number(v.duration_s).toFixed(1)} sn` : "süre ?"}{v.width && v.height ? ` · ${v.width}x${v.height}` : ""}</span>

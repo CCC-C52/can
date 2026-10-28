@@ -26,7 +26,7 @@ export default async function Products({ searchParams }: { searchParams: SP }) {
                     <td className="pl-4"><Link className="font-medium text-brand" href={`/urunler/${p.id}`}>{p.title}</Link> {p.is_sample && <Badge tone="demo">ÖRNEK</Badge>}{p.shopify_product_id && <Badge tone="info">Shopify</Badge>}</td>
                     <td className="whitespace-nowrap">{p.price === null ? <Val v={null} /> : `${p.price} ${p.currency ?? ""}`}</td>
                     <td>{variants.filter((v) => v.product_id === p.id).length}</td>
-                    <td>{facts.filter((f) => f.product_id === p.id && f.status === "verified").length}{facts.some((f) => f.product_id === p.id && f.status !== "verified") && <span className="ml-1 text-xs text-amber-700">(+doğrulanmamış)</span>}</td>
+                    <td>{facts.filter((f) => f.product_id === p.id && f.status === "verified").length}{facts.some((f) => f.product_id === p.id && f.status !== "verified") && <span className="ml-1 text-xs text-warning">(+doğrulanmamış)</span>}</td>
                     <td>{p.status}</td>
                   </tr>
                 ))}</tbody>
