@@ -189,7 +189,7 @@ describe("Hedef: Space Alien siyah oversize tişört — 4 × 8 sn gerçek Gemin
     expect(rb.error ?? "").toMatch(/Günlük bütçe aşılacak/);
     await q(`UPDATE tasks SET status = 'cancelled' WHERE project_id = $1 AND status NOT IN ('completed','failed')`, [b.project.id]);
     await q(`UPDATE provider_jobs SET status = 'cancelled' WHERE project_id = $1`, [b.project.id]);
-  });
+  }, 300_000); // gerçek ffmpeg ile 30+ sn 1080p kodlama; CI'da 60 sn varsayılanı yetmez
 
   it("doğrulanmamış ürün görseli referans olamaz; ürün görseli olmadan yalnızca AI modu başlatılamaz", async () => {
     // Stüdyo eylemindeki kural, aynı veriyle: koleksiyon seçiliyken her fotoğraf o koleksiyonun doğrulanmış referansı olmalı
@@ -237,7 +237,7 @@ describe("Hedef: Space Alien siyah oversize tişört — 4 × 8 sn gerçek Gemin
     const out = (await listOutputs(brandId, { projectId: project.id })).find((o) => o.kind === "video_plan")!;
     const v = (await getCurrentVersion(brandId, out.id))!;
     expect((await decide(brandId, v.id, "approved")).decision).toBe("approved");
-  });
+  }, 300_000); // gerçek ffmpeg ile 30+ sn 1080p kodlama; CI'da 60 sn varsayılanı yetmez
 
   it("plan fotoğraf hareketi veya 30 sn altı süre içerirse kalite kontrolünden geçmez", async () => {
     const { runRuleChecks } = await import("@/lib/agents/qa-rules");

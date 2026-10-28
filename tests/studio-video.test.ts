@@ -231,7 +231,7 @@ describe("Video Stüdyosu → Gemini Omni → karma reklam MP4 (sahte sağlayıc
     }
     expect(probes).toEqual(expect.arrayContaining([[1080, 1920, "h264", "aac"], [1920, 1080, "h264", "aac"]]));
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, 300_000); // gerçek ffmpeg ile 30+ sn 1080p kodlama; CI'da 60 sn varsayılanı yetmez
 
   it("ücretli üretim izni yokken Gemini'ye hiçbir istek gitmez; reklam 'izin bekliyor' olarak kalır", async () => {
     process.env.GEMINI_API_KEY = "test-key";
