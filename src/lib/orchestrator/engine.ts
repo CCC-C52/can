@@ -459,6 +459,19 @@ export function videoNeedsArtifact(content: any) {
 }
 
 /**
+ * Render sonucunda planın her teslim öğesi için GERÇEK bir MP4 var mı? Teslimler: her edit_existing ve compose kurgusu;
+ * planda compose yoksa her generate_new sahnesi (compose varsa AI sahneleri ara üründür, teslim compose'dur).
+ * `videoAssets`: bu render'ın ürettiği/teslim ettiği, depoda doğrulanmış video dosyaları (ref etiketiyle).
+ */
+export function missingVideoDeliverables(content: any, videoAssets: { ref: string | null }[]): string[] {
+  const vids: any[] = content?.videos ?? [];
+  const hasCompose = vids.some((v) => v.mode === "compose");
+  const due = vids.filter((v) => v.mode === "edit_existing" || v.mode === "compose" || (v.mode === "generate_new" && !hasCompose));
+  const refs = new Set(videoAssets.map((a) => a.ref));
+  return due.filter((v) => !refs.has(String(v.id))).map((v) => `${v.id} (${v.mode})`);
+}
+
+/**
  * Projenin Video Stüdyosu talebi (proje talimatından; yönetici talimatı yeniden yazsa da korunur).
  * Ürün fotoğrafı kimlikleri yalnızca bu markanın raster fotoğraflarıysa kabul edilir. Google Drive arşivinden alınmış
  * bir fotoğrafın referansı sonradan doğrulanmamış/reddedilmiş duruma geçtiyse o fotoğraf AI isteğine girmez.
@@ -481,14 +494,16 @@ export async function studioForProject(brandId: string, projectId: string): Prom
 function studioBlock(st: StudioRequest, limits: Limits) {
   const data = {
     mode: st.mode, ai_scenes: st.aiScenes, scene_seconds: st.sceneSeconds, product_photo_ids: st.photoIds, collection: st.collection ?? null,
-    licensed_music: !!st.musicId, extra_format: st.extraFormat ?? null,
+    licensed_music: !!st.musicId, extra_format: st.extraFormat ?? null, ai_only: !!st.aiOnly, ad_seconds: st.minSeconds ? [st.minSeconds, st.maxSeconds] : null,
     max_ai_video_seconds_per_project: limits.maxVideoGenSeconds, paid_generation_enabled: limits.paidMediaGeneration,
   };
   const rules = st.mode === "archive" ? "Use only analysed archive footage (edit_existing)." : [
     `The owner chose the "${st.mode}" studio mode in Video Studio: a cinematic AI ad, not an archive-only edit.`,
     `Return exactly ${st.aiScenes} "generate_new" videos (one AI scene each, ${st.sceneSeconds} s, format 9:16) and ONE "compose" video that assembles the final ad.`,
     `Every generate_new scene: a vivid cinematic generation_prompt in English (subject, setting, light, camera movement, mood; no on-screen text) and selected_asset_ids = the product_photo_ids, so the real product photos are sent as references and the print, colours, logo and cut stay unchanged.`,
-    `The compose video lists "parts" in output order: every AI scene ("ai_scene", ref = its id)${st.photoIds.length ? ', at least one "product_photo" part (ref = a product_photo_id, 1.5-4 s, a camera motion) so the real product is shown as photographed' : ""}${st.mode === "hybrid" ? ', and analysed archive scenes ("archive_clip", inside verified scene limits) when they fit' : ""}.`,
+    st.aiOnly
+      ? `The compose video lists "parts" in output order and contains ONLY "ai_scene" parts (ref = a generate_new id). The owner forbids photo zoom/pan or slideshow parts: no "product_photo" and no "archive_clip". Real product photos are used only as Gemini references (selected_asset_ids).${st.minSeconds ? ` Total length must be at least ${st.minSeconds} s.` : ""}`
+      : `The compose video lists "parts" in output order: every AI scene ("ai_scene", ref = its id)${st.photoIds.length ? ', at least one "product_photo" part (ref = a product_photo_id, 1.5-4 s, a camera motion) so the real product is shown as photographed' : ""}${st.mode === "hybrid" ? ', and analysed archive scenes ("archive_clip", inside verified scene limits) when they fit' : ""}.`,
     ...(st.collection ? [`Collection: "${st.collection}". Every product reference and every description must match this collection's confirmed colour and print (see <brand_context>.knowledge.collections). Never mention another collection, colour or logo.`] : []),
     ...(st.aiScenes > 3 ? [`This is a long cinematic ad: vary the scenes (wide establishing shot, model in motion, macro close-up of the print and fabric texture, back-print reveal, product hero shot, energetic finale), and alternate AI scenes with product_photo parts so the real product is seen regularly.`] : []),
     ...(st.musicId ? ["The owner's licensed music track is added by the system under the whole ad; plan scene lengths with a steady rhythm (cuts every 2-4 s inside parts) and a strong final beat on the closing card."] : []),
@@ -663,6 +678,8 @@ async function createCalendarEntries(task: Task, v: OutputVersion) {
 /** Tasarım/video çıktısından sonra render görevleri (yerel derleme, ffmpeg, AI üretimi) oluşturulur. */
 async function spawnFollowUps(task: Task, v: OutputVersion, _ctx: BrandContext) {
   if (task.agent !== "design" && task.agent !== "video") return;
+  // Dosya üretmeyen video planı için render görevi açılmaz (boş render "başarılı" görünmesin)
+  if (task.agent === "video" && !videoNeedsArtifact(v.content)) return;
   const key = `${task.key}-render`;
   const existing = await q1<{ id: string; status: string }>(`SELECT id, status FROM tasks WHERE project_id = $1 AND key = $2`, [task.project_id, key]);
   if (existing) {
@@ -703,6 +720,10 @@ async function runRender(ctx: RunCtx, workerId: string) {
   await q(`UPDATE tasks SET input_refs = input_refs || $2::jsonb WHERE id = $1`, [task.id, JSON.stringify({ result: summary })]);
   const service = task.agent === "design" ? "sharp/openai_images" : "ffmpeg/video_generation";
   const made = o.produced.length ? ` (üretilen dosya: ${o.produced.length})` : "";
+  log(o.failed.length || o.uncertain.length ? "warn" : "info", "render.result", {
+    taskId: task.id, projectId: task.project_id, agent: task.agent, produced: o.produced.length, artifacts: o.artifacts.length,
+    waiting: o.waiting, inProgress: o.inProgress, failed: o.failed, uncertain: o.uncertain,
+  });
   if (o.inProgress.length) {
     // Sağlayıcı işi sürüyor: görev kuyruğa döner ve daha sonra durumu sorgular (deneme hakkı tüketmez)
     await finish(task, workerId, { status: "ready", phase: "render", error: `Sürüyor: ${o.inProgress.join(" | ")}${made}`, service, nextAttemptMs: RENDER_POLL_MS });
@@ -712,9 +733,33 @@ async function runRender(ctx: RunCtx, workerId: string) {
     await finish(task, workerId, { status: "failed", error: `Başarısız öğeler: ${o.failed.join(" | ")}${made}`, service, failureClass: "permanent" });
   } else if (o.waiting.length) {
     await finish(task, workerId, { status: "waiting_connection", error: `Bağlantı/izin bekleyen öğeler: ${o.waiting.join(" | ")}${made}`, service, failureClass: "connection" });
+  } else if (task.agent === "video" && (await videoDeliverablesMissing(task, v, o)).length) {
+    // Gerçek, depoda doğrulanmış MP4 olmadan video görevi asla "tamamlandı" sayılmaz
+    const missing = await videoDeliverablesMissing(task, v, o);
+    const planned = (v.content?.videos ?? []).map((x: any) => `${x.id}:${x.mode}`).join(", ") || "plan video öğesi içermiyor";
+    log("error", "render.no_mp4", { taskId: task.id, projectId: task.project_id, missing, planned });
+    await finish(task, workerId, { status: "failed", error: `MP4 üretilmedi: ${missing.join(", ") || "teslim edilecek video yok"} (plan: ${planned})${made}`, service, failureClass: "permanent" });
   } else {
     await finish(task, workerId, { status: "completed", error: o.notes.length ? o.notes.join(" | ") : null, service: task.agent === "design" ? "sharp (yerel)" : "ffmpeg (yerel)" });
   }
+}
+
+/** Bu render'ın teslim ettiği, depoda gerçekten bulunan video dosyaları ile planın teslimleri karşılaştırılır. */
+async function videoDeliverablesMissing(task: Task, v: OutputVersion, o: { produced: string[] }) {
+  const rows = o.produced.length
+    ? await q<{ id: string; storage_key: string; size_bytes: string; tags: { tag: string }[] }>(
+        `SELECT id, storage_key, size_bytes, tags FROM media_assets WHERE brand_id = $1 AND id = ANY($2::uuid[]) AND kind = 'video'`,
+        [task.brand_id, o.produced],
+      )
+    : [];
+  const verified: { ref: string | null }[] = [];
+  for (const r of rows) {
+    if (!(Number(r.size_bytes) > 0) || !(await getStorage().exists(r.storage_key))) continue;
+    const ref = (r.tags ?? []).map((t) => t.tag).find((t) => t.startsWith("ref:"))?.slice(4) ?? null;
+    verified.push({ ref });
+  }
+  if (!videoNeedsArtifact(v.content)) return ["teslim edilecek video öğesi yok"];
+  return missingVideoDeliverables(v.content, verified);
 }
 
 // ---------------------------------------------------------------- Rapor

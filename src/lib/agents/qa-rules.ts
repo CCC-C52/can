@@ -206,6 +206,28 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
     }
   }
   if (agent === "video") {
+    // Video görevi gerçek bir dosya üretmeli: yalnızca senaryo/plan "başarılı video" sayılmaz
+    const producing = (content.videos ?? []).filter((v: any) => ["edit_existing", "generate_new", "compose"].includes(v.mode));
+    if (!producing.length) {
+      checks.push({ name: "Video dosyası", status: "fail", detail: "Planda üretilecek video yok (edit_existing / generate_new / compose). Yalnızca senaryo bir video teslimi değildir." });
+      required.push("En az bir gerçek video üretim öğesi planlayın; mümkün değilse nedenini unknowns alanına yazın (görev başarısız sayılır, sahte başarı raporlanmaz).");
+    }
+    if (opts.studio && opts.studio.mode !== "archive") {
+      for (const c of (content.videos ?? []).filter((v: any) => v.mode === "compose")) {
+        const parts: any[] = c.parts ?? [];
+        if (opts.studio.aiOnly && parts.some((p) => p.kind !== "ai_scene")) {
+          checks.push({ name: "Yalnızca AI video", status: "fail", detail: `${c.id}: sahip yalnızca AI video sahneleri istedi; plan fotoğraf hareketi veya arşiv parçası içeriyor.` });
+          required.push("compose parçalarını yalnızca generate_new AI sahnelerinden (ai_scene) oluşturun.");
+        }
+        const gen = new Map<string, any>((content.videos ?? []).filter((v: any) => v.mode === "generate_new").map((v: any) => [v.id, v]));
+        const est = parts.reduce((a, p) => a + (p.kind === "ai_scene" ? Math.min(Number(p.duration_s) || 0, Number(gen.get(p.ref)?.duration_s) || Number(p.duration_s) || 0) : Number(p.duration_s) || 0), 0)
+          + 3 - Math.max(0, parts.length) * 0.5;
+        if (opts.studio.minSeconds && est < opts.studio.minSeconds - 1) {
+          checks.push({ name: "Reklam süresi", status: "fail", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi.` });
+          required.push(`Toplam süreyi en az ${opts.studio.minSeconds} sn yapın (sahne sayısı × süre).`);
+        }
+      }
+    }
     for (const v of content.videos ?? []) {
       if (v.mode === "edit_existing") {
         for (const id of v.selected_asset_ids ?? []) {

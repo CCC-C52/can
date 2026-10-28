@@ -62,10 +62,28 @@ export async function taskSpend(taskId: string, db: Queryable = getPool()) {
 }
 
 /**
+ * Gönderilmiş ama henüz gerçekleşen maliyeti yazılmamış ücretli sağlayıcı işlerinin tahmini tutarı (taahhüt edilmiş
+ * harcama). Aynı render'da art arda gönderilen sahneler bütçe kontrolünde birbirini görür; aksi halde hepsi sınırı geçer.
+ */
+async function committedSpend(filter: { day?: boolean; month?: boolean; taskId?: string; service?: string; excludeJobId?: string | null }, db: Queryable) {
+  const row = await q1<{ s: number }>(
+    `SELECT COALESCE(SUM(cost_estimated_usd), 0)::float AS s FROM provider_jobs
+     WHERE status IN ('submitting','submitted','running','downloading','unknown') AND cost_actual_usd IS NULL
+       AND ($1::uuid IS NULL OR id <> $1)
+       AND ($2::boolean IS NOT TRUE OR created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+       AND ($3::boolean IS NOT TRUE OR created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+       AND ($4::uuid IS NULL OR task_id = $4) AND ($5::text IS NULL OR provider = $5)`,
+    [filter.excludeJobId ?? null, filter.day ?? null, filter.month ?? null, filter.taskId ?? null, filter.service ?? null],
+    db,
+  );
+  return Number(row?.s ?? 0);
+}
+
+/**
  * Ücretli çağrıdan ÖNCE çalışır. Tahmin sınırı aşıyorsa veya tahmin yapılamıyorsa (ve ayar gerektiriyorsa) engeller.
  * Ücretsiz (demo/yerel) işlemler için estimate = 0 verilir ve engellenmez.
  */
-export async function assertBudget(args: { taskId: string | null; estimateUsd: number | null; service: string }, db: Queryable = getPool()) {
+export async function assertBudget(args: { taskId: string | null; estimateUsd: number | null; service: string; excludeJobId?: string | null }, db: Queryable = getPool()) {
   const limits = await getLimits(db);
   if (args.estimateUsd === 0) return;
   const providerLimit = limits.providerMonthlyUsd?.[args.service];
@@ -76,21 +94,22 @@ export async function assertBudget(args: { taskId: string | null; estimateUsd: n
     return;
   }
   if (limits.perTaskBudgetUsd !== null && args.taskId) {
-    const spent = await taskSpend(args.taskId, db);
+    const spent = (await taskSpend(args.taskId, db)) + (await committedSpend({ taskId: args.taskId, excludeJobId: args.excludeJobId }, db));
     if (spent + args.estimateUsd > limits.perTaskBudgetUsd) {
       throw new BudgetExceededError(`Görev bütçesi aşılacak: harcanan $${spent.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${limits.perTaskBudgetUsd}`);
     }
   }
   if (providerLimit !== undefined) {
-    const month = await monthlyServiceSpend(args.service, db);
+    const month = (await monthlyServiceSpend(args.service, db)) + (await committedSpend({ month: true, service: args.service, excludeJobId: args.excludeJobId }, db));
     if (month + args.estimateUsd > providerLimit) {
       throw new BudgetExceededError(`${args.service} aylık sınırı aşılacak: bu ay $${month.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${providerLimit}`);
     }
   }
   if (limits.dailyBudgetUsd !== null) {
     const today = await todaysAiSpend(db);
-    if (today.actual + args.estimateUsd > limits.dailyBudgetUsd) {
-      throw new BudgetExceededError(`Günlük bütçe aşılacak: bugün $${today.actual.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${limits.dailyBudgetUsd}`);
+    const pending = await committedSpend({ day: true, excludeJobId: args.excludeJobId }, db);
+    if (today.actual + pending + args.estimateUsd > limits.dailyBudgetUsd) {
+      throw new BudgetExceededError(`Günlük bütçe aşılacak: bugün $${today.actual.toFixed(4)} gerçekleşen + $${pending.toFixed(4)} süren işler + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${limits.dailyBudgetUsd}`);
     }
   }
 }

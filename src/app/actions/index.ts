@@ -781,10 +781,15 @@ export async function videoStudioAction(fd: FormData) {
       photos = await brandAssets(brand.id, picked.map((p) => p.media_asset_id), "photo");
     }
     if (collection && photos.length) {
+      // Koleksiyon seçiliyken yalnızca o koleksiyonun sahip tarafından doğrulanmış katalog fotoğrafları referans olabilir
       const themes = await verifiedThemesOf(brand.id, photos.map((p) => p.id));
       const wrong = photos.filter((p) => themes.has(p.id) && themes.get(p.id) !== collection);
       if (wrong.length) throw new Error(`Koleksiyon eşleşmiyor: ${wrong.map((p) => `${p.filename} (${THEME_INFO[themes.get(p.id)!].label})`).join(", ")} seçilen ${THEME_INFO[collection].label} koleksiyonuna ait değil.`);
+      const unverifiedRefs = photos.filter((p) => !themes.has(p.id));
+      if (unverifiedRefs.length) throw new Error(`Doğrulanmamış ürün görseli: ${unverifiedRefs.map((p) => p.filename).join(", ")}. Drive Arşivi'nde doğrulayıp orijinali arşive alın veya fotoğraf seçmeyin (doğrulanmış katalog fotoğrafları otomatik seçilir).`);
     }
+    const aiOnly = mode !== "archive" && str(fd, "aiOnly") === "1";
+    if (aiOnly && !photos.length) throw new Error("Yalnızca AI video modu için gerçek ürün referansı gerekli: koleksiyon seçin (doğrulanmış katalog fotoğrafları) veya fotoğraf seçin.");
     let musicId: string | null = null;
     if (str(fd, "musicId")) {
       const m = await getMedia(brand.id, str(fd, "musicId"));
@@ -814,7 +819,7 @@ export async function videoStudioAction(fd: FormData) {
       mode, videos, photos, minSeconds: min, maxSeconds: max,
       platform: str(fd, "platform") === "tiktok" ? "TikTok (9:16)" : "Instagram Reels (9:16)",
       transition: str(fd, "transition") === "fade" ? "fade" : "cut",
-      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500), collection, musicId, extraFormat,
+      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500), collection, musicId, extraFormat, aiOnly,
     });
     const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
     return { ok: r.duplicate ? "Bu talep zaten gönderildi." : mode === "archive" ? "Video talebi Ana Yönetici'ye gönderildi." : "AI reklam talebi Ana Yönetici'ye gönderildi (Gemini Omni sahneleri ücretli; izin ve bütçe kontrolünden geçer).", to: `/projeler/${r.project.id}` };

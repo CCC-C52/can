@@ -108,6 +108,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
               </select>
               <span className="mt-1 block text-xs text-muted">{music.length ? "Video boyunca çalar; giriş/çıkış yumuşatılır, ses seviyesi yayın standardına (-14 LUFS) getirilir." : "Medya arşivine MP3/WAV/M4A yükleyin ve kullanım hakkını “Lisanslı” veya “Marka sahibi” seçin."}</span>
             </label>
+            <label className="flex items-start gap-2 text-sm sm:col-span-2"><input type="checkbox" name="aiOnly" value="1" className="mt-1" /><span>Yalnızca gerçek AI video sahneleri (fotoğraf yakınlaştırma/kaydırma veya slayt yok). Ürün fotoğrafları yalnızca Gemini&apos;ye referans olarak gider.</span></label>
             <label className="block text-sm"><span className="label">Ek format</span>
               <select name="extraFormat" className="input" defaultValue="16:9"><option value="16:9">Yatay 16:9 sürüm de üret (ek AI maliyeti yok)</option><option value="">Yalnızca dikey 9:16</option></select>
             </label>

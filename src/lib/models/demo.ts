@@ -367,6 +367,9 @@ function demoStudioVideo(input: DemoInput, studio: import("@/lib/video/studio").
     "Slow cinematic dolly-in on the T-shirt worn by a model in a neon-lit city street at night, shallow depth of field, soft rim light.",
     "Handheld tracking shot of the model walking and turning towards camera, fabric moving naturally, warm sunset light, film look.",
     "Low-angle hero shot of the model on a rooftop at golden hour, slow orbit around the T-shirt, gentle wind, premium ad style.",
+    "Macro close-up gliding across the printed artwork and cotton texture of the T-shirt, drifting particles, cinematic grade.",
+    "Model turns away to reveal the back print, slow 180-degree camera orbit, haze and soft volumetric light.",
+    "Wide establishing shot of the model under a star-filled night sky with drifting smoke, slow crane down.",
   ];
   const scenes = Array.from({ length: studio.aiScenes }, (_, i) => ({
     id: `scene-${i + 1}`, mode: "generate_new" as const, format: "9:16" as const, duration_s: studio.sceneSeconds,
@@ -377,8 +380,8 @@ function demoStudioVideo(input: DemoInput, studio: import("@/lib/video/studio").
     kind: "ai_scene" as const, ref: sc.id, duration_s: studio.sceneSeconds, motion: "none" as const, scene_index: 0, source_start: 0, source_end: 0,
     on_screen_text: i === 0 ? `${t.newIn}: ${name}` : "",
   }));
-  if (photos[0]) parts.splice(1, 0, { kind: "product_photo", ref: photos[0], duration_s: 2.5, motion: "zoom_in", scene_index: 0, source_start: 0, source_end: 0, on_screen_text: "" });
-  if (studio.mode === "hybrid") {
+  if (photos[0] && !studio.aiOnly) parts.splice(1, 0, { kind: "product_photo", ref: photos[0], duration_s: 2.5, motion: "zoom_in", scene_index: 0, source_start: 0, source_end: 0, on_screen_text: "" });
+  if (studio.mode === "hybrid" && !studio.aiOnly) {
     const clip = ctx.media.find((m) => m.kind === "video" && m.analysis_status === "completed" && (m.analysis as any)?.scenes?.some((sc: any) => sc.end - sc.start >= 1.2));
     const sc = (clip?.analysis as any)?.scenes?.find((x: any) => x.end - x.start >= 1.2);
     if (clip && sc) {

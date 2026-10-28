@@ -7,6 +7,7 @@ import { photoMotionClip, renderEdit, type EditClip, type PhotoMotion } from "@/
 import { prepareReference, ReferenceQualityError, type ReferenceFidelity } from "@/lib/video/reference";
 import { parseStudioRequest } from "@/lib/video/studio";
 import { FfmpegError } from "@/lib/adapters/ffmpeg";
+import { log } from "@/lib/log";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
 import { getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
@@ -147,7 +148,7 @@ async function generateImage(ctx: RenderCtx, b: any, o: RenderOutcome) {
   if (!existing.created) { reportExisting(existing.job, b.id, o); return; }
   const job = existing.job;
   try {
-    await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
+    await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service, excludeJobId: job.id });
   } catch (err) {
     await discardJob(job.id);
     throw err;
@@ -269,6 +270,9 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         const want = Number(p.duration_s) > 0 ? Math.min(Number(p.duration_s), dur) : dur;
         specs.push({ file, start: 0, duration: Math.round(Math.max(0.5, want) * 1000) / 1000, sourceDuration: dur, text });
         sources.push(m);
+      } else if (p.kind !== "ai_scene" && studio?.aiOnly) {
+        o.failed.push(`${vid.id}: parça ${i + 1} (${p.kind}) — sahip yalnızca AI video sahneleri istedi; fotoğraf hareketi/slayt kullanılmaz`);
+        return;
       } else if (p.kind === "product_photo") {
         const m = await usableMedia(task.brand_id, String(p.ref)); // marka kapsamı
         if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) { o.failed.push(`${vid.id}: parça ${i + 1} — ürün fotoğrafı bulunamadı`); return; }
@@ -326,6 +330,7 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
           signal: ctx.signal, timeoutMs: Math.max(ctx.limits.taskTimeoutMs, ctx.limits.renderTimeoutMs ?? 0) - 15_000,
         });
       } catch (err) {
+        log("error", "render.ffmpeg_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, format: f.format, error: err });
         if (err instanceof FfmpegError) { o.failed.push(`${vid.id} (${f.format}): ${err.message}`); return; }
         throw err;
       }
@@ -338,7 +343,12 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-${f.format.replace(":", "x")}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
         tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
       });
-      if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) { o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`); return; }
+      if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) {
+        log("error", "media.save_failed", { taskId: task.id, ref: vid.id, assetId: video.id, expectedBytes: r.video.length, storedBytes: Number(video.size_bytes) });
+        o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`);
+        return;
+      }
+      log("info", "render.mp4_saved", { taskId: task.id, projectId: task.project_id, ref: vid.id, format: f.format, assetId: video.id, bytes: r.video.length, durationS: r.probe.duration, width: r.probe.width, height: r.probe.height, audio: r.audio, aiScenes: aiCount });
       o.produced.push(video.id, thumb.id);
       o.artifacts.push({
         ref: f.format === format ? vid.id : `${vid.id}@${f.format}`, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
@@ -455,7 +465,11 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   const existing = await q1<ProviderJob>(`SELECT * FROM provider_jobs WHERE idempotency_key = $1`, [key]);
   if (!existing) {
     const blocked = await paidAllowed(ctx, "video_generation");
-    if (blocked || !gen) { o.waiting.push(`${vid.id}: AI video üretimi — ${blocked ?? "sağlayıcı yapılandırılmamış"}`); return; }
+    if (blocked || !gen) {
+      log("warn", "gemini.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: blocked ?? "sağlayıcı yapılandırılmamış" });
+      o.waiting.push(`${vid.id}: AI video üretimi — ${blocked ?? "sağlayıcı yapılandırılmamış"}`);
+      return;
+    }
     assertTool("video", "video.generate");
     const seconds = omniDuration(vid.duration_s);
     const used = await q1<{ s: number }>(
@@ -464,6 +478,7 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       [task.project_id],
     );
     if ((used?.s ?? 0) + seconds > ctx.limits.maxVideoGenSeconds) {
+      log("warn", "gemini.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: "project_ai_seconds_limit", usedSeconds: used?.s ?? 0, seconds, limit: ctx.limits.maxVideoGenSeconds });
       o.waiting.push(`${vid.id}: proje AI video sınırı (${ctx.limits.maxVideoGenSeconds} sn) aşılacak; Ayarlar'dan sahip artırabilir`);
       return;
     }
@@ -490,17 +505,21 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length, reference_fidelity: fidelity } });
     if (!created) { reportExisting(job, vid.id, o); return; }
     try {
-      await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service });
+      await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service, excludeJobId: job.id });
     } catch (err) {
+      log("warn", "gemini.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: "budget", estimateUsd: est, error: err });
       await discardJob(job.id);
       throw err;
     }
     await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "estimated", amountUsd: est, units: { seconds }, providerJobId: job.id });
     try {
+      log("info", "gemini.submit", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, model: gen.model, seconds, aspect: omniAspect(vid.format), references: images.length, estimateUsd: est });
       const sub = await gen.submit({ prompt, durationS: seconds, aspectRatio: omniAspect(vid.format), images });
       await updateJob(job.id, { status: "submitted", external_id: sub.externalId, next_poll_ms: VIDEO_POLL_MS });
+      log("info", "gemini.submitted", { taskId: task.id, ref: vid.id, jobId: job.id, externalId: sub.externalId });
       o.inProgress.push(`${vid.id}: AI video sağlayıcıya gönderildi`);
     } catch (err) {
+      log("error", "gemini.submit_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: err });
       await providerError(ctx, job, gen.service, vid.id, err, o);
     }
     return;
@@ -519,9 +538,11 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
     try {
       p = await gen.poll(job.external_id!);
     } catch (err) {
+      log(err instanceof TransientError ? "warn" : "error", "gemini.poll_failed", { taskId: task.id, ref: vid.id, jobId: job.id, externalId: job.external_id, error: err });
       if (err instanceof TransientError) { await updateJob(job.id, { poll_inc: true, next_poll_ms: VIDEO_POLL_MS }); o.inProgress.push(`${vid.id}: durum sorgusu geçici hata verdi, tekrar denenecek`); return; }
       throw err;
     }
+    log("info", "gemini.poll", { taskId: task.id, ref: vid.id, jobId: job.id, state: p.state, poll: job.poll_count + 1 });
     if (p.state === "running") {
       if (job.poll_count + 1 >= VIDEO_MAX_POLLS) {
         await updateJob(job.id, { status: "failed", poll_inc: true, error: "Sağlayıcı işi süre sınırında tamamlanmadı." });
@@ -533,6 +554,7 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
       return;
     }
     if (p.state === "failed") {
+      log("error", "gemini.generation_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: p.error });
       await updateJob(job.id, { status: "failed", poll_inc: true, error: p.error });
       o.failed.push(`${vid.id}: ${p.error}`);
       return;
@@ -567,8 +589,10 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
     // Ses varsa korunur (dosya olduğu gibi saklanır); kayıtta yalnızca var/yok bilgisi tutulur
     await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio } });
     await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, providerJobId: job.id, note: "Yapılandırılmış saniye fiyatı; sağlayıcı faturasıyla doğrulanmadı" });
+    log("info", "gemini.video_saved", { taskId: task.id, ref: vid.id, jobId: job.id, assetId: asset.id, bytes: buf.length, durationS: probe.duration, width: probe.width, height: probe.height });
     o.produced.push(asset.id, thumb.id);
   } catch (err) {
+    log(err instanceof TransientError ? "warn" : "error", "gemini.download_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: err });
     if (err instanceof TransientError) { o.inProgress.push(`${vid.id}: indirme geçici hata verdi, tekrar denenecek`); return; }
     await updateJob(job.id, { status: "failed", error: (err as Error).message });
     o.failed.push(`${vid.id}: ${(err as Error).message}`);
