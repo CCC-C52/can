@@ -85,7 +85,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
           <div aria-hidden="true" className="absolute inset-x-0 bottom-0 -z-10 h-1/2 bg-gradient-to-t from-canvas/90 to-transparent" />
           <div className="flex h-full min-h-[22rem] flex-col justify-between gap-8 p-6 sm:p-8">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="eyebrow">{brand.name} HQ</span>
+              <span lang="en" className="eyebrow">{brand.name} HQ</span>
               <span className="text-xs text-muted">· {new Date().toLocaleDateString("tr-TR", { dateStyle: "long" })}</span>
               {brand.is_sample && <Badge tone="demo">ÖRNEK MARKA</Badge>}
             </div>

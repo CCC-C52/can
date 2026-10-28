@@ -74,12 +74,13 @@ resmî testten sonra.** Gizli değerler AES-256-GCM ile şifrelenir; ekrana, gü
   değiştirilmedi.
 
 ## 2. Testler (bu ortamda çalıştırıldı)
-- Birim + entegrasyon (gerçek PostgreSQL 16, S3 taklidi, ffmpeg): `npm test` — sonuç teslim raporunda.
+- Birim + entegrasyon (gerçek PostgreSQL 16, S3 taklidi, ffmpeg; CI varsayılan zaman aşımlarıyla): `npm test` → **36 dosya, 369/369 geçti**.
+  Yeni geçiş 006 için sabit geçiş listesi içeren testler (geçiş güvenliği, geçişler, sürüm hattı) güncellendi.
 - Yeni: `tests/hq-agency.test.ts` (strateji, kütüphane, uzmanlar, 6 entegrasyon **sahte sağlayıcıyla**, gizli değer sızıntısı,
   yürütme aşamaları, operasyon kaydı/yeniden deneme, kapak görseli kuralları, menü). Sahte sağlayıcı başarısı **canlı
   entegrasyon başarısı değildir**; hiçbir platform gerçek hesapla test edilmedi.
 - HTTP güvenlik: 43/43 (yeni: önizleme marka yalıtımı, oturumsuz erişim, PWA dosyalarında özel veri yok).
-- Erişilebilirlik (axe WCAG 2.1 A/AA, masaüstü 1360 px + telefon 390 px, yeni sayfalar dahil 42 sayfa): 0 sorun, yatay taşma yok.
+- Erişilebilirlik (axe WCAG 2.1 A/AA, masaüstü 1360 px + telefon 390 px; yeni sayfalar dahil 42 sayfa + ayrıntı sayfaları): 0 sorun, yatay taşma yok.
 - Uçtan uca (Video Stüdyosu → işleyici → MP4 → onay): 11/12 geçti; tarayıcıda H.264 oynatma bu Chromium'da test edilemedi
   (CI Google Chrome ile çalıştırır).
 - Üretim derlemesi, tip denetimi ve geçiş politikası (006 = yalnızca ekleme) temiz.

@@ -73,6 +73,8 @@ describe("Geçiş politikası (depo denetimi)", () => {
     expect(m004).toMatchObject({ class: "additive", policy: "none", requiresAuthorization: false, autoApprovable: true, findings: [] });
     // 005 (marka bilgi sistemi): yalnızca yeni tablo; otomatik onaylanabilir
     expect(r.migrations.find((m) => m.name === "005_brand_knowledge.sql")).toMatchObject({ class: "additive", policy: "none", requiresAuthorization: false, autoApprovable: true, findings: [] });
+    // 006 (PR stratejisi, operasyon kaydı, bilgi kütüphanesi): yalnızca yeni tablolar/indeksler; otomatik onaylanabilir
+    expect(r.migrations.find((m) => m.name === "006_pr_strategy_operations.sql")).toMatchObject({ class: "additive", policy: "none", requiresAuthorization: false, autoApprovable: true, findings: [] });
   });
 
   it("uygulanmış geçişin içeriği değişirse veya dosya silinirse hata", () => {
@@ -99,7 +101,7 @@ describe("Dağıtım kapısı: canlıda bekleyen geçişler", () => {
   it("003 sahip onayı olmadan engellenir; adıyla onay verilince izin (004 additive, onaysız ilerler)", () => {
     const blocked = evaluatePending(REPO, base, []);
     expect(blocked.allowed).toBe(false);
-    expect(blocked.pending).toEqual(["003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"]);
+    expect(blocked.pending).toEqual(["003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql"]);
     expect(blocked.blocked.map((b) => b.name)).toEqual(["003_brand_memory_research.sql"]);
     expect(blocked.blocked[0].reason).toMatch(/bir kerelik açık onayını/);
     const ok = evaluatePending(REPO, base, ["003_brand_memory_research.sql"]);
@@ -107,7 +109,7 @@ describe("Dağıtım kapısı: canlıda bekleyen geçişler", () => {
   });
 
   it("bekleyen geçiş yoksa izin; canlı şema sürümden yeniyse engel", () => {
-    const all = [...base, "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"];
+    const all = [...base, "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql"];
     expect(evaluatePending(REPO, all, [])).toMatchObject({ allowed: true, pending: [] });
     const ahead = evaluatePending(REPO, [...all, "099_future.sql"], []);
     expect(ahead.allowed).toBe(false);
@@ -115,7 +117,7 @@ describe("Dağıtım kapısı: canlıda bekleyen geçişler", () => {
   });
 
   it("gelecekteki additive geçiş onaysız otomatik ilerler; yıkıcı olan engellenir", () => {
-    const all = [...base, "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"];
+    const all = [...base, "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql"];
     const add = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_add_notes.sql"), "CREATE TABLE IF NOT EXISTS notes (id uuid PRIMARY KEY);\n"));
     expect(evaluatePending(add, all, [])).toMatchObject({ allowed: true, pending: ["090_add_notes.sql"] });
     const drop = tempMigrations((d) => fs.writeFileSync(path.join(d, "090_drop.sql"), "DROP TABLE brand_memory;\n"));
@@ -147,7 +149,7 @@ describe("Üretimde geçiş uygulama koruması (runMigrations)", () => {
     const pool = await fresh();
     await expect(runMigrations(dir, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).rejects.toThrow(/090_drop\.sql 'destructive'/);
     const applied = (await pool.query(`SELECT name FROM schema_migrations ORDER BY name`)).rows.map((r) => r.name);
-    expect(applied).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"]);
+    expect(applied).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql"]);
     expect((await pool.query(`SELECT to_regclass('brand_memory') AS t`)).rows[0].t).toBe("brand_memory");
     await pool.end();
   });
@@ -179,7 +181,7 @@ describe("Üretimde geçiş uygulama koruması (runMigrations)", () => {
 
   it("onaylı geçişler koruma açıkken uygulanır ve ikinci çalıştırma bir şey yapmaz (idempotent)", async () => {
     const pool = await fresh();
-    expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql"]);
+    expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: ["003_brand_memory_research.sql"] })).toEqual(["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql"]);
     // 003 uygulandıktan sonra onay kaldırılsa da sonraki dağıtımlar takılmaz
     expect(await runMigrations(REPO, { pool, enforcePolicy: true, authorizedMigrations: [] })).toEqual([]);
     await pool.end();

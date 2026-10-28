@@ -25,7 +25,7 @@ function BrandLockup({ brand, compact = false }: { brand: Brand | null; compact?
       ) : (
         <span className={`block max-w-full truncate font-display ${compact ? "max-w-[8rem] text-lg" : "text-[1.35rem]"} leading-tight font-semibold tracking-tight text-ink`}>{brand?.name ?? "AI Ops"}</span>
       )}
-      {!compact && <span className="eyebrow text-[9.5px] leading-tight">AI Operations Studio</span>}
+      {!compact && <span lang="en" className="eyebrow text-[9.5px] leading-tight">AI Operations Studio</span>}
     </Link>
   );
 }

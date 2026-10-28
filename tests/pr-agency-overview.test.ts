@@ -4,6 +4,7 @@ import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { q, q1 } from "@/lib/db/pool";
 import { createBrand } from "@/lib/services/brands";
 import { listPrEvidence, prAgencyOverview } from "@/lib/services/pr-agency";
+import { NAV } from "@/lib/nav";
 import {
   FRIBEE_COLLECTIONS, PR_EXTERNAL_ACTIONS, PhantomMetricError, WORKSTREAMS, attributedMetric, classifyFreshness, classifySignal,
   collectionsFor, dedupeEvidence, findUnattributedMetrics, normalizeUrl, prActionAllowed, scoreRelevance, workstreamAvailability,
@@ -134,7 +135,8 @@ describe("PR ajansı — çalışma alanları, koleksiyonlar ve gezinme", () => 
   });
 
   it("gezinmede /pr-ajansi bağlantısı var; sayfa mobilde taşmayı önleyen duyarlı düzen kullanır", () => {
-    expect(fs.readFileSync(path.resolve("src/components/nav.tsx"), "utf8")).toContain(`{ href: "/pr-ajansi", label: "PR Ajansı" }`);
+    // Menü verisi src/lib/nav.ts'te (istemci bileşeni bunu kullanır)
+    expect(NAV.some((n) => n.href === "/pr-ajansi" && n.label === "PR Ajansı")).toBe(true);
     const page = fs.readFileSync(path.resolve("src/app/(panel)/pr-ajansi/page.tsx"), "utf8");
     expect(page).toMatch(/overflow-x-auto/);
     expect(page).toMatch(/grid-cols-2 gap-3 lg:grid-cols-4/);

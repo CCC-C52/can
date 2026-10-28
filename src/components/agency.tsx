@@ -16,7 +16,7 @@ export function SpecialistCard({ s, states }: { s: Specialist; states: Map<strin
     <section className="card" aria-labelledby={`sp-${s.id}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="eyebrow mb-1">{s.title}</div>
+          <div lang="en" className="eyebrow mb-1">{s.title}</div>
           <h2 id={`sp-${s.id}`} className="font-display text-xl leading-snug">{s.titleTr}</h2>
         </div>
         <Badge tone={r.state === "ready" ? "ok" : r.state === "partial" ? "info" : "warn"}>{READY_LABEL[r.state]}</Badge>

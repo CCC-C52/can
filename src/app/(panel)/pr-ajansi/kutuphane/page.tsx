@@ -61,7 +61,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: SP }
           {entries.length === 0 ? <Empty icon="library">{term ? "Eşleşen kayıt yok." : "Kayıt yok."}</Empty> : entries.map((e) => (
             <article key={e.id} className="card">
               <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0"><div className="eyebrow mb-1">{e.category} · {KIND[e.kind].label}</div><h2 className="font-display text-xl leading-snug">{e.title}</h2></div>
+                <div className="min-w-0"><div className="eyebrow mb-1"><span lang="en">{e.category}</span> · {KIND[e.kind].label}</div><h2 className="font-display text-xl leading-snug">{e.title}</h2></div>
                 <Badge tone={e.kind === "ai_recommendation" ? "demo" : VERIFY[e.verification].tone}>{e.kind === "ai_recommendation" ? "Öneri" : VERIFY[e.verification].label}</Badge>
               </div>
               <p className="mt-3 text-sm leading-relaxed text-ink-soft">{e.summary}</p>
