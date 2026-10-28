@@ -303,6 +303,20 @@ export async function saveDerivedAsset(
   return asset!;
 }
 
+/**
+ * Doğrulanamayan, bu render'da YENİ üretilmiş türev dosyayı geri alır (kayıt + depo nesnesi). Yalnızca türev kökenli
+ * kayıtlar silinebilir; orijinal yüklemelere dokunulmaz. Medya arşivinde açılamayan "hayalet" video kalmaz.
+ */
+export async function discardDerivedAsset(brandId: string, id: string, db: Queryable = getPool()) {
+  const m = await q1<MediaAsset>(
+    `DELETE FROM media_assets WHERE id = $1 AND brand_id = $2 AND origin IN ('edited','composed','ai_generated','export') RETURNING *`,
+    [id, brandId],
+    db,
+  );
+  if (m) await getStorage().delete(m.storage_key).catch(() => {});
+  return !!m;
+}
+
 export async function listMedia(brandId: string, f: { kind?: string; origin?: string; productId?: string; search?: string } = {}, db: Queryable = getPool()) {
   return q<MediaAsset>(
     `SELECT * FROM media_assets WHERE brand_id = $1

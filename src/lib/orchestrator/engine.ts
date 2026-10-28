@@ -22,6 +22,8 @@ import { textModelMode } from "@/lib/models";
 import { createPlanTasks, type Task } from "./projects";
 import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation } from "./conversation";
 import { parseStudioRequest, type StudioRequest } from "@/lib/video/studio";
+import { describeSpec, parseVideoSpec, type VideoSpec } from "@/lib/video/spec";
+import { validateVideoPlan, type PlanValidation } from "@/lib/video/plan-validation";
 
 const LEASE_MS = 60_000;
 
@@ -606,9 +608,17 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
   const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined, studio ? studioBlock(studio, ctx.limits) : undefined].filter(Boolean).join("\n") || undefined;
   const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
-  const res = await callModel(ctx, agent, "work", schema, user,
-    { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [], studio },
-    16000, video?.images);
+  // Aynı talep için daha önce doğrulanmış (render'ı teknik nedenle başarısız olmuş) plan varsa yeniden kullanılır: model çağrısı yok
+  const cached = agent === "video" && !task.feedback ? await cachedVideoPlan(task, ctx.model.isDemo) : null;
+  if (cached) {
+    log("info", "video.plan_cache_hit", { taskId: task.id, projectId: task.project_id, cachedVersionId: cached.id });
+    await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:manager", action: "video.plan_cached", message: `Aynı talep için doğrulanmış önceki plan yeniden kullanıldı (model çağrısı yapılmadı; kaynak sürüm ${cached.version})` });
+  }
+  const res = cached
+    ? { data: cached.content, generator: `cache:${cached.id}`, isDemo: cached.is_demo, model: "cache" }
+    : await callModel(ctx, agent, "work", schema, user,
+      { instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, taskKey: task.key, videoTargets: video?.targets.map((t) => t.id) ?? [], studio },
+      16000, video?.images);
 
   await owned(task, workerId, async (c) => {
     let outputId = task.output_id;
@@ -631,22 +641,73 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
 
 // ---------------------------------------------------------------- Kalite kontrol
 
+/** Video planında yeniden üretim (yaratıcı revizyon) sınırı: teknik sorunlar AI'ya hiç gönderilmez, yaratıcı itiraz en fazla bir kez. */
+export const VIDEO_PLAN_MAX_REGENERATIONS = 1;
+/** Deterministik doğrulayıcının onardığı teknik denetimler: onarımdan sonra hâlâ başarısızsa AI'ya geri gönderilmez, görev başarısız olur. */
+const TECHNICAL_VIDEO_CHECKS = new Set(["Çekim seçimi", "Sahne bölümleri", "Sahne doğrulaması", "Altyazı zamanlaması"]);
+
 async function runReview(ctx: RunCtx, workerId: string) {
   const { task, limits } = ctx;
   if (!task.output_id) throw new PermanentError("İncelenecek çıktı yok.");
   assertTool("quality", "outputs.read");
-  const v = await getCurrentVersion(task.brand_id, task.output_id);
+  let v = await getCurrentVersion(task.brand_id, task.output_id);
   if (!v) throw new PermanentError("Çıktı sürümü bulunamadı.");
-  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality", includeAssetIds: referencedAssetIds(task.agent, v.content) });
   const studio = task.agent === "video" ? await studioForProject(task.brand_id, task.project_id) : null;
-  const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo, studio });
 
+  // 1) Video planı: DETERMİNİSTİK teknik doğrulama ve onarım (AI çağrısı yok). Onarılamayan teknik sorun → görev başarısız,
+  //    planlayıcıya "yaratıcı revizyon" olarak geri gönderilmez.
+  let validation: (PlanValidation & { spec: VideoSpec }) | null = null;
+  if (task.agent === "video") {
+    const r = await validateVideoVersion(task, workerId, v);
+    v = r.version;
+    validation = r.validation;
+    if (validation.errors.length) {
+      const checks = validationChecks(validation);
+      await assertOwned(task, workerId);
+      await setVersionQa(v.id, { verdict: "fail", score: 0, checks, required_changes: [], sources: ["plan-validator"], validated: false, technical: true, reviewed_version: v.version, generator: "local:plan-validator" });
+      log("error", "video.plan_invalid", { taskId: task.id, projectId: task.project_id, errors: validation.errors, repairs: validation.repairs });
+      await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "system", action: "qa.result", message: `Video planı teknik doğrulamadan geçemedi (AI'ya geri gönderilmedi): ${validation.errors.join("; ").slice(0, 400)}` });
+      await finish(task, workerId, { status: "failed", failureClass: "permanent", error: `Video planı teknik doğrulamadan geçemedi (yeniden üretime gönderilmedi): ${validation.errors.join("; ").slice(0, 600)}` });
+      return;
+    }
+  }
+
+  // 2) Kural denetimi (deterministik)
+  const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "quality", includeAssetIds: referencedAssetIds(task.agent, v.content) });
+  const rule = runRuleChecks(task.agent, v.content, brandCtx, { isDemo: v.is_demo, studio });
+  if (validation) rule.checks.unshift(...validationChecks(validation));
+  if (task.agent === "video") {
+    const technical = rule.checks.filter((c) => c.status === "fail" && TECHNICAL_VIDEO_CHECKS.has(c.name));
+    if (technical.length) {
+      await assertOwned(task, workerId);
+      await setVersionQa(v.id, { ...rule, sources: ["rules", "plan-validator"], validated: false, technical: true, reviewed_version: v.version, generator: "local" });
+      log("error", "video.plan_invalid", { taskId: task.id, projectId: task.project_id, checks: technical });
+      await finish(task, workerId, { status: "failed", failureClass: "permanent", error: `Video planı teknik doğrulamadan geçemedi (yeniden üretime gönderilmedi): ${technical.map((c) => c.detail).join("; ").slice(0, 600)}` });
+      return;
+    }
+  }
+
+  // 3) Model incelemesi (ücretli). Video planında kurallar geçmeden çağrılmaz: yeniden üretilecek planı incelemek boşa maliyettir.
+  // Önbellekten yeniden kullanılan plan önceki çalıştırmada model incelemesinden geçmişti: tekrar ücretli inceleme yapılmaz.
+  const cachedPlan = task.agent === "video" && String(v.generator ?? "").startsWith("cache:");
+  const skipModel = task.agent === "video" && (rule.verdict !== "pass" || cachedPlan);
   const user = userPromptParts({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
-  const res = await callModel(ctx, "quality", "review", QaReviewSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [], target: { agent: task.agent, content: v.content } }, 6000);
-  const merged = mergeReviews(rule, res.data as QaReview, res.isDemo ? "demo" : "model");
+  const res = skipModel ? null : await callModel(ctx, "quality", "review", QaReviewSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [], target: { agent: task.agent, content: v.content } }, 6000);
+  let merged = mergeReviews(rule, (res?.data as QaReview) ?? null, res ? (res.isDemo ? "demo" : "model") : "rules");
+  const maxRegen = task.agent === "video" ? Math.min(limits.maxRegenerations, VIDEO_PLAN_MAX_REGENERATIONS) : limits.maxRegenerations;
+  let advisory: string[] = [];
+  if (task.agent === "video" && merged.verdict !== "pass" && rule.verdict === "pass" && task.regen_count >= maxRegen) {
+    // Plan teknik ve marka kurallarından geçti; yalnızca model incelemesinin itirazı kaldı ve yeniden üretim hakkı bitti.
+    // İtirazlar insan onayına uyarı olarak taşınır; MP4 render edilir ve insan onayı olmadan hiçbir yerde kullanılmaz.
+    advisory = merged.required_changes;
+    merged = {
+      ...merged, verdict: "pass", required_changes: [],
+      checks: merged.checks.map((c) => (c.status === "fail" && !rule.checks.includes(c) ? { ...c, status: "warn" as const, detail: `${c.detail} (danışma: insan onayında değerlendirilecek)` } : c)),
+    };
+  }
   await assertOwned(task, workerId);
-  await setVersionQa(v.id, { ...merged, reviewed_version: v.version, generator: res.generator });
-  await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:quality", action: "qa.result", message: `Kalite kontrolü (${task.title}, sürüm ${v.version}): ${merged.verdict} — puan ${merged.score}` });
+  await setVersionQa(v.id, { ...merged, reviewed_version: v.version, generator: res?.generator ?? "local", ...(validation ? { validated: true, expected_duration: validation.expected, spec: validation.spec } : {}), ...(advisory.length ? { advisory } : {}) });
+  await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:quality", action: "qa.result", message: `Kalite kontrolü (${task.title}, sürüm ${v.version}): ${merged.verdict} — puan ${merged.score}${skipModel ? (cachedPlan && rule.verdict === "pass" ? " (önbellekteki plan; model incelemesi tekrarlanmadı)" : " (model incelemesi atlandı: kural denetimi geçmedi)") : ""}${advisory.length ? " (model itirazları insan onayına danışma olarak taşındı)" : ""}` });
 
   if (merged.verdict === "pass") {
     // Takip görevleri, görev "tamamlandı" olmadan ÖNCE oluşturulur; böylece rapor görevi render'ı beklemeden başlayamaz.
@@ -657,12 +718,67 @@ async function runReview(ctx: RunCtx, workerId: string) {
     await finish(task, workerId, { status: needsHuman ? "approval_pending" : "completed" });
     return;
   }
-  if (task.regen_count < limits.maxRegenerations) {
+  if (task.regen_count < maxRegen) {
     await finish(task, workerId, { status: "ready", phase: "generate", feedback: merged.required_changes.join("\n") || "Kalite kontrolünde sorun bulundu.", regenInc: true });
-    await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:manager", action: "task.regenerate", message: `Kalite kontrolünden geçemedi; yeniden üretime gönderildi (${task.regen_count + 1}/${limits.maxRegenerations})` });
+    await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "agent:manager", action: "task.regenerate", message: `Kalite kontrolünden geçemedi; yeniden üretime gönderildi (${task.regen_count + 1}/${maxRegen})` });
     return;
   }
   await finish(task, workerId, { status: "failed", failureClass: "quality", error: `Kalite kontrolünden geçemedi (yeniden üretim sınırı doldu): ${merged.required_changes.join("; ").slice(0, 500)}` });
+}
+
+/**
+ * Video planının deterministik doğrulaması: sahibin teslim şartları (süre, kapak) talimattan, kaynaklar veritabanından.
+ * Onarım yapıldıysa düzeltilmiş plan yeni sürüm olarak kaydedilir (render tam olarak bu sürümü uygular).
+ */
+async function validateVideoVersion(task: Task, workerId: string, v: OutputVersion) {
+  const project = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [task.project_id, task.brand_id]);
+  const spec = parseVideoSpec(project?.instruction, task.instruction);
+  const targets = await resolveVideoTargets(task.brand_id, `${task.instruction}\n${project?.instruction ?? ""}`);
+  const validation = { ...(await validateVideoPlan(task.brand_id, v.content, { spec, fallbackSourceIds: targets.explicit ? targets.assets.map((a) => a.id) : [] })), spec };
+  let version = v;
+  if (validation.changed && !validation.errors.length) {
+    await assertOwned(task, workerId);
+    version = await addVersion({ brandId: task.brand_id, outputId: v.output_id, content: validation.content, createdBy: "system:plan-validator", generator: "local:plan-validator", isDemo: v.is_demo });
+    log("info", "video.plan_repaired", { taskId: task.id, projectId: task.project_id, fromVersion: v.version, toVersion: version.version, repairs: validation.repairs });
+    await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: "system", action: "video.plan_repaired", message: `Video planı deterministik olarak düzeltildi (sürüm ${version.version}): ${validation.repairs.slice(0, 4).join("; ").slice(0, 400)}` });
+  }
+  return { version, validation };
+}
+
+function validationChecks(val: PlanValidation & { spec: VideoSpec }) {
+  const checks: { name: string; status: "pass" | "warn" | "fail"; detail: string }[] = [];
+  if (val.errors.length) checks.push({ name: "Plan doğrulaması (deterministik)", status: "fail", detail: val.errors.join("; ") });
+  else checks.push({
+    name: "Plan doğrulaması (deterministik)", status: val.repairs.length ? "warn" : "pass",
+    detail: val.repairs.length ? `Otomatik düzeltildi (AI'ya geri gönderilmedi): ${val.repairs.slice(0, 8).join("; ")}` : "Kaynak kimlikleri, sahne sınırları ve süre veritabanındaki analizle doğrulandı.",
+  });
+  const spec = describeSpec(val.spec);
+  const durations = Object.entries(val.expected).map(([id, d]) => `${id}: ${d} sn`).join(", ");
+  if (spec || durations) checks.push({ name: "Teslim şartı", status: val.errors.length ? "fail" : "pass", detail: [spec && `İstenen: ${spec}`, durations && `Hesaplanan çıktı: ${durations}`].filter(Boolean).join(". ") });
+  return checks;
+}
+
+/**
+ * Önbellekteki doğrulanmış video planı: aynı marka, aynı sahip talimatı, kural+doğrulamadan geçmiş, insan tarafından
+ * reddedilmemiş ve render'ı teknik nedenle tamamlanamamış (başarısız/bağlantı bekleyen/iptal) son plan. Tekrar denemede
+ * ücretli planlama çağrısı yapılmaz; render başarılı olmuşsa yeni talep yeni plan demektir (önbellek kullanılmaz).
+ */
+async function cachedVideoPlan(task: Task, isDemo: boolean) {
+  return q1<OutputVersion>(
+    `SELECT v.* FROM output_versions v
+       JOIN outputs o ON o.id = v.output_id AND o.current_version = v.version
+       JOIN tasks t ON t.id = o.task_id AND t.agent = 'video' AND t.kind = 'work'
+       JOIN projects p ON p.id = t.project_id
+       JOIN projects cur ON cur.id = $2
+     WHERE o.brand_id = $1 AND t.project_id <> $2 AND v.is_demo = $3
+       AND lower(regexp_replace(btrim(p.instruction), '\\s+', ' ', 'g')) = lower(regexp_replace(btrim(cur.instruction), '\\s+', ' ', 'g'))
+       AND v.qa_report->>'verdict' = 'pass' AND (v.qa_report->>'validated') = 'true'
+       AND v.created_at > now() - interval '7 days'
+       AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.output_version_id = v.id AND a.revoked_at IS NULL AND a.decision = 'rejected')
+       AND EXISTS (SELECT 1 FROM tasks r WHERE r.project_id = t.project_id AND r.key = t.key || '-render' AND r.status IN ('failed','waiting_connection','cancelled'))
+     ORDER BY v.created_at DESC LIMIT 1`,
+    [task.brand_id, task.project_id, isDemo],
+  );
 }
 
 async function createCalendarEntries(task: Task, v: OutputVersion) {

@@ -178,7 +178,7 @@ describe("Video Stüdyosu → Gemini Omni → karma reklam MP4 (sahte sağlayıc
     // 6 + 2,5 + 6 sn sahne/fotoğraf + 3 sn hareketli logo kapanışı − 3 geçiş × 0,5 sn ≈ 16 sn
     expect(pr.duration).toBeGreaterThan(14.5);
     expect(pr.duration).toBeLessThan(17.5);
-    expect(pr.audio_codec).toBeNull(); // müzik seçilmedi: sessiz
+    expect(pr.audio_codec).toBe("aac"); // müzik seçilmedi: sessiz AAC izi
     const job = await q<any>(`SELECT request, status FROM provider_jobs WHERE task_id = $1 ORDER BY created_at`, [render.id]);
     expect(job.map((j) => [j.status, j.request.mode])).toEqual([["succeeded", "image_to_video"], ["succeeded", "image_to_video"]]);
     // Referans orijinal netlikte gitti (yeniden kodlama yok); bayt kayda yazılmadı

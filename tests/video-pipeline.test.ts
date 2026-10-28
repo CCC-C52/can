@@ -155,7 +155,7 @@ describe("Video kurgu hattı — gerçek MP4 kabul testi", () => {
     expect(p.video_codec).toBe("h264");
     expect([p.width, p.height]).toEqual([1080, 1920]);
     expect(Math.abs(p.duration - expected)).toBeLessThan(0.2);
-    expect(p.has_audio).toBe(false); // bilinçli sessiz çıktı
+    expect(p.audio_codec).toBe("aac"); // kaynak ses kaldırıldı; sessiz AAC izi (platform uyumluluğu)
     await assertDecodes(file);
 
     // Her bölümün ortasındaki kare, KAYNAK videonun o sahnesinin rengini taşır; ekran metni yalnızca metinli bölümlerde

@@ -6,7 +6,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { renderEdit, validateRender } from "@/lib/adapters/video-edit";
+import { renderEdit } from "@/lib/adapters/video-edit";
+import { verifyVideoFile } from "@/lib/video/verify";
 
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smoke-"));
@@ -35,13 +36,13 @@ async function main() {
     });
     const out = path.join(dir, "out.mp4");
     fs.writeFileSync(out, r.video);
-    await validateRender(out, { width: 1080, height: 1920, duration: r.expectedDuration });
+    const ev = await verifyVideoFile(out, { width: 1080, height: 1920, duration: r.expectedDuration, audio: "aac" });
     const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height,pix_fmt:format=duration", "-of", "json", out], { encoding: "utf8" }));
     const s = probe.streams[0];
     if (s.codec_name !== "h264" || s.width !== 1080 || s.height !== 1920) throw new Error(`Beklenmeyen çıktı: ${JSON.stringify(s)}`);
     const dur = Number(probe.format.duration);
     if (Math.abs(dur - r.expectedDuration) > 0.5) throw new Error(`Süre ${dur} sn, beklenen ${r.expectedDuration} sn`);
-    console.log(JSON.stringify({ ok: true, ffmpeg: ffmpegVersion, codec: s.codec_name, width: s.width, height: s.height, pixFmt: s.pix_fmt, durationS: dur, expectedS: r.expectedDuration, bytes: r.video.length, overlays: r.overlays.length }));
+    console.log(JSON.stringify({ ok: true, ffmpeg: ffmpegVersion, codec: s.codec_name, width: s.width, height: s.height, pixFmt: s.pix_fmt, audio: ev.audio_codec, decoded: ev.decoded, durationS: dur, expectedS: r.expectedDuration, bytes: r.video.length, overlays: r.overlays.length }));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

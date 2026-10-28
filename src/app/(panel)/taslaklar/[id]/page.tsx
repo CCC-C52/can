@@ -10,7 +10,7 @@ import type { ExternalAction } from "@/lib/services/gateway";
 import type { ProviderJob } from "@/lib/services/provider-jobs";
 import { getLimits } from "@/lib/settings";
 import { agentName } from "@/lib/agents/registry";
-import { APPROVAL_SCOPE_LABEL, EXTERNAL_ACTION_STATUS_LABEL, PROVIDER_JOB_STATUS_LABEL, TASK_STATUS_LABEL } from "@/lib/labels";
+import { APPROVAL_SCOPE_LABEL, EXTERNAL_ACTION_STATUS_LABEL, PROVIDER_JOB_STATUS_LABEL, TASK_STATUS_LABEL, generatorLabel } from "@/lib/labels";
 import { Badge, DemoBadge, Flash, PageHeader, dt } from "@/components/ui";
 import { AutoRefresh, IdempotencyField, SubmitButton } from "@/components/client";
 import { StructuredEditor } from "@/components/editor";
@@ -57,7 +57,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
     <div>
       <PageHeader
         title={out.title}
-        subtitle={<span className="flex flex-wrap items-center gap-1">{agentName(out.agent)} · sürüm {shown.version}/{current.version} · {shown.created_by === "user" ? "kullanıcı düzenlemesi" : shown.generator}
+        subtitle={<span className="flex flex-wrap items-center gap-1">{agentName(out.agent)} · sürüm {shown.version}/{current.version} · {shown.created_by === "user" ? "kullanıcı düzenlemesi" : generatorLabel(shown.generator)}
           {shown.is_demo && <DemoBadge />}
           {task && <Link href={`/gorevler/${task.id}`} className="underline">Görev: {TASK_STATUS_LABEL[task.status]}</Link>}
           {out.project_id && <Link href={`/projeler/${out.project_id}`} className="underline">Proje</Link>}
@@ -161,13 +161,16 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
               {videoArtifacts.map((a) => (
                 <dl key={a.asset_id} className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
                   <dt className="text-muted">Dosya</dt><dd><Link className="text-brand underline" href={`/medya/${a.asset_id}`}>Aç</Link> · <a className="text-brand underline" href={`/api/media/${a.asset_id}/file?download=1`} download>İndir</a></dd>
-                  <dt className="text-muted">Kodek</dt><dd>{a.codec} (H.264, yuv420p)</dd>
+                  <dt className="text-muted">Kodek</dt><dd>{a.codec}{a.profile ? ` ${a.profile}` : ""}{a.pix_fmt ? ` · ${a.pix_fmt}` : ""}</dd>
                   <dt className="text-muted">Çözünürlük</dt><dd>{a.width}×{a.height}</dd>
                   <dt className="text-muted">Süre</dt><dd>{Number(a.duration_s).toFixed(2)} sn</dd>
                   <dt className="text-muted">Boyut</dt><dd>{(a.bytes / 1e6).toFixed(1)} MB</dd>
                   <dt className="text-muted">Bölüm / kaynak</dt><dd>{a.segments} bölüm · {a.sources} kaynak video</dd>
-                  <dt className="text-muted">Ses</dt><dd>{a.audio}</dd>
-                  <dt className="text-muted">Doğrulama</dt><dd>{a.decoded ? "ffprobe + baştan sona çözme başarılı" : "—"}</dd>
+                  <dt className="text-muted">Ses</dt><dd>{a.audio}{a.audio_codec ? ` (${a.audio_codec})` : ""}</dd>
+                  {a.target_duration && <><dt className="text-muted">İstenen süre</dt><dd>{a.target_duration.min !== null ? `${a.target_duration.min}–` : "en fazla "}{a.target_duration.max} sn</dd></>}
+                  {a.cover_source_s != null && <><dt className="text-muted">Kapak</dt><dd>kaynağın {a.cover_source_s}. saniyesi</dd></>}
+                  <dt className="text-muted">Doğrulama</dt><dd>{a.decoded ? "ffprobe + baştan sona çözme başarılı" : "—"}{a.storage_verified ? " · depodan geri okundu, sha256 eşleşti" : ""}</dd>
+                  {a.sha256 && <><dt className="text-muted">SHA-256</dt><dd className="break-all font-mono">{a.sha256}</dd></>}
                 </dl>
               ))}
             </section>
@@ -246,7 +249,7 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
               const a = approvals.find((x) => x.output_version_id === v.id && !x.revoked_at);
               return (
                 <li key={v.id} className="flex flex-wrap items-center justify-between gap-1">
-                  <Link href={`/taslaklar/${id}?v=${v.version}`} className={v.version === shown.version ? "font-semibold" : "text-brand"}>v{v.version} · {v.created_by === "user" ? "kullanıcı" : v.generator}</Link>
+                  <Link href={`/taslaklar/${id}?v=${v.version}`} className={v.version === shown.version ? "font-semibold" : "text-brand"}>v{v.version} · {v.created_by === "user" ? "kullanıcı" : generatorLabel(v.generator)}</Link>
                   <span className="flex gap-1">{v.is_demo && <DemoBadge />}{v.qa_report && <Badge tone={v.qa_report.verdict === "pass" ? "ok" : "bad"}>QA</Badge>}{a && <Badge tone={a.decision === "approved" ? "ok" : "bad"}>{a.decision === "approved" ? "Onaylı" : "Ret"}</Badge>}</span>
                   <span className="w-full text-xs text-muted">{dt(v.created_at)} · {v.content_hash.slice(0, 10)}</span>
                 </li>

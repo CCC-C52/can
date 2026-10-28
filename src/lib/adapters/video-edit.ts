@@ -3,13 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { probeVideo, extractFrame, type VideoProbe } from "@/lib/media-analysis/video";
 import { composeDesign } from "./compose";
-import { FfmpegError, assertDecodes, runFfmpeg, withFfmpegSlot } from "./ffmpeg";
+import { FfmpegError, runFfmpeg, withFfmpegSlot } from "./ffmpeg";
+import { verifyVideoFile, type VideoEvidence } from "@/lib/video/verify";
 
 
 // Mevcut çekimleri yerel ffmpeg ile düzenler (AI değildir): bölüm seçme, hedef formata sığdırma/doldurma,
 // kesme veya geçiş (xfade), giriş/kapanış kartı, altyazı ve ekran metni, kapak karesi. Orijinal dosyalar değiştirilmez.
-// Kaynak sesler kaldırılır; sahip lisanslı bir müzik dosyası verirse tek ses izi olarak eklenir (giriş/çıkış geçişi,
-// yayın ses seviyesi). Çıktı ffprobe ile doğrulanmadan başarılı sayılmaz.
+// Kaynak sesler (lisansı bilinmeyen) her zaman kaldırılır. Sahip lisanslı bir müzik dosyası verirse tek ses izi olarak
+// eklenir (giriş/çıkış geçişi, yayın ses seviyesi); vermezse platform uyumluluğu için SESSİZ bir AAC izi eklenir.
+// Çıktı ffprobe (H.264, yuv420p, boyut, süre, AAC) ve tam çözme ile doğrulanmadan başarılı sayılmaz.
 
 export const EDIT_SIZES: Record<string, [number, number]> = { "9:16": [1080, 1920], "1:1": [1080, 1080], "4:5": [1080, 1350], "16:9": [1920, 1080] };
 // Her girdi için: yalnızca yerel dosya protokolü ve tek iş parçacıklı çözücü (çok girdili kurguda bellek tasarrufu)
@@ -42,12 +44,20 @@ export type EditArgs = {
   onScreenText?: Cue[];         // üst bölgede
   intro?: { text: string; bg: string; accent: string; font?: string; logo?: Buffer };
   outro?: { text: string; bg: string; accent: string; font?: string; logo?: Buffer; animated?: boolean };
-  /** Sahibin lisanslı müziği (yerel dosya). Video boyunca çalar; kısaysa döngüye alınır. */
+  /** Sahibin lisanslı müziği (yerel dosya). Video boyunca çalar; kısaysa döngüye alınır. Yoksa sessiz AAC izi eklenir. */
   music?: { file: string; startS?: number };
+  /** Kapak karesi: kaynak dosyadaki zaman (sn). Verilmezse çıktının ilk bölümünden otomatik seçilir. */
+  cover?: { file: string; t: number };
   timeoutMs?: number;
   signal?: AbortSignal;
 };
-export type EditResult = { video: Buffer; thumbnail: Buffer; srt: string; probe: VideoProbe; expectedDuration: number; overlays: Cue[]; audio: "music" | "none" };
+export type EditResult = {
+  video: Buffer; thumbnail: Buffer; srt: string; probe: VideoProbe; expectedDuration: number; overlays: Cue[]; audio: "music" | "silent";
+  /** Deterministik doğrulama kanıtı (ffprobe + tam çözme). */
+  evidence: VideoEvidence;
+  /** Kapak karesinin kaynaktaki zamanı; otomatik seçildiyse null. */
+  coverSourceS: number | null;
+};
 
 export function toSrt(subs: Cue[]): string {
   const ts = (s: number) => {
@@ -198,25 +208,43 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
       vf.push(`subtitles=filename='${escFilterPath(p)}':force_style='FontName=DejaVu Sans,FontSize=${tall ? 12 : 14},Bold=1,Outline=1.5,Shadow=0,Alignment=6,MarginV=${tall ? 40 : 16},MarginL=16,MarginR=16'`);
     }
     vf.push("format=yuv420p");
-    const silent = path.join(dir, args.music ? "silent.mp4" : "out.mp4");
-    await run([...SAFE_INPUT, "-i", joined, "-vf", vf.join(","), "-an", ...enc(23), "-movflags", "+faststart", silent], "son kodlama");
-    let out = silent;
+    // Kaynak ses kullanılmaz. Müzik yoksa video süresince sessiz AAC izi (48 kHz stereo) eklenir.
+    const base = path.join(dir, args.music ? "video-only.mp4" : "out.mp4");
+    const silentAudio = args.music ? [] : ["-f", "lavfi", "-t", total.toFixed(3), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"];
+    const audioOut = args.music ? ["-an"] : ["-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-shortest"];
+    await run([...SAFE_INPUT, "-i", joined, ...silentAudio, "-vf", vf.join(","), ...audioOut, ...enc(23), "-movflags", "+faststart", base], "son kodlama");
+    let out = base;
     if (args.music) {
       // Müzik: video süresine kesilir (kısaysa döngü), 0,5 sn giriş ve 1,5 sn çıkış geçişi, yayın ses seviyesi (-14 LUFS)
       out = path.join(dir, "out.mp4");
       const fadeOut = Math.max(0, total - 1.5);
-      await run([...SAFE_INPUT, "-i", silent, "-stream_loop", "-1", "-ss", String(Math.max(0, args.music.startS ?? 0)), ...SAFE_INPUT, "-i", args.music.file,
+      await run([...SAFE_INPUT, "-i", base, "-stream_loop", "-1", "-ss", String(Math.max(0, args.music.startS ?? 0)), ...SAFE_INPUT, "-i", args.music.file,
         "-filter_complex", `[1:a]atrim=0:${total.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.5,afade=t=out:st=${fadeOut.toFixed(3)}:d=1.5,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]`,
         "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-t", total.toFixed(3), "-movflags", "+faststart", out], "müzik");
     }
 
-    // 4) Doğrulama
-    const probe = await validateRender(out, { width: W, height: H, duration: total });
-    if (args.music && !probe.audio_codec) throw new FfmpegError("Müzik izi çıktıya eklenemedi.");
-    await assertDecodes(out, left());
-    const firstClip = parts.findIndex((p) => p.clip !== null);
-    const thumbnail = await extractFrame(out, Math.min(total - 0.1, tl.starts[firstClip] + Math.min(1, parts[firstClip].dur / 2)), W);
-    return { video: await fs.readFile(out), thumbnail, srt: srt + (topSrt.trim() ? `\n${topSrt}` : ""), probe, expectedDuration: Math.round(total * 100) / 100, overlays: top, audio: args.music ? "music" : "none" };
+    // 4) Doğrulama: H.264 + yuv420p + boyut + süre + AAC ses izi, ardından baştan sona hatasız çözme
+    const evidence = await verifyVideoFile(out, { width: W, height: H, duration: total, audio: "aac" }, left());
+    const probe = await probeVideo(out);
+    let thumbnail: Buffer;
+    let coverSourceS: number | null = null;
+    if (args.cover) {
+      // Kapak: kaynak dosyanın istenen anı, çıktıyla aynı kadrajda (fit/fill)
+      const t = Math.max(0, args.cover.t);
+      const jpg = path.join(dir, "cover.jpg");
+      const coverNorm = framing === "fill" ? norm : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+      await run(["-ss", t.toFixed(3), ...SAFE_INPUT, "-i", args.cover.file, "-frames:v", "1", "-vf", `${coverNorm},setsar=1`, "-q:v", "3", jpg], "kapak karesi");
+      thumbnail = await fs.readFile(jpg);
+      if (!thumbnail.length) throw new FfmpegError(`Kapak karesi kaynağın ${t} sn anından çıkarılamadı.`);
+      coverSourceS = Math.round(t * 1000) / 1000;
+    } else {
+      const firstClip = parts.findIndex((p) => p.clip !== null);
+      thumbnail = await extractFrame(out, Math.min(total - 0.1, tl.starts[firstClip] + Math.min(1, parts[firstClip].dur / 2)), W);
+    }
+    return {
+      video: await fs.readFile(out), thumbnail, srt: srt + (topSrt.trim() ? `\n${topSrt}` : ""), probe, expectedDuration: Math.round(total * 100) / 100,
+      overlays: top, audio: args.music ? "music" : "silent", evidence, coverSourceS,
+    };
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -255,15 +283,4 @@ export async function photoMotionClip(args: { photo: string; out: string; format
 
 async function partDuration(file: string) {
   return Math.round((await probeVideo(file)).duration * 1000) / 1000;
-}
-
-/** Çıktı doğrulaması: H.264, hedef boyut, beklenen süre (±0,5 sn). Uymayan dosya başarı sayılmaz. */
-export async function validateRender(file: string, expect: { width: number; height: number; duration: number }) {
-  const probe = await probeVideo(file);
-  const problems: string[] = [];
-  if (probe.video_codec !== "h264") problems.push(`codec ${probe.video_codec}`);
-  if (probe.width !== expect.width || probe.height !== expect.height) problems.push(`boyut ${probe.width}x${probe.height} (beklenen ${expect.width}x${expect.height})`);
-  if (Math.abs(probe.duration - expect.duration) > 0.5) problems.push(`süre ${probe.duration} sn (beklenen ${expect.duration.toFixed(2)})`);
-  if (problems.length) throw new Error(`Render doğrulaması başarısız: ${problems.join(", ")}`);
-  return probe;
 }

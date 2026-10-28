@@ -131,3 +131,11 @@ export const PROVIDER_JOB_STATUS_LABEL: Record<string, string> = {
   unknown: "Sonuç bilinmiyor",
   cancelled: "İptal",
 };
+
+/** Çıktı sürümünü üreten kaynağın okunur adı (ham değer: demo, anthropic:<model>, local:plan-validator, cache:<sürüm>). */
+export function generatorLabel(g: string | null | undefined) {
+  if (!g) return "bilinmiyor";
+  if (g === "local:plan-validator") return "deterministik plan doğrulayıcı (AI değil)";
+  if (g.startsWith("cache:")) return "önbellekteki doğrulanmış plan (model çağrısı yok)";
+  return g;
+}

@@ -24,7 +24,7 @@ Video seçimi → Analiz kapısı → Doğrulanmış sahneler → Kurgu planı (
 5. **Plan (`segments`).** Her bölüm şunları içerir: `asset_id`, `scene_index`, `source_start`, `source_end` (KAYNAK zamanı), `on_screen_text`.
    - Çıktı zaman çizelgesi bölümlerin sırasından hesaplanır.
    - `subtitles` alanı çıktı zamanını kullanır. Kaynak ve çıktı zamanı ayrı tutulur.
-6. **Kalite kontrolü** (`qa-rules.ts`). Şunlar reddedilir:
+6. **Kalite kontrolü.** Önce deterministik plan doğrulaması ve onarımı yapılır (`src/lib/video/plan-validation.ts`; ayrıntı: `docs/VIDEO_ENGINE_P0.md`). Teknik sorunlar AI'ya geri gönderilmez; video planında yaratıcı revizyon hakkı en fazla 1'dir. Ardından kurallar (`qa-rules.ts`) şunları reddeder:
    - bölüm yok;
    - dosya arşivde yok veya video değil;
    - görsel analiz yok;
@@ -41,11 +41,12 @@ Video seçimi → Analiz kapısı → Doğrulanmış sahneler → Kurgu planı (
      2. kesme: akış kopyasıyla birleştirme / geçiş: ikişer ikişer xfade;
      3. son geçiş: ekran metni (üst güvenli alan), altyazı (alt güvenli alan), H.264 High, 30 fps, `+faststart`.
    - Ürünün görünümü değiştirilmez: varsayılan çerçeveleme `fit` (kırpma yok), renk/ton filtresi yok.
-   - **Ses bilinçli olarak kaldırılır** (müzik/ses lisansı manuel karar).
+   - **Kaynak ses bilinçli olarak kaldırılır** (lisansı bilinmez). Sahibin lisanslı müziği yoksa platform uyumluluğu için sessiz AAC izi eklenir.
+   - Talimatta kapak anı varsa ("kapak 1.5. saniyeden") kapak karesi kaynak videonun o anından alınır.
 8. **Çıktı doğrulaması.**
-   - ffprobe: codec h264, hedef boyut, beklenen süre (±0,5 sn).
+   - ffprobe: codec h264, yuv420p, hedef boyut, beklenen süre (±0,5 sn) ve talimattaki süre aralığı, AAC ses izi.
    - Baştan sona hatasız çözme: `ffmpeg -v error -f null`.
-   - Depoda varlık ve boyut eşleşmesi.
+   - Depodan GERİ okunan kopyada boyut + sha256 eşleşmesi ve aynı ffprobe/çözme kontrolleri; geçmeyen yeni kayıt geri alınır.
    - Medya kaydı (`origin=edited`, `generation_method=ffmpeg_edit`, proje ve köken bağı) ve çıktı sürümüne bağlanma.
    - Render sonucu (codec, çözünürlük, süre, bayt, bölüm sayısı) görev kaydında tutulur ve çıktı sayfasında gösterilir.
 9. **Onay.**
@@ -83,7 +84,7 @@ Karşılaştırma: önceki tek aşamalı hatta 5 bölümlük geçişli kurgu ffm
 ## Bilinen sınırlamalar
 
 - ffmpeg sahne skoru ağırlıklı olarak parlaklık farkına dayanır. Parlaklığı benzer iki farklı renkli sahne arasındaki kesme kaçırılabilir; iki sahne tek sahne sayılır. Plan yine o sahnenin içinde kalır, uydurma sahne üretilmez.
-- Ses korunmaz (bilinçli sessiz çıktı); müzik ve seslendirme eklenmez.
+- Kaynak ses korunmaz; çıktıda sessiz AAC izi bulunur (sahibin lisanslı müziği seçildiyse o kullanılır). Seslendirme eklenmez.
 - En fazla 12 bölüm.
 - Docker imajındaki ffmpeg 5.1'dir; testler ffmpeg 6.1 ile yapıldı. Kullanılan filtre ve seçenekler (xfade, subtitles, concat demuxer, `-filter_complex_threads`, `-x264-params`) 5.1'de mevcuttur, ancak 5.1 ile çalıştırılmadı.
 - Gerçek FriBee videosu bu ortamda test edilmedi (erişim ve yetki yok). Kabul testi aynı özelliklerde (14,68 sn, 1080x1920, sesli) sentetik bir MP4 kullanır.

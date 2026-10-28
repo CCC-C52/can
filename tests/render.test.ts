@@ -413,7 +413,9 @@ describe("ffmpeg kurgu", () => {
     expect(Math.abs(r.probe.duration - expected)).toBeLessThan(0.5);
     const tf = path.join(dir, "out.mp4");
     await fs.writeFile(tf, r.video);
-    expect((await probeVideo(tf)).has_audio).toBe(false);
+    expect((await probeVideo(tf)).audio_codec).toBe("aac"); // kaynak ses yok; platform uyumluluğu için sessiz AAC izi
+    expect(r.audio).toBe("silent");
+    expect(r.evidence).toMatchObject({ video_codec: "h264", pix_fmt: "yuv420p", audio_codec: "aac", decoded: true });
     const thumb = await sharp(r.thumbnail).metadata();
     expect(thumb.format).toBe("jpeg");
     // fill: kenarlarda siyah bant yok (kırmızı çekim kareyi doldurur)

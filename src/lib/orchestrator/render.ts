@@ -6,7 +6,10 @@ import { composeDesign } from "@/lib/adapters/compose";
 import { photoMotionClip, renderEdit, type EditClip, type PhotoMotion } from "@/lib/adapters/video-edit";
 import { prepareReference, ReferenceQualityError, type ReferenceFidelity } from "@/lib/video/reference";
 import { parseStudioRequest } from "@/lib/video/studio";
-import { FfmpegError } from "@/lib/adapters/ffmpeg";
+import { FfmpegError, assertDecodes } from "@/lib/adapters/ffmpeg";
+import { parseVideoSpec, type VideoSpec } from "@/lib/video/spec";
+import { VideoVerificationError, verifyStoredBytes, verifyStoredVideo, type VideoEvidence, type VideoExpectation } from "@/lib/video/verify";
+import { EDIT_SIZES } from "@/lib/adapters/video-edit";
 import { log } from "@/lib/log";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
@@ -16,7 +19,8 @@ import { assertTool } from "@/lib/agents/registry";
 import { PermanentError, TransientError } from "@/lib/models/types";
 import { capabilityReady } from "@/lib/services/connections";
 import { assertBudget, recordCost } from "@/lib/services/costs";
-import { getMedia, readMediaFile, saveDerivedAsset, type MediaAsset } from "@/lib/services/media";
+import { discardDerivedAsset, getMedia, readMediaFile, saveDerivedAsset, type MediaAsset } from "@/lib/services/media";
+import { sha256 } from "@/lib/security/crypto";
 import { claimJob, discardJob, updateJob, type ProviderJob } from "@/lib/services/provider-jobs";
 import { probeVideo, extractFrame } from "@/lib/media-analysis/video";
 import { getStorage } from "@/lib/storage";
@@ -36,7 +40,13 @@ export type RenderOutcome = {
   failed: string[];       // kesin başarısız öğeler
   uncertain: string[];    // sonucu bilinmeyen ücretli gönderimler
   notes: string[];
-  artifacts: { ref: string; asset_id: string; codec: string | null; width: number; height: number; duration_s: number; bytes: number; segments: number; sources: number; decoded: boolean; audio: string; ai_scenes?: number; product_photos?: number; outro?: boolean }[];
+  artifacts: {
+    ref: string; asset_id: string; codec: string | null; width: number; height: number; duration_s: number; bytes: number; segments: number; sources: number; decoded: boolean; audio: string;
+    ai_scenes?: number; product_photos?: number; outro?: boolean;
+    /** Depodan geri okunan kopyanın deterministik doğrulama kanıtı (ffprobe + tam çözme + sha256). */
+    pix_fmt?: string | null; profile?: string | null; audio_codec?: string | null; sha256?: string; storage_verified?: boolean; cover_source_s?: number | null;
+    target_duration?: { min: number | null; max: number | null } | null;
+  }[];
 };
 
 const VIDEO_POLL_MS = 15_000;
@@ -72,6 +82,61 @@ async function brandStyle(brandId: string) {
     logo: logoAsset ? await readMediaFile(logoAsset) : undefined,
     logoId: logoAsset?.id ?? null,
   };
+}
+
+/** Sahibin teslim şartları: proje talimatı + video uzmanı görevinin talimatı (render görevinin kendi talimatı değil). */
+async function videoSpecFor(task: Task): Promise<VideoSpec> {
+  const r = await q1<{ project: string | null; work: string | null }>(
+    `SELECT p.instruction AS project, t.instruction AS work FROM projects p LEFT JOIN outputs o ON o.id = $3 AND o.brand_id = p.brand_id
+       LEFT JOIN tasks t ON t.id = o.task_id WHERE p.id = $1 AND p.brand_id = $2`,
+    [task.project_id, task.brand_id, task.output_id],
+  );
+  return parseVideoSpec(r?.project, r?.work);
+}
+
+/**
+ * MP4'ü medya arşivine kaydeder ve depodan GERİ okuyarak doğrular (boyut, sha256, ffprobe, tam çözme).
+ * Depo yazma/okuma hatası geçicidir (görev yeniden dener); doğrulama hatası kalıcıdır. Doğrulanamayan YENİ kayıt geri alınır.
+ */
+async function saveVerifiedVideo(task: Task, args: Parameters<typeof saveDerivedAsset>[1], expect: VideoExpectation): Promise<{ asset: MediaAsset; evidence: VideoEvidence & { sha256: string } } | { error: string }> {
+  const existed = await q1(`SELECT 1 FROM media_assets WHERE brand_id = $1 AND sha256 = $2`, [task.brand_id, sha256(args.buffer)]);
+  let asset: MediaAsset;
+  try {
+    asset = await saveDerivedAsset(task.brand_id, args);
+  } catch (err) {
+    log("error", "media.save_failed", { taskId: task.id, projectId: task.project_id, filename: args.filename, bytes: args.buffer.length, error: err });
+    throw new TransientError(`Depolama hatası: ${args.filename} kaydedilemedi (${(err as Error).message})`);
+  }
+  try {
+    const evidence = await verifyStoredVideo(asset, expect);
+    log("info", "media.verified", { taskId: task.id, assetId: asset.id, bytes: evidence.bytes, sha256: evidence.sha256, codec: evidence.video_codec, pixFmt: evidence.pix_fmt, audio: evidence.audio_codec, durationS: evidence.duration_s });
+    return { asset, evidence };
+  } catch (err) {
+    if (!existed) await discardDerivedAsset(task.brand_id, asset.id).catch(() => {});
+    log("error", "media.verify_failed", { taskId: task.id, projectId: task.project_id, assetId: asset.id, discarded: !existed, error: err });
+    if (err instanceof VideoVerificationError) return { error: err.message };
+    throw new TransientError(`Depolama doğrulaması yapılamadı: ${(err as Error).message}`);
+  }
+}
+
+async function saveDerived(task: Task, args: Parameters<typeof saveDerivedAsset>[1]) {
+  try {
+    return await saveDerivedAsset(task.brand_id, args);
+  } catch (err) {
+    log("error", "media.save_failed", { taskId: task.id, projectId: task.project_id, filename: args.filename, error: err });
+    throw new TransientError(`Depolama hatası: ${args.filename} kaydedilemedi (${(err as Error).message})`);
+  }
+}
+
+/** Kaynak dosyayı depodan indirir. Dosya depoda yoksa açık bir neden döner (kalıcı); okuma hatası geçicidir (görev yeniden dener). */
+async function downloadSource(m: MediaAsset, file: string): Promise<string | null> {
+  try {
+    await getStorage().downloadToFile(m.storage_key, file);
+    return null;
+  } catch (err) {
+    if (!(await getStorage().exists(m.storage_key).catch(() => true))) return `kaynak dosya depoda bulunamadı: ${m.filename} (${m.id})`;
+    throw new TransientError(`Kaynak dosya depodan okunamadı (${m.filename}): ${(err as Error).message}`);
+  }
 }
 
 async function paidAllowed(ctx: RenderCtx, capability: "image_generation" | "video_generation"): Promise<string | null> {
@@ -256,7 +321,8 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     const sources: MediaAsset[] = [];
     const fileOf = async (m: MediaAsset, name: string) => {
       const f = path.join(dir, `${name}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "bin"}`);
-      await getStorage().downloadToFile(m.storage_key, f);
+      const missing = await downloadSource(m, f);
+      if (missing) throw new PermanentError(`${vid.id}: ${missing}`);
       return f;
     };
     for (let i = 0; i < parts.length; i++) {
@@ -331,29 +397,28 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         });
       } catch (err) {
         log("error", "render.ffmpeg_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, format: f.format, error: err });
-        if (err instanceof FfmpegError) { o.failed.push(`${vid.id} (${f.format}): ${err.message}`); return; }
+        if (err instanceof FfmpegError || err instanceof VideoVerificationError) { o.failed.push(`${vid.id} (${f.format}): ${err.message}`); return; }
         throw err;
       }
+      const [W, H] = EDIT_SIZES[f.format] ?? EDIT_SIZES["9:16"];
       const common = { taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId, productId: sources.find((x) => x.product_id)?.product_id ?? null, sourceAssetIds: [...new Set(sources.map((x) => x.id))] };
-      const video = await saveDerivedAsset(task.brand_id, {
+      const saved = await saveVerifiedVideo(task, {
         ...common, buffer: r.video, filename: `${vid.id}-${f.format.replace(":", "x")}.mp4`, origin: "edited", generationMethod: "ffmpeg_edit",
-        tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: `format:${f.format}`, source: "system" }, { tag: `AI sahne:${aiCount}`, source: "system" }, { tag: `ürün fotoğrafı:${photoCount}`, source: "system" }, { tag: "karma reklam kurgusu", source: "system" }, ...(music ? [{ tag: "lisanslı müzik", source: "system" }] : [])],
-      });
-      const thumb = await saveDerivedAsset(task.brand_id, {
+        tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: `format:${f.format}`, source: "system" }, { tag: `AI sahne:${aiCount}`, source: "system" }, { tag: `ürün fotoğrafı:${photoCount}`, source: "system" }, { tag: "karma reklam kurgusu", source: "system" }, ...(music ? [{ tag: "lisanslı müzik", source: "system" }] : [{ tag: "sessiz AAC", source: "system" }])],
+      }, { width: W, height: H, audio: "aac" });
+      if ("error" in saved) { o.failed.push(`${vid.id} (${f.format}): ${saved.error}`); return; }
+      const { asset: video, evidence } = saved;
+      const thumb = await saveDerived(task, {
         ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-${f.format.replace(":", "x")}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
         tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
       });
-      if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) {
-        log("error", "media.save_failed", { taskId: task.id, ref: vid.id, assetId: video.id, expectedBytes: r.video.length, storedBytes: Number(video.size_bytes) });
-        o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`);
-        return;
-      }
-      log("info", "render.mp4_saved", { taskId: task.id, projectId: task.project_id, ref: vid.id, format: f.format, assetId: video.id, bytes: r.video.length, durationS: r.probe.duration, width: r.probe.width, height: r.probe.height, audio: r.audio, aiScenes: aiCount });
+      log("info", "render.mp4_saved", { taskId: task.id, projectId: task.project_id, ref: vid.id, format: f.format, assetId: video.id, bytes: evidence.bytes, durationS: evidence.duration_s, width: evidence.width, height: evidence.height, pixFmt: evidence.pix_fmt, audio: evidence.audio_codec, aiScenes: aiCount, sha256: evidence.sha256 });
       o.produced.push(video.id, thumb.id);
       o.artifacts.push({
-        ref: f.format === format ? vid.id : `${vid.id}@${f.format}`, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
-        bytes: r.video.length, segments: clips.length, ai_scenes: aiCount, product_photos: photoCount, sources: sources.length, decoded: true, outro: !!outro,
-        audio: r.audio === "music" ? "lisanslı müzik (AAC, -14 LUFS)" : "sessiz (müzik seçilmedi)",
+        ref: f.format === format ? vid.id : `${vid.id}@${f.format}`, asset_id: video.id, codec: evidence.video_codec, width: evidence.width, height: evidence.height, duration_s: evidence.duration_s,
+        bytes: evidence.bytes, segments: clips.length, ai_scenes: aiCount, product_photos: photoCount, sources: sources.length, decoded: evidence.decoded, outro: !!outro,
+        audio: r.audio === "music" ? "lisanslı müzik (AAC, -14 LUFS)" : "sessiz AAC izi (müzik seçilmedi)",
+        pix_fmt: evidence.pix_fmt, profile: evidence.profile, audio_codec: evidence.audio_codec, sha256: evidence.sha256, storage_verified: true,
       });
     }
   } finally {
@@ -386,7 +451,8 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
           const analysis = await latestAnalysis(task.brand_id, m.id);
           if (!analysis || analysis.status !== "completed") { o.failed.push(`${vid.id}: bölüm ${i + 1} — ${m.filename} için tamamlanmış görsel analiz yok; sahne kullanılamaz`); return; }
           const file = path.join(dir, `src-${sources.length}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
-          await getStorage().downloadToFile(m.storage_key, file);
+          const missing = await downloadSource(m, file);
+          if (missing) { o.failed.push(`${vid.id}: bölüm ${i + 1} — ${missing}`); return; }
           const probe = await probeVideo(file); // gerçek süre: veritabanındaki meta veriye güvenilmez
           src = { file, duration: probe.duration, scenes: analysis.result?.local?.scenes ?? [] };
           files.set(m.id, src);
@@ -407,7 +473,7 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       // Eski biçim (sahne bölümü olmayan planlar): dosya başına tek bölüm
       for (let i = 0; i < (vid.selected_asset_ids ?? []).length; i++) {
         const m = await usableMedia(task.brand_id, vid.selected_asset_ids[i]);
-        if (!m || m.kind !== "video") continue;
+        if (!m || m.kind !== "video") { o.notes.push(`${vid.id}: kaynak ${vid.selected_asset_ids[i]} bulunamadı, atlandı`); continue; }
         const seg = vid.script?.[i];
         const file = path.join(dir, `src${i}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
         await getStorage().downloadToFile(m.storage_key, file);
@@ -419,39 +485,48 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
       }
       if (clips.length) o.notes.push(`${vid.id}: eski plan biçimi (sahne bölümü yok); dosya başına tek bölüm kullanıldı.`);
     }
-    if (!clips.length) { o.notes.push(`${vid.id}: kullanılabilir çekim yok.`); return; }
+    if (!clips.length) { o.failed.push(`${vid.id}: kullanılabilir çekim yok (kaynak video bulunamadı veya bu markaya ait değil)`); return; }
+    const spec = await videoSpecFor(task);
+    const [W, H] = EDIT_SIZES[vid.format] ?? EDIT_SIZES["9:16"];
     const style = await brandStyle(task.brand_id);
     const card = (text: string) => (clean(text).trim() ? { text: clean(text), bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined);
+    // Kapak: sahibin istediği an (ilk kaynak videoda), kaynak süresine sınırlı; istenmediyse çıktıdan otomatik
+    const cover = spec.coverSourceS !== null
+      ? { file: clips[0].file, t: Math.min(spec.coverSourceS, Math.max(0, (clips[0].sourceDuration ?? spec.coverSourceS) - 0.05)) }
+      : undefined;
+    log("info", "render.ffmpeg_start", { taskId: task.id, projectId: task.project_id, ref: vid.id, segments: clips.length, format: vid.format, spec });
     let r;
     try {
       r = await renderEdit({
         clips, format: vid.format, framing: vid.framing ?? "fit", transition: vid.transition ?? "cut",
         subtitles: (vid.subtitles ?? []).map((s: any) => ({ start: s.start, end: s.end, text: clean(s.text) })),
-        intro: card(vid.intro_text), outro: card(vid.outro_text),
+        intro: card(vid.intro_text), outro: card(vid.outro_text), cover,
         signal: ctx.signal, timeoutMs: Math.max(ctx.limits.taskTimeoutMs, ctx.limits.renderTimeoutMs ?? 0) - 15_000,
       });
     } catch (err) {
-      if (err instanceof FfmpegError) { o.failed.push(`${vid.id}: ${err.message}`); return; }
-      throw err; // zaman aşımı/iptal: görev motoru sınıflandırır
+      log("error", "render.ffmpeg_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, error: err });
+      if (err instanceof FfmpegError || err instanceof VideoVerificationError) { o.failed.push(`${vid.id}: ${err.message}`); return; }
+      throw err; // zaman aşımı/iptal: görev motoru sınıflandırır (zaman aşımı yeniden denenir, plan yeniden üretilmez)
     }
     const common = { taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId, productId: sources[0].product_id, sourceAssetIds: sources.map((s) => s.id) };
-    const video = await saveDerivedAsset(task.brand_id, {
+    // Teslim şartı: H.264, yuv420p, hedef boyut, AAC (sessiz) ses izi ve sahibin istediği süre aralığı — depodaki kopya üzerinde
+    const saved = await saveVerifiedVideo(task, {
       ...common, buffer: r.video, filename: `${vid.id}-${vid.format.replace(":", "x")}.mp4`, origin: "edited", generationMethod: "ffmpeg_edit",
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "ffmpeg kurgu (AI değil)", source: "system" }, { tag: `geçiş:${vid.transition ?? "cut"}`, source: "system" }, { tag: `bölüm:${clips.length}`, source: "system" }],
-    });
-    const thumb = await saveDerivedAsset(task.brand_id, {
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "ffmpeg kurgu (AI değil)", source: "system" }, { tag: `geçiş:${vid.transition ?? "cut"}`, source: "system" }, { tag: `bölüm:${clips.length}`, source: "system" }, { tag: "kaynak ses kaldırıldı, sessiz AAC", source: "system" }],
+    }, { width: W, height: H, audio: "aac", minDuration: spec.minSeconds, maxDuration: spec.maxSeconds });
+    if ("error" in saved) { o.failed.push(`${vid.id}: ${saved.error}`); return; }
+    const { asset: video, evidence } = saved;
+    const thumb = await saveDerived(task, {
       ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }, ...(r.coverSourceS !== null ? [{ tag: `kapak:kaynak ${r.coverSourceS} sn`, source: "system" }] : [])],
     });
-    // Dosyanın depoda gerçekten bulunduğu ve boyutunun eşleştiği doğrulanır (kayıt + depo tutarlılığı)
-    if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) {
-      o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`);
-      return;
-    }
+    log("info", "render.mp4_saved", { taskId: task.id, projectId: task.project_id, ref: vid.id, assetId: video.id, bytes: evidence.bytes, durationS: evidence.duration_s, width: evidence.width, height: evidence.height, pixFmt: evidence.pix_fmt, audio: evidence.audio_codec, sha256: evidence.sha256 });
     o.produced.push(video.id, thumb.id);
     o.artifacts.push({
-      ref: vid.id, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
-      bytes: r.video.length, segments: clips.length, sources: sources.length, decoded: true, audio: "kaldırıldı (bilinçli sessiz çıktı)",
+      ref: vid.id, asset_id: video.id, codec: evidence.video_codec, width: evidence.width, height: evidence.height, duration_s: evidence.duration_s,
+      bytes: evidence.bytes, segments: clips.length, sources: sources.length, decoded: evidence.decoded, audio: "sessiz AAC izi (kaynak ses kaldırıldı)",
+      pix_fmt: evidence.pix_fmt, profile: evidence.profile, audio_codec: evidence.audio_codec, sha256: evidence.sha256, storage_verified: true, cover_source_s: r.coverSourceS,
+      target_duration: spec.maxSeconds !== null ? { min: spec.minSeconds, max: spec.maxSeconds } : null,
     });
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
@@ -575,13 +650,26 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
     } catch (err) {
       throw new PermanentError(`İndirilen dosya geçerli bir video değil: ${(err as Error).message}`);
     }
+    try {
+      await assertDecodes(file);
+    } catch (err) {
+      throw new PermanentError(`İndirilen AI videosu hatasız çözülemedi: ${(err as Error).message}`);
+    }
     const est = job.cost_estimated_usd === null ? null : Number(job.cost_estimated_usd);
-    const asset = await saveDerivedAsset(task.brand_id, {
+    const existed = await q1(`SELECT 1 FROM media_assets WHERE brand_id = $1 AND sha256 = $2`, [task.brand_id, sha256(buf)]);
+    const asset = await saveDerived(task, {
       buffer: buf, filename: `${vid.id}-ai.mp4`, origin: "ai_generated", generationMethod: `ai_video:${gen.model}`, sourceAssetIds: [],
       productId: null, taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" }],
     });
-    const thumb = await saveDerivedAsset(task.brand_id, {
+    try {
+      await verifyStoredBytes(asset, path.join(dir, "stored.mp4"));
+    } catch (err) {
+      if (!existed) await discardDerivedAsset(task.brand_id, asset.id).catch(() => {});
+      if (err instanceof VideoVerificationError) throw new TransientError(`AI videosu depoda doğrulanamadı: ${err.message}`);
+      throw new TransientError(`AI videosunun depo doğrulaması yapılamadı: ${(err as Error).message}`);
+    }
+    const thumb = await saveDerived(task, {
       buffer: await extractFrame(file, Math.min(1, probe.duration / 2), probe.display_width), filename: `${vid.id}-ai-kapak.jpg`, origin: "ai_generated",
       generationMethod: "ffmpeg_thumbnail", sourceAssetIds: [asset.id], taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video kapak karesi", source: "system" }],
@@ -593,7 +681,12 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
     o.produced.push(asset.id, thumb.id);
   } catch (err) {
     log(err instanceof TransientError ? "warn" : "error", "gemini.download_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: err });
-    if (err instanceof TransientError) { o.inProgress.push(`${vid.id}: indirme geçici hata verdi, tekrar denenecek`); return; }
+    // Geçici indirme/depolama hatası: sağlayıcıya yeniden ücretli gönderim yapılmaz; yalnızca indirme tekrarlanır (sınırlı)
+    if (err instanceof TransientError && job.poll_count + 1 < VIDEO_MAX_POLLS) {
+      await updateJob(job.id, { poll_inc: true, next_poll_ms: VIDEO_POLL_MS });
+      o.inProgress.push(`${vid.id}: indirme/depolama geçici hata verdi, tekrar denenecek`);
+      return;
+    }
     await updateJob(job.id, { status: "failed", error: (err as Error).message });
     o.failed.push(`${vid.id}: ${(err as Error).message}`);
   } finally {
