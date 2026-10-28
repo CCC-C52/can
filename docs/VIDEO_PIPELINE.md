@@ -94,3 +94,23 @@ Karşılaştırma: önceki tek aşamalı hatta 5 bölümlük geçişli kurgu ffm
 npm test -- tests/video-pipeline.test.ts   # gerçek MP4 uçtan uca kabul testi + birimler
 npm test -- tests/render.test.ts           # kurgu, geçiş, kart, altyazı, eski plan reddi
 ```
+
+## Uzun reklam, müzik ve iki format (Video Stüdyosu)
+
+- **AI sahneleri:** Bir talepte en çok 8 AI sahnesi, her biri 3–10 sn (Gemini Omni, 720p).
+  - Toplam AI saniyesi proje sınırıyla (Ayarlar → `maxVideoGenSeconds`) ve bütçe sınırlarıyla korunur.
+  - Uzun reklamlarda video uzmanı sahneleri çeşitlendirir: geniş plan, hareket, baskı/kumaş yakın çekimi, arka baskı, kahraman ürün çekimi. Arada gerçek ürün fotoğrafı parçaları kullanır.
+- **Lisanslı müzik:**
+  - MP3, WAV ve M4A desteklenir.
+  - Medya arşivine yalnızca kullanım hakkı “Lisanslı” veya “Marka sahibi” seçilerek yüklenebilir.
+  - Video boyunca çalar; kısaysa döngüye alınır.
+  - 0,5 sn giriş ve 1,5 sn çıkış geçişi uygulanır, ses seviyesi -14 LUFS'ye getirilir. Ses izi AAC, 192 kbps.
+  - Kaynak videoların kendi sesleri kaldırılır.
+- **Ek format:** “Yatay 16:9 sürüm de üret” seçilirse aynı AI sahnelerinden ikinci kurgu oluşur; ek AI isteği yapılmaz.
+  - Dikey sahneler bulanık arka planla doldurulur, ürün kırpılmaz.
+  - Ürün fotoğrafı hareket klipleri her format için ayrı üretilir.
+- **Kapanış:** Logolu kapanış kartı 3 sn sürer; karanlıktan belirir ve yavaşça yakınlaşır.
+- **Sınırlar:**
+  - 4K yok: AI sahneleri 720p, kurgu çıktısı en çok 1080p.
+  - Ayrı 3D/parçacık efekt motoru yok; bu tür efektler AI sahnesi istemiyle istenir.
+  - Müzik ritmine otomatik kesme yok.

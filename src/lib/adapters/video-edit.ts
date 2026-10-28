@@ -8,7 +8,8 @@ import { FfmpegError, assertDecodes, runFfmpeg, withFfmpegSlot } from "./ffmpeg"
 
 // Mevcut çekimleri yerel ffmpeg ile düzenler (AI değildir): bölüm seçme, hedef formata sığdırma/doldurma,
 // kesme veya geçiş (xfade), giriş/kapanış kartı, altyazı ve ekran metni, kapak karesi. Orijinal dosyalar değiştirilmez.
-// Ses kaldırılır (müzik/ses lisansı manuel karardır). Çıktı ffprobe ile doğrulanmadan başarılı sayılmaz.
+// Kaynak sesler kaldırılır; sahip lisanslı bir müzik dosyası verirse tek ses izi olarak eklenir (giriş/çıkış geçişi,
+// yayın ses seviyesi). Çıktı ffprobe ile doğrulanmadan başarılı sayılmaz.
 
 export const EDIT_SIZES: Record<string, [number, number]> = { "9:16": [1080, 1920], "1:1": [1080, 1080], "4:5": [1080, 1350], "16:9": [1920, 1080] };
 // Her girdi için: yalnızca yerel dosya protokolü ve tek iş parçacıklı çözücü (çok girdili kurguda bellek tasarrufu)
@@ -16,7 +17,9 @@ const SAFE_INPUT = ["-protocol_whitelist", "file,pipe", "-threads", "1"];
 const FPS = 30;
 export const TRANSITION_S = 0.5;
 export const CARD_S = 2;
-export const MAX_SEGMENTS = 12;
+export const MAX_SEGMENTS = 24;
+/** Hareketli kapanış kartı süresi (logo yakınlaşarak belirir). */
+export const OUTRO_ANIMATED_S = 3;
 const FFMPEG_THREADS = Math.max(1, Math.min(8, Number(process.env.FFMPEG_THREADS ?? 2) || 2));
 /**
  * Renk doğruluğu: HD video oynatıcılar (Instagram, Chrome, Safari) etiketsiz dosyayı BT.709 kabul eder. Görüntüler
@@ -32,16 +35,19 @@ export type EditClip = { file: string; start: number; duration: number; sourceDu
 export type EditArgs = {
   clips: EditClip[];
   format: string;
-  framing?: "fit" | "fill";
+  /** fit: kenar boşluğu; fill: kırpma; blur: kaynak bulanık arka planla kadrajı doldurur, ürün kırpılmaz (farklı en-boy oranı için). */
+  framing?: "fit" | "fill" | "blur";
   transition?: "cut" | "fade";
   subtitles?: Cue[];            // alt bölgede
   onScreenText?: Cue[];         // üst bölgede
   intro?: { text: string; bg: string; accent: string; font?: string; logo?: Buffer };
-  outro?: { text: string; bg: string; accent: string; font?: string; logo?: Buffer };
+  outro?: { text: string; bg: string; accent: string; font?: string; logo?: Buffer; animated?: boolean };
+  /** Sahibin lisanslı müziği (yerel dosya). Video boyunca çalar; kısaysa döngüye alınır. */
+  music?: { file: string; startS?: number };
   timeoutMs?: number;
   signal?: AbortSignal;
 };
-export type EditResult = { video: Buffer; thumbnail: Buffer; srt: string; probe: VideoProbe; expectedDuration: number; overlays: Cue[] };
+export type EditResult = { video: Buffer; thumbnail: Buffer; srt: string; probe: VideoProbe; expectedDuration: number; overlays: Cue[]; audio: "music" | "none" };
 
 export function toSrt(subs: Cue[]): string {
   const ts = (s: number) => {
@@ -100,7 +106,9 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
   // fit: ürün kırpılmaz (kenar boşluğu); fill: kadraj doldurulur (kenarlar kırpılabilir). Renk/ton işlemi yapılmaz.
   const norm = framing === "fill"
     ? `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`
-    : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+    : framing === "blur"
+      ? `split=2[bg][fg];[bg]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=24:2,eq=brightness=-0.08[b];[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2`
+      : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "render-"));
   try {
     // 1) Ara dosyalar
@@ -110,8 +118,15 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
       const png = path.join(dir, `${name}.png`);
       await fs.writeFile(png, img.buffer);
       const out = path.join(dir, `${name}.mp4`);
-      await run([...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-t", CARD_S.toFixed(3), "-i", png,
-        "-vf", `scale=${W}:${H}:out_color_matrix=bt709:out_range=tv,setsar=1,format=yuv420p`, "-an", ...enc(18), "-t", CARD_S.toFixed(3), out], `${name} kartı`);
+      const animated = name === "outro" && (card as EditArgs["outro"])?.animated;
+      const secs = animated ? OUTRO_ANIMATED_S : CARD_S;
+      const frames = Math.round(secs * FPS);
+      // Hareketli kapanış: kart (logo + marka adı) kararmadan belirir ve yavaşça yakınlaşır (1.00 → 1.08)
+      const vf = animated
+        ? `scale=${W * 2}:${H * 2},zoompan=z='1+0.08*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${W}x${H}:fps=${FPS},fade=t=in:st=0:d=0.6,scale=out_color_matrix=bt709:out_range=tv,setsar=1,format=yuv420p`
+        : `scale=${W}:${H}:out_color_matrix=bt709:out_range=tv,setsar=1,format=yuv420p`;
+      await run([...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-t", secs.toFixed(3), "-i", png,
+        "-vf", vf, "-an", ...enc(18), "-t", secs.toFixed(3), out], `${name} kartı`);
       parts.push({ file: out, dur: await partDuration(out), clip: null });
     };
     if (args.intro?.text.trim()) await addCard(args.intro, "intro");
@@ -123,7 +138,8 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
       }
       const out = path.join(dir, `part${i}.mp4`);
       await run([...SAFE_INPUT, "-ss", c.start.toFixed(3), "-t", c.duration.toFixed(3), "-i", c.file,
-        "-vf", `${norm},setsar=1,fps=${FPS},format=yuv420p`, "-an", ...enc(18), "-t", c.duration.toFixed(3), out], `bölüm ${i + 1}`);
+        ...(framing === "blur" ? ["-filter_complex", `[0:v]${norm},setsar=1,fps=${FPS},format=yuv420p[v]`, "-map", "[v]"] : ["-vf", `${norm},setsar=1,fps=${FPS},format=yuv420p`]),
+        "-an", ...enc(18), "-t", c.duration.toFixed(3), out], `bölüm ${i + 1}`);
       const d = await partDuration(out);
       if (d < 0.2) throw new FfmpegError(`Bölüm ${i + 1}: kaynaktan görüntü alınamadı (${d} sn).`);
       parts.push({ file: out, dur: d, clip: i });
@@ -182,15 +198,25 @@ async function renderStaged(args: EditArgs): Promise<EditResult> {
       vf.push(`subtitles=filename='${escFilterPath(p)}':force_style='FontName=DejaVu Sans,FontSize=${tall ? 12 : 14},Bold=1,Outline=1.5,Shadow=0,Alignment=6,MarginV=${tall ? 40 : 16},MarginL=16,MarginR=16'`);
     }
     vf.push("format=yuv420p");
-    const out = path.join(dir, "out.mp4");
-    await run([...SAFE_INPUT, "-i", joined, "-vf", vf.join(","), "-an", ...enc(23), "-movflags", "+faststart", out], "son kodlama");
+    const silent = path.join(dir, args.music ? "silent.mp4" : "out.mp4");
+    await run([...SAFE_INPUT, "-i", joined, "-vf", vf.join(","), "-an", ...enc(23), "-movflags", "+faststart", silent], "son kodlama");
+    let out = silent;
+    if (args.music) {
+      // Müzik: video süresine kesilir (kısaysa döngü), 0,5 sn giriş ve 1,5 sn çıkış geçişi, yayın ses seviyesi (-14 LUFS)
+      out = path.join(dir, "out.mp4");
+      const fadeOut = Math.max(0, total - 1.5);
+      await run([...SAFE_INPUT, "-i", silent, "-stream_loop", "-1", "-ss", String(Math.max(0, args.music.startS ?? 0)), ...SAFE_INPUT, "-i", args.music.file,
+        "-filter_complex", `[1:a]atrim=0:${total.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.5,afade=t=out:st=${fadeOut.toFixed(3)}:d=1.5,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]`,
+        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-t", total.toFixed(3), "-movflags", "+faststart", out], "müzik");
+    }
 
     // 4) Doğrulama
     const probe = await validateRender(out, { width: W, height: H, duration: total });
+    if (args.music && !probe.audio_codec) throw new FfmpegError("Müzik izi çıktıya eklenemedi.");
     await assertDecodes(out, left());
     const firstClip = parts.findIndex((p) => p.clip !== null);
     const thumbnail = await extractFrame(out, Math.min(total - 0.1, tl.starts[firstClip] + Math.min(1, parts[firstClip].dur / 2)), W);
-    return { video: await fs.readFile(out), thumbnail, srt: srt + (topSrt.trim() ? `\n${topSrt}` : ""), probe, expectedDuration: Math.round(total * 100) / 100, overlays: top };
+    return { video: await fs.readFile(out), thumbnail, srt: srt + (topSrt.trim() ? `\n${topSrt}` : ""), probe, expectedDuration: Math.round(total * 100) / 100, overlays: top, audio: args.music ? "music" : "none" };
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

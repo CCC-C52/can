@@ -7,10 +7,16 @@
 export const STUDIO_MODES = ["archive", "ai", "hybrid"] as const;
 export type StudioMode = (typeof STUDIO_MODES)[number];
 /** collection: sahibin seçtiği FriBee koleksiyonu (tema anahtarı; ör. "anime"). Referanslar bu koleksiyondan olmalı. */
-export type StudioRequest = { mode: StudioMode; aiScenes: number; sceneSeconds: number; photoIds: string[]; collection?: string | null };
+export type StudioRequest = {
+  mode: StudioMode; aiScenes: number; sceneSeconds: number; photoIds: string[]; collection?: string | null;
+  /** Sahibin lisanslı müziği (medya arşivinde ses dosyası). Marka kapsamında ayrıca doğrulanır. */
+  musicId?: string | null;
+  /** Ek çıktı formatı: aynı sahnelerden ikinci kurgu (ek AI maliyeti yok). */
+  extraFormat?: "16:9" | null;
+};
 const COLLECTION_RE = /Koleksiyon:\s*(space_alien|music|anime|save_the_bee)\b/i;
 
-export const STUDIO_MAX_AI_SCENES = 3;
+export const STUDIO_MAX_AI_SCENES = 8;
 export const STUDIO_MAX_PHOTOS = 3;
 
 export const STUDIO_MODE_LABEL: Record<StudioMode, string> = {
@@ -24,6 +30,8 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 export function studioDirectiveLines(req: StudioRequest, photos: { id: string; filename: string }[]): string[] {
   const lines = [`Stüdyo modu: ${req.mode}${req.mode === "archive" ? "" : ` (AI sahne: ${req.aiScenes} × ${req.sceneSeconds} sn)`}`];
   if (req.collection) lines.push(`Koleksiyon: ${req.collection}`);
+  if (req.musicId) lines.push(`Müzik: [id:${req.musicId}]`);
+  if (req.extraFormat) lines.push(`Ek format: ${req.extraFormat}`);
   if (photos.length) lines.push(`Ürün referans fotoğrafları: ${photos.map((p) => `${p.filename.replace(/[[\]\n]/g, "")} [id:${p.id}]`).join(", ")}`);
   return lines;
 }
@@ -38,7 +46,9 @@ export function parseStudioRequest(text: string | null | undefined): StudioReque
   const aiScenes = mode === "archive" ? 0 : Math.min(STUDIO_MAX_AI_SCENES, Math.max(1, Number(m[2] ?? 2)));
   const sceneSeconds = mode === "archive" ? 0 : Math.min(10, Math.max(3, Number(m[3] ?? 6)));
   const collection = COLLECTION_RE.exec(text ?? "")?.[1]?.toLowerCase() ?? null;
-  return { mode, aiScenes, sceneSeconds, photoIds, collection };
+  const musicId = new RegExp(`Müzik:\\s*\\[id:(${UUID.source})\\]`, "i").exec(text ?? "")?.[1]?.toLowerCase() ?? null;
+  const extraFormat = /Ek format:\s*16:9\b/i.test(text ?? "") ? ("16:9" as const) : null;
+  return { mode, aiScenes, sceneSeconds, photoIds, collection, musicId, extraFormat };
 }
 
 export const wantsAiScenes = (s: StudioRequest | null | undefined) => !!s && s.mode !== "archive";
@@ -56,8 +66,10 @@ export function buildStudioInstruction(args: {
   sceneSeconds: number;
   goal: string;
   collection?: string | null;
+  musicId?: string | null;
+  extraFormat?: "16:9" | null;
 }) {
-  const req: StudioRequest = { mode: args.mode, aiScenes: args.mode === "archive" ? 0 : args.aiScenes, sceneSeconds: args.mode === "archive" ? 0 : args.sceneSeconds, photoIds: args.photos.map((p) => p.id), collection: args.collection ?? null };
+  const req: StudioRequest = { mode: args.mode, aiScenes: args.mode === "archive" ? 0 : args.aiScenes, sceneSeconds: args.mode === "archive" ? 0 : args.sceneSeconds, photoIds: args.photos.map((p) => p.id), collection: args.collection ?? null, musicId: args.musicId ?? null, extraFormat: args.extraFormat ?? null };
   const files = args.videos.map((v) => v.filename).join(", ");
   const head = args.mode === "archive"
     ? [

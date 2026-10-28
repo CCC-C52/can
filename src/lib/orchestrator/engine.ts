@@ -481,6 +481,7 @@ export async function studioForProject(brandId: string, projectId: string): Prom
 function studioBlock(st: StudioRequest, limits: Limits) {
   const data = {
     mode: st.mode, ai_scenes: st.aiScenes, scene_seconds: st.sceneSeconds, product_photo_ids: st.photoIds, collection: st.collection ?? null,
+    licensed_music: !!st.musicId, extra_format: st.extraFormat ?? null,
     max_ai_video_seconds_per_project: limits.maxVideoGenSeconds, paid_generation_enabled: limits.paidMediaGeneration,
   };
   const rules = st.mode === "archive" ? "Use only analysed archive footage (edit_existing)." : [
@@ -489,6 +490,8 @@ function studioBlock(st: StudioRequest, limits: Limits) {
     `Every generate_new scene: a vivid cinematic generation_prompt in English (subject, setting, light, camera movement, mood; no on-screen text) and selected_asset_ids = the product_photo_ids, so the real product photos are sent as references and the print, colours, logo and cut stay unchanged.`,
     `The compose video lists "parts" in output order: every AI scene ("ai_scene", ref = its id)${st.photoIds.length ? ', at least one "product_photo" part (ref = a product_photo_id, 1.5-4 s, a camera motion) so the real product is shown as photographed' : ""}${st.mode === "hybrid" ? ', and analysed archive scenes ("archive_clip", inside verified scene limits) when they fit' : ""}.`,
     ...(st.collection ? [`Collection: "${st.collection}". Every product reference and every description must match this collection's confirmed colour and print (see <brand_context>.knowledge.collections). Never mention another collection, colour or logo.`] : []),
+    ...(st.aiScenes > 3 ? [`This is a long cinematic ad: vary the scenes (wide establishing shot, model in motion, macro close-up of the print and fabric texture, back-print reveal, product hero shot, energetic finale), and alternate AI scenes with product_photo parts so the real product is seen regularly.`] : []),
+    ...(st.musicId ? ["The owner's licensed music track is added by the system under the whole ad; plan scene lengths with a steady rhythm (cuts every 2-4 s inside parts) and a strong final beat on the closing card."] : []),
     `Give the compose video a short hook as on_screen_text of the first part, a CTA on the last part, outro_text with the brand name (closing card with the logo), transition "fade" and framing "fill". Keep the total within the requested length.`,
   ].join("\n");
   return `<studio_request>\n<data>${JSON.stringify(data)}</data>\n${rules}\n</studio_request>`;

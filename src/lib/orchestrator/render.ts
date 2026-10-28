@@ -5,6 +5,7 @@ import { q1 } from "@/lib/db/pool";
 import { composeDesign } from "@/lib/adapters/compose";
 import { photoMotionClip, renderEdit, type EditClip, type PhotoMotion } from "@/lib/adapters/video-edit";
 import { prepareReference, ReferenceQualityError, type ReferenceFidelity } from "@/lib/video/reference";
+import { parseStudioRequest } from "@/lib/video/studio";
 import { FfmpegError } from "@/lib/adapters/ffmpeg";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
@@ -244,9 +245,13 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   const style = await brandStyle(task.brand_id);
   const brand = await q1<{ name: string }>(`SELECT name FROM brands WHERE id = $1`, [task.brand_id]);
   const format = vid.format ?? "9:16";
+  // Sahibin Video Stüdyosu talebi: lisanslı müzik ve ek format (aynı sahnelerden; ek AI maliyeti yok)
+  const project = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [task.project_id, task.brand_id]);
+  const studio = parseStudioRequest(project?.instruction);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "compose-"));
   try {
-    const clips: EditClip[] = [];
+    type Spec = { text: string; file: string; start: number; duration: number; sourceDuration: number | null } | { text: string; photo: string; seconds: number; motion: PhotoMotion };
+    const specs: Spec[] = [];
     const sources: MediaAsset[] = [];
     const fileOf = async (m: MediaAsset, name: string) => {
       const f = path.join(dir, `${name}.${m.filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "bin"}`);
@@ -262,15 +267,13 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         const file = await fileOf(m, `ai${i}`);
         const dur = (await probeVideo(file)).duration;
         const want = Number(p.duration_s) > 0 ? Math.min(Number(p.duration_s), dur) : dur;
-        clips.push({ file, start: 0, duration: Math.round(Math.max(0.5, want) * 1000) / 1000, sourceDuration: dur, text });
+        specs.push({ file, start: 0, duration: Math.round(Math.max(0.5, want) * 1000) / 1000, sourceDuration: dur, text });
         sources.push(m);
       } else if (p.kind === "product_photo") {
         const m = await usableMedia(task.brand_id, String(p.ref)); // marka kapsamı
         if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) { o.failed.push(`${vid.id}: parça ${i + 1} — ürün fotoğrafı bulunamadı`); return; }
-        const out = path.join(dir, `photo${i}.mp4`);
         const motion: PhotoMotion = PHOTO_MOTIONS.has(p.motion) ? p.motion : "zoom_in";
-        const r = await photoMotionClip({ photo: await fileOf(m, `p${i}`), out, format, seconds: Number(p.duration_s) || 2.5, motion, bg: style.bg, signal: ctx.signal });
-        clips.push({ file: out, start: 0, duration: r.duration, sourceDuration: r.duration, text });
+        specs.push({ photo: await fileOf(m, `p${i}`), seconds: Number(p.duration_s) || 2.5, motion, text });
         sources.push(m);
       } else if (p.kind === "archive_clip") {
         const m = await usableMedia(task.brand_id, String(p.ref));
@@ -284,42 +287,65 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         }
         const file = await fileOf(m, `clip${i}`);
         const dur = (await probeVideo(file)).duration;
-        clips.push({ file, start, duration: Math.round((Math.min(end, dur) - start) * 1000) / 1000, sourceDuration: dur, text });
+        specs.push({ file, start, duration: Math.round((Math.min(end, dur) - start) * 1000) / 1000, sourceDuration: dur, text });
         sources.push(m);
       } else { o.failed.push(`${vid.id}: parça ${i + 1} — bilinmeyen tür ${p.kind}`); return; }
     }
-    const outro = clean(vid.outro_text).trim() || brand?.name || "";
-    let r;
-    try {
-      r = await renderEdit({
-        clips, format, framing: vid.framing ?? "fill", transition: vid.transition ?? "fade",
-        subtitles: (vid.subtitles ?? []).map((x: any) => ({ start: x.start, end: x.end, text: clean(x.text) })),
-        intro: clean(vid.intro_text).trim() ? { text: clean(vid.intro_text), bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined,
-        outro: outro ? { text: outro, bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined,
-        signal: ctx.signal, timeoutMs: Math.max(ctx.limits.taskTimeoutMs, ctx.limits.renderTimeoutMs ?? 0) - 15_000,
-      });
-    } catch (err) {
-      if (err instanceof FfmpegError) { o.failed.push(`${vid.id}: ${err.message}`); return; }
-      throw err;
+    let music: { file: string } | undefined;
+    if (studio?.musicId) {
+      const m = await usableMedia(task.brand_id, studio.musicId);
+      if (!m || m.kind !== "audio") { o.failed.push(`${vid.id}: seçilen müzik dosyası bu markanın arşivinde yok`); return; }
+      if (!["owned", "licensed"].includes(String(m.rights_status))) { o.failed.push(`${vid.id}: müziğin kullanım hakkı (lisans) kayıtlı değil; reklama eklenmedi`); return; }
+      music = { file: await fileOf(m, "music") };
+      sources.push(m);
     }
+    const outro = clean(vid.outro_text).trim() || brand?.name || "";
     const aiCount = parts.filter((x) => x.kind === "ai_scene").length;
     const photoCount = parts.filter((x) => x.kind === "product_photo").length;
-    const common = { taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId, productId: sources.find((x) => x.product_id)?.product_id ?? null, sourceAssetIds: [...new Set(sources.map((x) => x.id))] };
-    const video = await saveDerivedAsset(task.brand_id, {
-      ...common, buffer: r.video, filename: `${vid.id}-${format.replace(":", "x")}.mp4`, origin: "edited", generationMethod: "ffmpeg_edit",
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: `AI sahne:${aiCount}`, source: "system" }, { tag: `ürün fotoğrafı:${photoCount}`, source: "system" }, { tag: "karma reklam kurgusu", source: "system" }],
-    });
-    const thumb = await saveDerivedAsset(task.brand_id, {
-      ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
-    });
-    if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) { o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`); return; }
-    o.produced.push(video.id, thumb.id);
-    o.artifacts.push({
-      ref: vid.id, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
-      bytes: r.video.length, segments: clips.length, ai_scenes: aiCount, product_photos: photoCount, sources: sources.length, decoded: true, outro: !!outro,
-      audio: "kaldırıldı (müzik katmanı sonraki aşama)",
-    });
+    const formats: { format: string; framing: "fit" | "fill" | "blur" }[] = [{ format, framing: vid.framing ?? "fill" }];
+    if (studio?.extraFormat && studio.extraFormat !== format) formats.push({ format: studio.extraFormat, framing: "blur" });
+    for (const f of formats) {
+      // Ürün fotoğrafı hareket klipleri her format için ayrı üretilir (ürün kırpılmaz)
+      const clips: EditClip[] = [];
+      for (let i = 0; i < specs.length; i++) {
+        const sp = specs[i];
+        if ("photo" in sp) {
+          const out = path.join(dir, `photo${i}-${f.format.replace(":", "x")}.mp4`);
+          const r = await photoMotionClip({ photo: sp.photo, out, format: f.format, seconds: sp.seconds, motion: sp.motion, bg: style.bg, signal: ctx.signal });
+          clips.push({ file: out, start: 0, duration: r.duration, sourceDuration: r.duration, text: sp.text });
+        } else clips.push(sp);
+      }
+      let r;
+      try {
+        r = await renderEdit({
+          clips, format: f.format, framing: f.framing, transition: vid.transition ?? "fade",
+          subtitles: (vid.subtitles ?? []).map((x: any) => ({ start: x.start, end: x.end, text: clean(x.text) })),
+          intro: clean(vid.intro_text).trim() ? { text: clean(vid.intro_text), bg: style.bg, accent: style.accent, font: style.font, logo: style.logo } : undefined,
+          outro: outro ? { text: outro, bg: style.bg, accent: style.accent, font: style.font, logo: style.logo, animated: true } : undefined,
+          music,
+          signal: ctx.signal, timeoutMs: Math.max(ctx.limits.taskTimeoutMs, ctx.limits.renderTimeoutMs ?? 0) - 15_000,
+        });
+      } catch (err) {
+        if (err instanceof FfmpegError) { o.failed.push(`${vid.id} (${f.format}): ${err.message}`); return; }
+        throw err;
+      }
+      const common = { taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId, productId: sources.find((x) => x.product_id)?.product_id ?? null, sourceAssetIds: [...new Set(sources.map((x) => x.id))] };
+      const video = await saveDerivedAsset(task.brand_id, {
+        ...common, buffer: r.video, filename: `${vid.id}-${f.format.replace(":", "x")}.mp4`, origin: "edited", generationMethod: "ffmpeg_edit",
+        tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: `format:${f.format}`, source: "system" }, { tag: `AI sahne:${aiCount}`, source: "system" }, { tag: `ürün fotoğrafı:${photoCount}`, source: "system" }, { tag: "karma reklam kurgusu", source: "system" }, ...(music ? [{ tag: "lisanslı müzik", source: "system" }] : [])],
+      });
+      const thumb = await saveDerivedAsset(task.brand_id, {
+        ...common, sourceAssetIds: [video.id], buffer: r.thumbnail, filename: `${vid.id}-${f.format.replace(":", "x")}-kapak.jpg`, origin: "edited", generationMethod: "ffmpeg_thumbnail",
+        tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "video kapak karesi", source: "system" }],
+      });
+      if (!(await getStorage().exists(video.storage_key)) || Number(video.size_bytes) !== r.video.length) { o.failed.push(`${vid.id}: üretilen MP4 depoda doğrulanamadı`); return; }
+      o.produced.push(video.id, thumb.id);
+      o.artifacts.push({
+        ref: f.format === format ? vid.id : `${vid.id}@${f.format}`, asset_id: video.id, codec: r.probe.video_codec, width: r.probe.width, height: r.probe.height, duration_s: r.probe.duration,
+        bytes: r.video.length, segments: clips.length, ai_scenes: aiCount, product_photos: photoCount, sources: sources.length, decoded: true, outro: !!outro,
+        audio: r.audio === "music" ? "lisanslı müzik (AAC, -14 LUFS)" : "sessiz (müzik seçilmedi)",
+      });
+    }
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

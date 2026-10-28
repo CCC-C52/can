@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -86,7 +87,7 @@ describe("Video Stüdyosu talebi", () => {
     const text = studioInstruction("hybrid", [{ id: "11111111-2222-4333-8444-555555555555", filename: "tee [front].jpg" }]);
     expect(text).toMatch(/Gemini Omni ile 2 adet 6 saniyelik/);
     expect(text).not.toMatch(/Yalnızca bu gerçek çekimleri/);
-    expect(parseStudioRequest(text)).toEqual({ mode: "hybrid", aiScenes: 2, sceneSeconds: 6, photoIds: ["11111111-2222-4333-8444-555555555555"], collection: null });
+    expect(parseStudioRequest(text)).toEqual({ mode: "hybrid", aiScenes: 2, sceneSeconds: 6, photoIds: ["11111111-2222-4333-8444-555555555555"], collection: null, musicId: null, extraFormat: null });
     const archive = buildStudioInstruction({ mode: "archive", videos: [{ id: "x", filename: "a.mp4" }], photos: [], minSeconds: 10, maxSeconds: 15, platform: "Reels", transition: "cut", aiScenes: 2, sceneSeconds: 6, goal: "" });
     expect(archive).toMatch(/Yalnızca bu gerçek çekimleri/);
     expect(parseStudioRequest(archive)).toMatchObject({ mode: "archive", aiScenes: 0 });
@@ -174,9 +175,10 @@ describe("Video Stüdyosu → Gemini Omni → karma reklam MP4 (sahte sağlayıc
     const pr = await probeVideo(f);
     await fs.rm(dir, { recursive: true, force: true });
     expect([pr.width, pr.height, pr.video_codec]).toEqual([1080, 1920, "h264"]);
-    // 6 + 2,5 + 6 sn sahne/fotoğraf + 2 sn logo kapanışı − 3 geçiş × 0,5 sn ≈ 15 sn
-    expect(pr.duration).toBeGreaterThan(13.5);
-    expect(pr.duration).toBeLessThan(16.5);
+    // 6 + 2,5 + 6 sn sahne/fotoğraf + 3 sn hareketli logo kapanışı − 3 geçiş × 0,5 sn ≈ 16 sn
+    expect(pr.duration).toBeGreaterThan(14.5);
+    expect(pr.duration).toBeLessThan(17.5);
+    expect(pr.audio_codec).toBeNull(); // müzik seçilmedi: sessiz
     const job = await q<any>(`SELECT request, status FROM provider_jobs WHERE task_id = $1 ORDER BY created_at`, [render.id]);
     expect(job.map((j) => [j.status, j.request.mode])).toEqual([["succeeded", "image_to_video"], ["succeeded", "image_to_video"]]);
     // Referans orijinal netlikte gitti (yeniden kodlama yok); bayt kayda yazılmadı
@@ -187,6 +189,48 @@ describe("Video Stüdyosu → Gemini Omni → karma reklam MP4 (sahte sağlayıc
     const out = (await listOutputs(brandId, { projectId: project.id })).find((o) => o.kind === "video_plan")!;
     const v = (await getCurrentVersion(brandId, out.id))!;
     expect((await decide(brandId, v.id, "approved")).decision).toBe("approved");
+  });
+
+  it("uzun reklam: lisanslı müzik + yatay 16:9 sürüm aynı AI sahnelerinden (ek Gemini isteği yok); lisanssız müzik reddedilir", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    await upsertConnection("video_generation", null, { status: "connected" });
+    await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: true, maxVideoGenSeconds: 40 });
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "music-"));
+    const wav = path.join(dir, "track.wav");
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=6", "-ac", "2", "-ar", "44100", wav]);
+    const buf = await fs.readFile(wav);
+    await expect(uploadMedia(brandId, { buffer: buf, filename: "track.wav" }, { rightsStatus: "unknown" })).rejects.toThrow(/kullanım hakkını/);
+    const music = (await uploadMedia(brandId, { buffer: buf, filename: "track.wav" }, { rightsStatus: "licensed" })).asset;
+    expect([music.kind, music.mime_type, Math.round(Number(music.duration_s))]).toEqual(["audio", "audio/wav", 6]);
+
+    const omni = new FakeOmni(await colorScenesVideo([{ color: "orange", seconds: 5 }], { audio: true }));
+    setVideoGeneratorOverride(omni);
+    const instruction = buildStudioInstruction({ mode: "ai", videos: [], photos: [{ id: photoId, filename: photoName }], minSeconds: 20, maxSeconds: 40, platform: "Instagram Reels (9:16)", transition: "fade", aiScenes: 4, sceneSeconds: 5, goal: "Long cinematic orange anime tee ad", musicId: music.id, extraFormat: "16:9" });
+    expect(parseStudioRequest(instruction)).toMatchObject({ aiScenes: 4, musicId: music.id, extraFormat: "16:9" });
+    const { project } = await submitInstruction({ brandId, instruction, idempotencyKey: key() });
+    await drive(new Engine("studio-long"));
+    expect(omni.submits).toHaveLength(4); // ikinci format için ek AI isteği yok
+
+    const render = (await listTasks(brandId, { projectId: project.id })).find((t) => t.kind === "render" && t.agent === "video")!;
+    expect(render.status).toBe("completed");
+    const ads = await q<any>(`SELECT * FROM media_assets WHERE source_task_id = $1 AND kind = 'video' AND generation_method = 'ffmpeg_edit' ORDER BY filename`, [render.id]);
+    expect(ads).toHaveLength(2);
+    const probes = [];
+    for (const ad of ads) {
+      const f = path.join(dir, ad.filename);
+      await fs.writeFile(f, await getStorage().get(ad.storage_key));
+      const pr = await probeVideo(f);
+      probes.push([pr.width, pr.height, pr.video_codec, pr.audio_codec]);
+      expect(pr.duration).toBeGreaterThan(20);
+      expect(ad.tags.map((t: any) => t.tag)).toContain("lisanslı müzik");
+      // Yatay sürüm: dikey AI sahnesi bulanık arka planla doldurulur (kenarlar siyah değil)
+      if (pr.width === 1920) {
+        const px = execFileSync("ffmpeg", ["-v", "error", "-ss", "2", "-i", f, "-frames:v", "1", "-vf", "crop=40:40:20:520,scale=1:1,format=rgb24", "-f", "rawvideo", "-"]);
+        expect(px[0] + px[1] + px[2]).toBeGreaterThan(60);
+      }
+    }
+    expect(probes).toEqual(expect.arrayContaining([[1080, 1920, "h264", "aac"], [1920, 1080, "h264", "aac"]]));
+    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it("ücretli üretim izni yokken Gemini'ye hiçbir istek gitmez; reklam 'izin bekliyor' olarak kalır", async () => {

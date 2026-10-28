@@ -785,6 +785,14 @@ export async function videoStudioAction(fd: FormData) {
       const wrong = photos.filter((p) => themes.has(p.id) && themes.get(p.id) !== collection);
       if (wrong.length) throw new Error(`Koleksiyon eşleşmiyor: ${wrong.map((p) => `${p.filename} (${THEME_INFO[themes.get(p.id)!].label})`).join(", ")} seçilen ${THEME_INFO[collection].label} koleksiyonuna ait değil.`);
     }
+    let musicId: string | null = null;
+    if (str(fd, "musicId")) {
+      const m = await getMedia(brand.id, str(fd, "musicId"));
+      if (!m || m.kind !== "audio") throw new Error("Seçilen müzik bu markanın arşivinde değil.");
+      if (!["owned", "licensed"].includes(String(m.rights_status))) throw new Error(`${m.filename}: kullanım hakkı (lisans) kayıtlı değil; reklamda kullanılamaz.`);
+      musicId = m.id;
+    }
+    const extraFormat = str(fd, "extraFormat") === "16:9" ? ("16:9" as const) : null;
     const lowRes = photos.filter((p) => referenceTooSmall(p.width, p.height));
     if (lowRes.length) throw new Error(`Düşük çözünürlüklü referans: ${lowRes.map((p) => `${p.filename} (${p.width}x${p.height})`).join(", ")}. Kısa kenarı en az ${REFERENCE_MIN_SHORT_SIDE} piksel olan orijinal fotoğraf seçin.`);
     const unverified = await unverifiedDriveAssetIds(brand.id, photos.map((p) => p.id));
@@ -806,7 +814,7 @@ export async function videoStudioAction(fd: FormData) {
       mode, videos, photos, minSeconds: min, maxSeconds: max,
       platform: str(fd, "platform") === "tiktok" ? "TikTok (9:16)" : "Instagram Reels (9:16)",
       transition: str(fd, "transition") === "fade" ? "fade" : "cut",
-      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500), collection,
+      aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500), collection, musicId, extraFormat,
     });
     const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
     return { ok: r.duplicate ? "Bu talep zaten gönderildi." : mode === "archive" ? "Video talebi Ana Yönetici'ye gönderildi." : "AI reklam talebi Ana Yönetici'ye gönderildi (Gemini Omni sahneleri ücretli; izin ve bütçe kontrolünden geçer).", to: `/projeler/${r.project.id}` };

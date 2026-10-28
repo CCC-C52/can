@@ -129,7 +129,7 @@ export function Uploader({ products }: { products: { id: string; title: string }
   return (
     <form onSubmit={onSubmit} className="space-y-2">
       <label className="label" htmlFor="up-files">Dosyalar</label>
-      <input id="up-files" type="file" name="files" multiple required accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm,application/pdf,image/svg+xml,.psd" className="block w-full text-sm" />
+      <input id="up-files" type="file" name="files" multiple required accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm,application/pdf,image/svg+xml,.psd,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,.m4a" className="block w-full text-sm" />
       <div className="grid grid-cols-2 gap-2">
         <select name="kind" className="input" aria-label="Tür"><option value="">Tür: otomatik</option><option value="logo">Logo</option><option value="design">Tasarım dosyası</option></select>
         <select name="origin" className="input" aria-label="Köken"><option value="">Köken: otomatik (gerçek çekim)</option><option value="real_photo">Gerçek ürün fotoğrafı</option><option value="real_video">Gerçek çekim (video)</option><option value="ai_generated">AI ile üretilmiş</option><option value="design_file">Tasarım dosyası</option></select>

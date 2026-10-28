@@ -48,7 +48,7 @@ export type MediaAsset = {
 
 export class MediaValidationError extends Error {}
 
-export type Sniffed = { mime: string; ext: string; kind: "photo" | "video" | "design" | "document" };
+export type Sniffed = { mime: string; ext: string; kind: "photo" | "video" | "design" | "document" | "audio" };
 
 /** Dosya türünü uzantıya değil içeriğin ilk baytlarına bakarak belirler. */
 export function sniff(buf: Buffer): Sniffed | null {
@@ -57,8 +57,12 @@ export function sniff(buf: Buffer): Sniffed | null {
   if (h.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: "image/png", ext: "png", kind: "photo" };
   if (h.subarray(0, 4).toString("latin1") === "RIFF" && h.subarray(8, 12).toString("latin1") === "WEBP") return { mime: "image/webp", ext: "webp", kind: "photo" };
   if (h.subarray(0, 4).toString("latin1") === "GIF8") return { mime: "image/gif", ext: "gif", kind: "photo" };
+  // Ses (lisanslı müzik): MP3 (ID3 etiketi veya MPEG çerçeve senkronu), WAV, M4A
+  if (h.subarray(0, 3).toString("latin1") === "ID3" || (h[0] === 0xff && (h[1] & 0xe6) === 0xe2)) return { mime: "audio/mpeg", ext: "mp3", kind: "audio" };
+  if (h.subarray(0, 4).toString("latin1") === "RIFF" && h.subarray(8, 12).toString("latin1") === "WAVE") return { mime: "audio/wav", ext: "wav", kind: "audio" };
   if (h.subarray(4, 8).toString("latin1") === "ftyp") {
     const brand = h.subarray(8, 12).toString("latin1");
+    if (brand === "M4A ") return { mime: "audio/mp4", ext: "m4a", kind: "audio" };
     if (brand === "qt  ") return { mime: "video/quicktime", ext: "mov", kind: "video" };
     if (/^(heic|heix|mif1|avif)/.test(brand)) return null; // HEIC/AVIF: önizleme desteği yok
     return { mime: "video/mp4", ext: "mp4", kind: "video" };
@@ -92,6 +96,21 @@ async function probeVideoFile(file: string) {
     if (err instanceof MediaValidationError) throw err;
     if ((err as any).code === "ENOENT") return { width: null, height: null, duration: null }; // ffprobe yok
     throw new MediaValidationError("Video dosyası okunamadı (bozuk veya desteklenmeyen kodek).");
+  }
+}
+
+async function probeAudioFile(file: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(config.ffprobePath, ["-protocol_whitelist", "file,pipe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", file], { timeout: 60_000 });
+    const info = JSON.parse(stdout);
+    if (!(info.streams ?? []).some((s: any) => s.codec_type === "audio")) throw new MediaValidationError("Dosyada ses akışı bulunamadı.");
+    const d = Number(info.format?.duration);
+    if (!(d >= 3)) throw new MediaValidationError("Müzik en az 3 saniye olmalı.");
+    return d;
+  } catch (err) {
+    if (err instanceof MediaValidationError) throw err;
+    if ((err as any).code === "ENOENT") return null;
+    throw new MediaValidationError("Ses dosyası okunamadı (bozuk veya desteklenmeyen kodek).");
   }
 }
 
@@ -169,7 +188,7 @@ export async function uploadMedia(
   }
 }
 
-export const UNSUPPORTED = "Desteklenmeyen dosya türü. İzin verilenler: JPEG, PNG, WebP, GIF, MP4, MOV, WebM, PDF, PSD, SVG.";
+export const UNSUPPORTED = "Desteklenmeyen dosya türü. İzin verilenler: JPEG, PNG, WebP, GIF, MP4, MOV, WebM, PDF, PSD, SVG, MP3, WAV, M4A (lisanslı müzik).";
 
 /**
  * Doğrulanmış (türü baytlardan tespit edilmiş, özeti hesaplanmış) yerel dosyayı arşive kaydeder.
@@ -205,6 +224,10 @@ export async function registerFile(
   } else if (s.kind === "video") {
     const p = await probeVideoFile(f.file);
     width = p.width; height = p.height; duration = p.duration;
+  } else if (s.kind === "audio") {
+    duration = await probeAudioFile(f.file);
+    // Müzik yalnızca lisans bilgisiyle kabul edilir (reklamda kullanılacak; telif riski)
+    if (!["owned", "licensed"].includes(meta.rightsStatus ?? "")) throw new MediaValidationError("Müzik dosyası için kullanım hakkını seçin (Marka sahibi veya Lisanslı). Lisansı olmayan müzik reklamda kullanılamaz.");
   }
   let kind: string = s.kind;
   if (meta.kind === "logo" && (s.kind === "photo" || s.kind === "design")) kind = "logo";

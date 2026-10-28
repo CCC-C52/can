@@ -26,6 +26,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
   const outputs = (await listOutputs(brand.id, { limit: 50 })).filter((o) => o.kind === "video_plan").slice(0, 10);
   const photos = (await listMedia(brand.id, { kind: "photo" })).filter((m) => ["image/jpeg", "image/png", "image/webp"].includes(m.mime_type)).slice(0, 60);
   const limits = await getLimits();
+  const music = (await listMedia(brand.id, { kind: "audio" })).filter((m) => ["owned", "licensed"].includes(String(m.rights_status))).slice(0, 40);
   const catalog = await Promise.all(FRIBEE_THEMES.map(async (t) => ({ theme: t, photos: await verifiedCatalogPhotos(brand.id, t, 3) })));
   const gen = await capabilityReady("video_generation", brand.id);
   const price = config.gemini.costPerSecondUsd;
@@ -99,6 +100,18 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
               </ul>
             )}
           </fieldset>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm"><span className="label">Müzik (lisanslı)</span>
+              <select name="musicId" className="input" defaultValue="">
+                <option value="">Sessiz</option>
+                {music.map((m) => <option key={m.id} value={m.id}>{m.filename}{m.duration_s ? ` (${Number(m.duration_s).toFixed(0)} sn)` : ""}</option>)}
+              </select>
+              <span className="mt-1 block text-xs text-muted">{music.length ? "Video boyunca çalar; giriş/çıkış yumuşatılır, ses seviyesi yayın standardına (-14 LUFS) getirilir." : "Medya arşivine MP3/WAV/M4A yükleyin ve kullanım hakkını “Lisanslı” veya “Marka sahibi” seçin."}</span>
+            </label>
+            <label className="block text-sm"><span className="label">Ek format</span>
+              <select name="extraFormat" className="input" defaultValue="16:9"><option value="16:9">Yatay 16:9 sürüm de üret (ek AI maliyeti yok)</option><option value="">Yalnızca dikey 9:16</option></select>
+            </label>
+          </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <label className="block text-sm"><span className="label">En az (sn)</span><input name="minSeconds" type="number" min={3} max={90} defaultValue={10} className="input" /></label>
             <label className="block text-sm"><span className="label">En çok (sn)</span><input name="maxSeconds" type="number" min={3} max={90} defaultValue={15} className="input" /></label>
@@ -106,7 +119,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
             <label className="block text-sm"><span className="label">Geçiş</span><select name="transition" className="input"><option value="cut">Kesme (daha az bellek)</option><option value="fade">Yumuşak geçiş</option></select></label>
           </div>
           <label className="block text-sm"><span className="label">Amaç ve notlar</span><textarea name="goal" rows={3} maxLength={1500} className="input" placeholder="Örn: Yeni sezon lansmanı; ilk 2 saniyede ürün görünsün; ekran yazısı kısa olsun." /></label>
-          <p className="text-xs text-muted">AI sahneleri Google Gemini Omni ile üretilir (720p, 3–10 sn, ücretli). Tahmini maliyet: {price !== null ? `2 × 6 sn ≈ ${(price * 12).toFixed(2)} $ (sahne sayısı × süre × ${price} $)` : "saniye fiyatı tanımlı değil"}; proje sınırı {limits.maxVideoGenSeconds} sn. Ses şimdilik kaldırılır (müzik katmanı sonraki aşama). Ürün rengi değiştirilmez.</p>
+          <p className="text-xs text-muted">AI sahneleri Google Gemini Omni ile üretilir (720p, 3–10 sn, ücretli). Tahmini maliyet: {price !== null ? `2 × 6 sn ≈ ${(price * 12).toFixed(2)} $ (sahne sayısı × süre × ${price} $)` : "saniye fiyatı tanımlı değil"}; proje sınırı {limits.maxVideoGenSeconds} sn (uzun reklam için Ayarlar&apos;dan artırın). En fazla {STUDIO_MAX_AI_SCENES} AI sahnesi. Kapanışta hareketli logo kartı. Ürün rengi değiştirilmez.</p>
           <SubmitButton className="btn-primary" disabled={!videos.length && !photos.length && !geminiReady}>Ana Yönetici&apos;ye gönder</SubmitButton>
         </form>
         <div className="space-y-4">
