@@ -227,7 +227,8 @@ async function main() {
       await page.goto(`${BASE}/login?next=${encodeURIComponent("/\\evil.example")}`);
       await page.fill("input[name=password]", secrets.ADMIN_PASSWORD);
       await page.click("form button");
-      await page.waitForLoadState("networkidle");
+      // Sunucu eylemi istemci tarafında yönlendirir: giriş sayfasından ayrılmayı bekle (networkidle hemen dönebilir)
+      await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 15_000 });
       const c = (await ctx.cookies()).find((x) => x.name === "__Host-aiops_session");
       expect(c, "çerez yok");
       expect(c.httpOnly && c.secure && c.path === "/" && c.sameSite === "Lax", JSON.stringify({ ...c, value: "***" }));
@@ -303,7 +304,8 @@ async function main() {
       }, s.memB.id);
       expect(swapped, "arşivle formu bulunamadı");
       await page.locator('form:has(input[name="status"][value="archived"]) button').first().click();
-      await page.waitForLoadState("networkidle");
+      // Eylemin sonucunu (ret mesajı) bekle; aksi halde kontrol eylem tamamlanmadan çalışabilir
+      await page.waitForURL(/err=/, { timeout: 15_000 });
       expect((await q1<{ status: string }>(`SELECT status FROM brand_memory WHERE id = $1`, [s.memB.id]))!.status === "active", "B'nin hafıza kaydı değişti");
       expect(decodeURIComponent(page.url()).includes("bulunamadı"), `hata mesajı yok: ${page.url()}`);
     });
@@ -337,7 +339,8 @@ async function main() {
       }, vB.id);
       expect(changed, "onay formu bulunamadı");
       await page.locator('form:has(input[name="versionId"]) button').first().click();
-      await page.waitForLoadState("networkidle");
+      // Ret yönlendirmesini bekle: eylem gerçekten çalışıp reddetmeli (yalnızca "onay yok" yeterli kanıt değil)
+      await page.waitForURL(/err=/, { timeout: 15_000 });
       const ap = await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM approvals WHERE output_version_id = $1`, [vB.id]);
       expect(ap!.n === 0, "B sürümü A üzerinden onaylandı");
     });
