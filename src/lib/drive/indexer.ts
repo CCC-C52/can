@@ -463,6 +463,11 @@ export async function runDriveScanOnce(workerId: string, opts: { pages?: number;
       );
     }
     await finishRun(status, rootGone ? "Seçili klasör kaldırıldı; tarama duraklatıldı." : null);
+    // Yeni ürün fotoğrafları inceleme kuyruğuna otomatik girer (öneriyle; doğrulama sahipte). Hata taramayı bozmaz.
+    if (!rootGone) {
+      const { autoQueueReferences } = await import("./references");
+      await autoQueueReferences(src.brand_id).catch((e) => log("warn", "drive.auto_queue_failed", { brandId: src.brand_id, error: e }));
+    }
     return { sourceId: src.id, brandId: src.brand_id, status, stats };
   } catch (err) {
     const msg = safeError(err);

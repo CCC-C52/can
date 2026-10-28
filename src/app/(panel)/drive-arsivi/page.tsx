@@ -8,7 +8,7 @@ import { DOC_MIME, driveDashboard, searchDriveItems, verifiedReferences } from "
 import { FRIBEE_THEMES, REFERENCE_VIEWS, THEME_INFO, VIEW_LABEL } from "@/lib/drive/themes";
 import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import {
-  driveDisconnectAction, driveImportAction, drivePauseAction, driveProposeMemoryAction, driveReviewAction, driveScanNowAction, driveSelectFolderAction, driveSuggestAction,
+  driveAutoQueueAction, driveBulkReviewAction, driveDisconnectAction, driveImportAction, drivePauseAction, driveProposeMemoryAction, driveReviewAction, driveScanNowAction, driveSelectFolderAction, driveSuggestAction,
 } from "@/app/actions";
 import { AutoRefresh, SubmitButton } from "@/components/client";
 import { Badge, Empty, Flash, PageHeader, Stat, dt } from "@/components/ui";
@@ -71,7 +71,7 @@ export default async function DriveArchivePage({ searchParams }: { searchParams:
       </nav>
       {tab === "overview" && <Overview env={env} connected={connected} connStatus={conn?.status ?? "not_connected"} connError={conn?.last_error ?? null} dash={dash} brandId={brand.id} />}
       {tab === "files" && (src?.folder_id ? <Files brandId={brand.id} search={one(sp.q)} filter={(one(sp.filter) in FILTERS ? one(sp.filter) : "images") as Filter} page={Math.max(0, Number(one(sp.page)) || 0)} /> : <Empty>Önce Google Drive'ı bağlayıp arşiv klasörünü seçin.</Empty>)}
-      {tab === "review" && <Review brandId={brand.id} />}
+      {tab === "review" && <Review brandId={brand.id} page={Math.max(0, Number(one(sp.page)) || 0)} />}
       {tab === "hub" && <Hub brandId={brand.id} />}
     </div>
   );
@@ -275,51 +275,73 @@ async function Files({ brandId, search, filter, page }: { brandId: string; searc
   );
 }
 
-async function Review({ brandId }: { brandId: string }) {
-  const items = await searchDriveItems(brandId, { filter: "uncertain", limit: 100 });
-  if (!items.length) return <Empty>İnceleme bekleyen görsel yok. Dosyalar sekmesinden görsel seçip kuyruğa ekleyin.</Empty>;
+async function Review({ brandId, page }: { brandId: string; page: number }) {
+  const PAGE = 60;
+  const rows = await searchDriveItems(brandId, { filter: "uncertain", limit: PAGE + 1, offset: page * PAGE });
+  const more = rows.length > PAGE;
+  const items = rows.slice(0, PAGE);
+  const autoQueue = (
+    <form action={driveAutoQueueAction} className="flex flex-wrap items-center gap-2 text-sm">
+      <SubmitButton className="btn">Arşivdeki ürün fotoğraflarını şimdi kuyruğa al</SubmitButton>
+      <span className="text-xs text-muted">Tarama sonrası otomatik yapılır; logo/grafik ve düşük çözünürlüklü dosyalar alınmaz.</span>
+    </form>
+  );
+  if (!items.length) return <div className="space-y-3"><Empty>İnceleme bekleyen görsel yok.</Empty>{autoQueue}</div>;
+  const groups = new Map<string, typeof items>();
+  for (const i of items) {
+    const k = i.ref_theme ?? "unknown";
+    groups.set(k, [...(groups.get(k) ?? []), i]);
+  }
+  const order = [...FRIBEE_THEMES, "unknown"].filter((k) => groups.has(k));
   return (
-    <ul className="space-y-3">
-      {items.map((i) => {
-        const lowRes = i.image_width && i.image_height ? referenceTooSmall(i.image_width, i.image_height) : false;
-        return (
-          <li key={i.id} className="card space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <a href={driveLink(i.file_id)} target="_blank" rel="noopener noreferrer" className="font-medium text-brand break-all">{i.name}</a>
-              <span className="text-xs text-muted break-all">{i.path}</span>
-              {i.image_width && i.image_height && <Badge tone={lowRes ? "bad" : "neutral"}>{i.image_width}x{i.image_height}{lowRes ? " — düşük çözünürlük" : ""}</Badge>}
-              {i.ref_confidence !== null && <Badge tone="warn">Öneri güveni %{Math.round((i.ref_confidence ?? 0) * 100)}</Badge>}
-            </div>
-            {i.ref_reasons && i.ref_reasons.length > 0 && <ul className="list-disc pl-5 text-xs text-muted">{i.ref_reasons.map((r, k) => <li key={k}>{r}</li>)}</ul>}
-            <form action={driveReviewAction} className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <input type="hidden" name="referenceId" value={i.ref_id!} />
-              <label className="text-xs">Tema
-                <select name="theme" className="input" defaultValue={i.ref_theme ?? ""}>
-                  <option value="">Seçin…</option>
-                  {FRIBEE_THEMES.map((t) => <option key={t} value={t}>{THEME_INFO[t].label} ({THEME_INFO[t].garmentLabel})</option>)}
-                </select>
-              </label>
-              <label className="text-xs">Görünüm
-                <select name="view" className="input" defaultValue={i.ref_view && i.ref_view !== "unknown" ? i.ref_view : ""}>
-                  <option value="">Seçin…</option>
-                  {REFERENCE_VIEWS.map((v) => <option key={v} value={v}>{VIEW_LABEL[v]}</option>)}
-                </select>
-              </label>
-              <label className="text-xs sm:col-span-2">Not (isteğe bağlı)
-                <input name="notes" className="input" maxLength={1000} placeholder="ör. arka baskı, 2025 koleksiyonu" />
-              </label>
-              <label className="flex items-center gap-2 text-xs sm:col-span-2 lg:col-span-4">
-                <input type="checkbox" name="artworkConfirmed" value="1" /> Görseli Drive'da açtım; basılı tasarım, kalıp ve renk birebir doğru.
-              </label>
-              <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-4">
-                <button name="action" value="verify" className="btn-primary">Doğrula</button>
-                <button name="action" value="reject" className="btn-danger">Reddet</button>
-              </div>
-            </form>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="space-y-4">
+      {autoQueue}
+      <form action={driveBulkReviewAction} className="space-y-4">
+        {order.map((k) => (
+          <section key={k} className="card">
+            <h2 className="h2 mb-2">{k === "unknown" ? "Koleksiyonu belirsiz" : `${THEME_INFO[k as (typeof FRIBEE_THEMES)[number]].label} (${THEME_INFO[k as (typeof FRIBEE_THEMES)[number]].garmentLabel}) — öneri`}</h2>
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              {groups.get(k)!.map((i) => {
+                const lowRes = i.image_width && i.image_height ? referenceTooSmall(i.image_width, i.image_height) : false;
+                return (
+                  <li key={i.id} className="space-y-1 rounded-lg border border-line p-2 text-xs">
+                    <label className="block cursor-pointer">
+                      <span className="flex items-center gap-1"><input type="checkbox" name="sel" value={i.ref_id!} aria-label={`${i.name} seç`} /> <span className="truncate">{i.name}</span></span>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={`/api/drive/thumb/${i.id}`} alt={i.name} loading="lazy" className="mt-1 aspect-[4/5] w-full rounded bg-gray-100 object-contain" />
+                    </label>
+                    <select name={`theme:${i.ref_id}`} className="input py-1 text-xs" defaultValue={i.ref_theme ?? ""} aria-label={`${i.name} koleksiyon`}>
+                      <option value="">Koleksiyon…</option>
+                      {FRIBEE_THEMES.map((t) => <option key={t} value={t}>{THEME_INFO[t].label}</option>)}
+                    </select>
+                    <select name={`view:${i.ref_id}`} className="input py-1 text-xs" defaultValue={i.ref_view && i.ref_view !== "unknown" ? i.ref_view : ""} aria-label={`${i.name} görünüm`}>
+                      <option value="">Görünüm…</option>
+                      {REFERENCE_VIEWS.map((v) => <option key={v} value={v}>{VIEW_LABEL[v]}</option>)}
+                    </select>
+                    <div className="flex flex-wrap gap-1">
+                      <a href={driveLink(i.file_id)} target="_blank" rel="noopener noreferrer" className="text-brand underline">Drive&apos;da aç</a>
+                      {i.image_width && i.image_height ? <span className={lowRes ? "text-red-700" : "text-muted"}>{i.image_width}x{i.image_height}</span> : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+        <div className="card sticky bottom-2 space-y-2">
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="artworkConfirmed" value="1" className="mt-1" /> Seçtiğim görsellerde baskı, kalıp, renk ve logo birebir doğru; koleksiyon ve görünüm seçimleri doğru.</label>
+          <div className="flex flex-wrap gap-2">
+            <button name="action" value="verify" className="btn-primary">Seçilenleri onayla</button>
+            <button name="action" value="reject" className="btn-danger">Seçilenleri reddet</button>
+          </div>
+          <p className="text-xs text-muted">Onaylanan görsellerin orijinalleri (tam çözünürlük, MD5 doğrulamalı) arka planda otomatik olarak medya arşivine alınır; ardından Video ve Görsel Stüdyosu&apos;nda kullanılabilir.</p>
+        </div>
+      </form>
+      <div className="flex gap-2">
+        {page > 0 && <Link href={`/drive-arsivi?tab=review&page=${page - 1}`} className="btn">← Önceki</Link>}
+        {more && <Link href={`/drive-arsivi?tab=review&page=${page + 1}`} className="btn">Sonraki →</Link>}
+      </div>
+    </div>
   );
 }
 
@@ -341,7 +363,7 @@ async function Hub({ brandId }: { brandId: string }) {
                 <td className="py-1 pr-2">{r.theme_label}</td>
                 <td className="pr-2">{VIEW_LABEL[r.view]}</td>
                 <td className="pr-2 break-all">{r.name}<div className="text-xs text-muted">{r.path}</div>{r.notes && <div className="text-xs">{r.notes}</div>}</td>
-                <td className="pr-2">{r.media_asset_id ? <Link href={`/medya/${r.media_asset_id}`} className="text-brand">Arşivde (orijinal)</Link> : <span className="text-xs text-muted">Alınmadı</span>}</td>
+                <td className="pr-2">{r.media_asset_id ? <Link href={`/medya/${r.media_asset_id}`} className="text-brand">Arşivde (orijinal)</Link> : <span className="text-xs text-muted">Sırada (otomatik alınacak)</span>}</td>
                 <td className="whitespace-nowrap">
                   {!r.media_asset_id && <form action={driveImportAction}><input type="hidden" name="referenceId" value={r.reference_id} /><SubmitButton className="btn py-1" pendingText="İndiriliyor…">Orijinali arşive al</SubmitButton></form>}
                   <form action={driveReviewAction} className="mt-1"><input type="hidden" name="referenceId" value={r.reference_id} /><input type="hidden" name="action" value="reset" /><SubmitButton className="btn py-1" confirm="Referans incelemeye geri alınsın mı? Geri alınınca hiçbir AI isteğinde kullanılmaz.">İncelemeye geri al</SubmitButton></form>

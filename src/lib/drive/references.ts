@@ -7,7 +7,7 @@ import { isUuid } from "@/lib/ids";
 import { MEMORY_KINDS, addMemory, looksSecret, type MemoryKind } from "@/lib/services/brand-memory";
 import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import { uploadMedia } from "@/lib/services/media";
-import { driveDownload, driveGet, fetchThumbnail, type CallStats } from "./google";
+import { DriveAuthError, driveDownload, driveGet, fetchThumbnail, type CallStats } from "./google";
 import { getDriveSource, tokenProvider, DriveValidationError, safeError } from "./source";
 import { THEME_INFO, VIEW_LABEL, classifyGarmentColour, combineSuggestion, isTheme, isView, type FribeeTheme, type GarmentColour, type ReferenceView } from "./themes";
 
@@ -126,8 +126,8 @@ export type ReviewInput = { action: "verify" | "reject" | "reset"; theme?: strin
 /** Sahip incelemesi. Doğrulama için tema, görünüm (ön/arka/detay/diğer) ve basılı tasarımın birebir doğru olduğu onayı gerekir. */
 export async function reviewReference(brandId: string, refId: string, input: ReviewInput, actor = "user") {
   if (!isUuid(refId)) throw new DriveValidationError("Referans bulunamadı.");
-  const ref = await q1<DriveReference & { item_state: string; item_name: string }>(
-    `SELECT r.*, i.state AS item_state, i.name AS item_name FROM drive_references r JOIN drive_items i ON i.id = r.item_id AND i.brand_id = r.brand_id
+  const ref = await q1<DriveReference & { item_state: string; item_name: string; item_path: string | null; item_mime: string }>(
+    `SELECT r.*, i.state AS item_state, i.name AS item_name, i.path AS item_path, i.mime_type AS item_mime FROM drive_references r JOIN drive_items i ON i.id = r.item_id AND i.brand_id = r.brand_id
      WHERE r.id = $1 AND r.brand_id = $2`,
     [refId, brandId],
   );
@@ -138,6 +138,7 @@ export async function reviewReference(brandId: string, refId: string, input: Rev
   let row: DriveReference | null;
   if (input.action === "verify") {
     if (ref.item_state === "removed") throw new DriveValidationError("Dosya Drive'da artık yok (silinmiş veya taşınmış); doğrulanamaz.");
+    if (isNonProductImage(ref.item_name, ref.item_path, ref.item_mime)) throw new DriveValidationError(`${ref.item_name}: logo/grafik dosyası gibi görünüyor; ürün referansı olarak doğrulanamaz. Logoyu Medya arşivine "logo" türüyle yükleyin.`);
     if (!isTheme(input.theme)) throw new DriveValidationError("Doğrulamak için dört FriBee temasından birini seçin.");
     if (!isView(input.view)) throw new DriveValidationError("Doğrulamak için görünümü (ön / arka / detay / diğer) seçin.");
     if (!input.artworkConfirmed) {
@@ -183,7 +184,7 @@ export const ORIGINAL_MAX_BYTES = 200 * 1024 * 1024;
  * - Yeniden boyutlandırma, sıkıştırma, renk dönüşümü yapılmaz. Kısa kenarı REFERENCE_MIN_SHORT_SIDE altındaki görsel alınmaz.
  * - Ücretli görsel analiz tetiklenmez.
  */
-export async function importReferenceOriginal(brandId: string, refId: string) {
+export async function importReferenceOriginal(brandId: string, refId: string, actor = "user") {
   if (!isUuid(refId)) throw new DriveValidationError("Referans bulunamadı.");
   const ref = await q1<DriveReference & DriveItem & { ref_id: string }>(
     `SELECT r.id AS ref_id, r.status, r.theme, r.view, r.media_asset_id, i.file_id, i.name, i.mime_type, i.state, i.size_bytes, i.md5_checksum, i.image_width, i.image_height
@@ -227,7 +228,7 @@ export async function importReferenceOriginal(brandId: string, refId: string) {
     },
   );
   await q(`UPDATE drive_references SET media_asset_id = $3, updated_at = now() WHERE id = $1 AND brand_id = $2`, [refId, brandId, asset.id]);
-  await audit({ brandId, actor: "user", action: "drive.reference_import", message: `Doğrulanmış Drive referansı orijinal kalitede medya arşivine alındı: ${ref.name} (${w}x${h})`, data: { referenceId: refId, assetId: asset.id } });
+  await audit({ brandId, actor, action: "drive.reference_import", message: `Doğrulanmış Drive referansı orijinal kalitede medya arşivine alındı: ${ref.name} (${w}x${h})`, data: { referenceId: refId, assetId: asset.id } });
   return { assetId: asset.id, duplicate };
 }
 
@@ -294,6 +295,100 @@ export async function proposeMemoryFromDocument(brandId: string, itemId: string,
 }
 
 const VIEW_ORDER: Record<string, number> = { front: 0, back: 1, detail: 2, other: 3 };
+
+// ---------------------------------------------------------------- Otomatik ön sınıflandırma ve toplu inceleme
+
+/** Ürün fotoğrafı olmayan görseller: logo, artboard, ikon, filigran, ekran görüntüsü, palet vb. Ürün referansı olamaz. */
+const NON_PRODUCT_RE = /(^|[^a-z0-9])(logo|logos|logotype|artboard|icon|icons|favicon|watermark|wordmark|monogram|brandmark|screenshot|screen ?shot|ekran ?g[öo]r[üu]nt[üu]s[üu]|palette|palet|swatch|font|typeface|mockup ?template)([^a-z0-9]|$)/i;
+const IMPORTABLE = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+export function isNonProductImage(name: string, path: string | null, mime: string) {
+  if (!IMPORTABLE.has(mime) && !/^image\/(heic|heif|tiff)$/.test(mime)) return true; // SVG, PSD, GIF … tasarım/grafik dosyası
+  return NON_PRODUCT_RE.test(name) || NON_PRODUCT_RE.test((path ?? "").split("/").slice(0, -1).join("/"));
+}
+
+/**
+ * Tarama sonrası: dizindeki ürün fotoğrafları kendiliğinden inceleme kuyruğuna girer (tema ve görünüm önerisiyle).
+ * Hiçbir şey otomatik doğrulanmaz. Logo/grafik dosyaları, düşük çözünürlüklüler ve orijinali taşınamayan biçimler girmez.
+ * Ücretsizdir: Drive API çağrısı yapılmaz, yalnızca dizin verisi kullanılır.
+ */
+export async function autoQueueReferences(brandId: string, opts: { limit?: number } = {}, db: Queryable = getPool()) {
+  const rows = await q<{ id: string; name: string; path: string | null; mime_type: string; image_width: number | null; image_height: number | null }>(
+    `SELECT i.id, i.name, i.path, i.mime_type, i.image_width, i.image_height FROM drive_items i
+     WHERE i.brand_id = $1 AND NOT i.is_folder AND i.state = 'indexed' AND i.mime_type = ANY($2::text[])
+       AND NOT EXISTS (SELECT 1 FROM drive_references r WHERE r.item_id = i.id)
+     ORDER BY i.path NULLS LAST, i.name LIMIT $3`,
+    [brandId, [...IMPORTABLE], Math.min(2000, opts.limit ?? 500)],
+    db,
+  );
+  let queued = 0, skipped = 0;
+  for (const it of rows) {
+    if (isNonProductImage(it.name, it.path, it.mime_type) || (it.image_width && it.image_height && referenceTooSmall(it.image_width, it.image_height))) { skipped++; continue; }
+    const s = combineSuggestion(`${it.path ?? ""} ${it.name}`, null);
+    const r = await q1(
+      `INSERT INTO drive_references (brand_id, item_id, theme, view, suggested_theme, suggested_view, suggestion_confidence, suggestion_detail)
+       VALUES ($1,$2,$3,$4,$3,$4,$5,$6) ON CONFLICT (item_id) DO NOTHING RETURNING id`,
+      [brandId, it.id, s.theme, s.view, s.confidence, JSON.stringify({ ...s.detail, auto: true })],
+      db,
+    );
+    if (r) queued++;
+  }
+  if (queued) await audit({ brandId, actor: "system", action: "drive.auto_queue", message: `${queued} ürün fotoğrafı inceleme kuyruğuna otomatik eklendi (öneri; doğrulama sahipte).` }, db);
+  return { queued, skipped };
+}
+
+export type BulkDecision = { referenceId: string; theme?: string | null; view?: string | null };
+
+/**
+ * Toplu inceleme: seçilen referanslar tek seferde doğrulanır veya reddedilir. Doğrulamada sahip, seçilen tüm görsellerde
+ * baskı, renk ve kalıbın birebir doğru olduğunu tek onayla beyan eder. Orijinaller işleyicide otomatik arşive alınır.
+ */
+export async function bulkReview(brandId: string, decisions: BulkDecision[], action: "verify" | "reject", opts: { artworkConfirmed?: boolean; actor?: string } = {}) {
+  const list = decisions.filter((d) => isUuid(d.referenceId)).slice(0, 200);
+  if (!list.length) throw new DriveValidationError("En az bir görsel seçin.");
+  if (action === "verify" && !opts.artworkConfirmed) throw new DriveValidationError("Seçilen görsellerde baskı, renk ve kalıbın birebir doğru olduğunu onaylayın.");
+  const done: string[] = [];
+  const errors: string[] = [];
+  for (const d of list) {
+    try {
+      await reviewReference(brandId, d.referenceId, { action, theme: d.theme ?? null, view: d.view ?? null, artworkConfirmed: action === "verify" }, opts.actor ?? "user");
+      done.push(d.referenceId);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  return { done: done.length, errors };
+}
+
+/**
+ * İşleyici adımı: doğrulanmış ama orijinali henüz medya arşivinde olmayan referansları içe aktarır (marka başına sırayla).
+ * Kalıcı hata 3 denemeden sonra durdurulur ve inceleme ekranında gösterilir; yetki hatasında deneme hakkı harcanmaz.
+ */
+export async function runReferenceImportOnce(limit = 3) {
+  const rows = await q<{ id: string; brand_id: string }>(
+    `SELECT r.id, r.brand_id FROM drive_references r JOIN drive_items i ON i.id = r.item_id AND i.brand_id = r.brand_id
+     WHERE r.status = 'verified' AND r.media_asset_id IS NULL AND i.state <> 'removed' AND i.mime_type = ANY($1::text[])
+       AND COALESCE((r.suggestion_detail->>'import_attempts')::int, 0) < 3
+     ORDER BY r.verified_at LIMIT $2`,
+    [[...IMPORTABLE], limit],
+  );
+  const out: { referenceId: string; ok: boolean; error?: string }[] = [];
+  for (const r of rows) {
+    try {
+      await importReferenceOriginal(r.brand_id, r.id, "system");
+      out.push({ referenceId: r.id, ok: true });
+    } catch (err) {
+      const msg = safeError(err);
+      out.push({ referenceId: r.id, ok: false, error: msg });
+      if (err instanceof DriveAuthError) break; // yeniden bağlanana kadar bekler; deneme hakkı harcanmaz
+      await q(
+        `UPDATE drive_references SET suggestion_detail = suggestion_detail || jsonb_build_object('import_error', $2::text, 'import_attempts', COALESCE((suggestion_detail->>'import_attempts')::int, 0) + 1), updated_at = now() WHERE id = $1`,
+        [r.id, msg],
+      );
+    }
+  }
+  return out;
+}
 
 /**
  * Video/Görsel Stüdyosu için koleksiyonun doğrulanmış katalog fotoğrafları (orijinali medya arşivine alınmış, kısa kenarı

@@ -11,7 +11,7 @@ import { systemPrompt } from "@/lib/agents/prompts";
 import { DRIVE_SCOPES, FOLDER_MIME, driveRuntime } from "@/lib/drive/google";
 import { completeDriveOAuth, consumeDriveState, disconnectDrive, findArchiveFolders, getDriveSource, selectArchiveFolder, startDriveOAuth } from "@/lib/drive/source";
 import { runDriveScanOnce } from "@/lib/drive/indexer";
-import { chunkText, importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds } from "@/lib/drive/references";
+import { autoQueueReferences, bulkReview, chunkText, importReferenceOriginal, isNonProductImage, proposeMemoryFromDocument, reviewReference, runReferenceImportOnce, suggestReferences, unverifiedDriveAssetIds } from "@/lib/drive/references";
 
 // Sahte Google (OAuth + Drive v3). Gerçek Google'a hiçbir istek gitmez.
 type FakeFile = { id: string; name: string; mimeType: string; parents: string[]; trashed?: boolean; content?: Buffer; width?: number; height?: number; md5Override?: string };
@@ -318,5 +318,57 @@ describe("Google Drive arşivi", () => {
     await expect(importReferenceOriginal(other, ref!.id)).rejects.toThrow(/bulunamadı/);
     await expect(reviewReference(other, ref!.id, { action: "reject" })).rejects.toThrow(/bulunamadı/);
     await expect(proposeMemoryFromDocument(other, (await item("Characters"))!.id)).rejects.toThrow(/bulunamadı/);
+  });
+
+  it("tarama sonrası ürün fotoğrafları otomatik inceleme kuyruğuna girer; logo/artboard girmez ve ürün referansı olarak doğrulanamaz", async () => {
+    const shoot = put({ id: id("fold"), name: "Music Shoot", mimeType: FOLDER_MIME, parents: [ROOT] });
+    const real = (shade: string) => sharp({ create: { width: 1600, height: 2000, channels: 3, background: shade } }).jpeg({ quality: 92 }).toBuffer();
+    put({ id: id("file"), name: "music-front.jpg", mimeType: "image/jpeg", parents: [shoot.id], content: await real("#fafafa"), width: 1600, height: 2000 });
+    put({ id: id("file"), name: "music-back.jpg", mimeType: "image/jpeg", parents: [shoot.id], content: await real("#f4f4f4"), width: 1600, height: 2000 });
+    put({ id: id("file"), name: "Artboard 1.png", mimeType: "image/png", parents: [shoot.id], content: await sharp({ create: { width: 2000, height: 2000, channels: 4, background: "#f97316" } }).png().toBuffer(), width: 2000, height: 2000 });
+    put({ id: id("file"), name: "fribee-logo-white.png", mimeType: "image/png", parents: [ROOT], content: Buffer.from("logo"), width: 1200, height: 1200 });
+    expect((await scanUntilIdle())!.status).toBe("completed");
+    const refOf = (name: string) => q1<{ id: string; status: string; suggested_theme: string | null; suggested_view: string; auto: string | null }>(
+      `SELECT r.id, r.status, r.suggested_theme, r.suggested_view, r.suggestion_detail->>'auto' AS auto FROM drive_references r JOIN drive_items i ON i.id = r.item_id WHERE i.brand_id = $1 AND i.name = $2`, [brandId, name]);
+    const front = (await refOf("music-front.jpg"))!;
+    expect(front).toMatchObject({ status: "uncertain", suggested_theme: "music", suggested_view: "front", auto: "true" });
+    expect((await refOf("music-back.jpg"))!.suggested_view).toBe("back");
+    expect(await refOf("Artboard 1.png")).toBeNull();
+    expect(await refOf("fribee-logo-white.png")).toBeNull();
+    expect(isNonProductImage("Artboard 1.png", "FriBee Master Archive/Space Alien/Artboard 1.png", "image/png")).toBe(true);
+    expect(isNonProductImage("space-alien-front.jpg", "FriBee Master Archive/Logo pack/space-alien-front.jpg", "image/jpeg")).toBe(true);
+    expect(isNonProductImage("space-alien-front.jpg", "FriBee Master Archive/Space Alien/space-alien-front.jpg", "image/jpeg")).toBe(false);
+    // Elle kuyruğa eklenmiş logo bile ürün referansı olarak doğrulanamaz (28 Ekim: Artboard 1.png hatası)
+    const art = (await suggestReferences(brandId, [(await item("Artboard 1.png"))!.id])).references[0];
+    await expect(reviewReference(brandId, art.id, { action: "verify", theme: "space_alien", view: "front", artworkConfirmed: true })).rejects.toThrow(/logo\/grafik/);
+    // Tekrar çalıştırmak aynı görseli ikinci kez eklemez
+    expect((await autoQueueReferences(brandId)).queued).toBe(0);
+  });
+
+  it("toplu onay: tek beyanla doğrulanır, orijinaller işleyicide otomatik arşive alınır; kalıcı hata 3 denemede durur", async () => {
+    const ref = async (name: string) => (await q1<{ id: string }>(`SELECT r.id FROM drive_references r JOIN drive_items i ON i.id = r.item_id WHERE i.brand_id = $1 AND i.name = $2`, [brandId, name]))!.id;
+    const front = await ref("music-front.jpg"), back = await ref("music-back.jpg");
+    const decisions = [{ referenceId: front, theme: "music", view: "front" }, { referenceId: back, theme: "music", view: "back" }];
+    await expect(bulkReview(brandId, decisions, "verify")).rejects.toThrow(/birebir doğru/);
+    const missingView = await bulkReview(brandId, [{ referenceId: front, theme: "music", view: null }], "verify", { artworkConfirmed: true });
+    expect(missingView).toMatchObject({ done: 0 });
+    expect(missingView.errors[0]).toMatch(/görünümü/);
+    expect(await bulkReview(brandId, decisions, "verify", { artworkConfirmed: true })).toEqual({ done: 2, errors: [] });
+
+    const results = await runReferenceImportOnce(10);
+    expect(results.filter((r) => r.ok).map((r) => r.referenceId).sort()).toEqual([front, back].sort());
+    const imported = await q<{ name: string; width: number; kind: string }>(
+      `SELECT i.name, m.width, m.kind FROM drive_references r JOIN drive_items i ON i.id = r.item_id JOIN media_assets m ON m.id = r.media_asset_id WHERE r.id = ANY($1::uuid[]) ORDER BY i.name`, [[front, back]]);
+    expect(imported).toEqual([{ name: "music-back.jpg", width: 1600, kind: "photo" }, { name: "music-front.jpg", width: 1600, kind: "photo" }]);
+    expect((await runReferenceImportOnce(10)).map((r) => r.referenceId)).not.toEqual(expect.arrayContaining([front])); // içe aktarılan tekrar denenmez
+
+    // Görsel olarak okunamayan dosya: 3 denemeden sonra durur, hata kayıtta görünür
+    const broken = await ref("bee-2.png");
+    await bulkReview(brandId, [{ referenceId: broken, theme: "save_the_bee", view: "front" }], "verify", { artworkConfirmed: true });
+    for (let i = 0; i < 4; i++) await runReferenceImportOnce(10);
+    const b = (await q1<{ media_asset_id: string | null; detail: any }>(`SELECT media_asset_id, suggestion_detail AS detail FROM drive_references WHERE id = $1`, [broken]))!;
+    expect(b.media_asset_id).toBeNull();
+    expect(b.detail.import_attempts).toBe(3);
+    expect(b.detail.import_error).toMatch(/okunamadı|Çözünürlük/);
   });
 });
