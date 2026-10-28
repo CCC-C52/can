@@ -15,6 +15,7 @@ import { reconcileStaleSubmissions } from "@/lib/services/provider-jobs";
 import { runDriveScanOnce } from "@/lib/drive/indexer";
 import { runReferenceImportOnce } from "@/lib/drive/references";
 import { runPrAgencyTick } from "@/lib/services/pr-agency";
+import { runBrainTick } from "@/lib/brain/worker";
 
 const problems = assertProductionConfig("worker");
 if (problems.length) {
@@ -39,6 +40,8 @@ async function main() {
   let lastDriveCheck = 0;
   let prRunning = false;
   let lastPrCheck = 0;
+  let brainRunning = false;
+  let lastBrainCheck = 0;
   while (!stopping) {
     try {
       const n = await engine.tick();
@@ -73,6 +76,19 @@ async function main() {
           .then((r) => r.forEach((x) => log(x.ok ? "info" : "warn", "drive.reference_import", x)))
           .catch((e) => log("error", "drive.scan_error", { error: e }))
           .finally(() => { driveRunning = false; });
+      }
+      // Brand Brain: Drive içeriğinin artımlı alımı (indir → ayrıştır → parçala → dizinle; izinliyse bütçeli gömme).
+      // Ayrı bayrak: görev, video ve analiz döngülerini bloklamaz; tur başına en fazla 8 belge / 25 sn.
+      if (!brainRunning && Date.now() - lastBrainCheck > 15_000) {
+        lastBrainCheck = Date.now();
+        brainRunning = true;
+        runBrainTick(workerId)
+          .then((ticks) => ticks.forEach((t) => (t.processed.length || t.sync.added || t.sync.changed || t.sync.removed || t.embedded || t.recovered) && log("info", "brain.tick", {
+            brandId: t.brandId, sync: t.sync, processed: t.processed.length, failed: t.processed.filter((p) => p.status === "failed" || p.status === "dead").length,
+            embedded: t.embedded, embedNote: t.embedNote ?? undefined, recovered: t.recovered || undefined,
+          })))
+          .catch((e) => log("error", "brain.error", { error: e }))
+          .finally(() => { brainRunning = false; });
       }
       // Yedekleme görev döngüsünü bloklamadan, en fazla 30 sn'de bir kontrol edilir
       if (!backupRunning && Date.now() - lastBackupCheck > 30_000) {

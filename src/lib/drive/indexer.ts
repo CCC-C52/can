@@ -14,7 +14,7 @@ import { markReauth, safeError, tokenProvider, type DriveSource, type FullScanSt
 // 4) Her turda en fazla `pagesPerTick` sayfa (kota koruması). Hata durumunda üstel geri çekilme ile yeniden planlanır.
 
 export const FILE_FIELDS =
-  "id,name,mimeType,parents,size,md5Checksum,sha1Checksum,sha256Checksum,createdTime,modifiedTime,version,trashed,hasThumbnail,imageMediaMetadata(width,height)";
+  "id,name,mimeType,parents,size,md5Checksum,sha1Checksum,sha256Checksum,createdTime,modifiedTime,version,trashed,hasThumbnail,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis)";
 const MAX_DEPTH = 64;
 const MAX_QUEUE = 200_000;
 const LOCK_MINUTES = 30;
@@ -37,6 +37,7 @@ export type NormalizedItem = {
   has_thumbnail: boolean;
   image_width: number | null;
   image_height: number | null;
+  video_duration_ms: number | null;
   state: ItemState;
   state_detail: string | null;
   trashed: boolean;
@@ -92,6 +93,7 @@ export function normalizeFile(raw: unknown): { ok: true; item: NormalizedItem } 
   const sha1 = hex(f.sha1Checksum, 40);
   const sha256 = hex(f.sha256Checksum, 64);
   const img = f.imageMediaMetadata && typeof f.imageMediaMetadata === "object" ? (f.imageMediaMetadata as Record<string, unknown>) : {};
+  const vid = f.videoMediaMetadata && typeof f.videoMediaMetadata === "object" ? (f.videoMediaMetadata as Record<string, unknown>) : {};
   const nativeDoc = mime.startsWith("application/vnd.google-apps.");
   let state: ItemState = "indexed";
   let detail: string | null = null;
@@ -108,7 +110,7 @@ export function normalizeFile(raw: unknown): { ok: true; item: NormalizedItem } 
     item: {
       file_id: f.id, name, mime_type: mime, is_folder: isFolder, parent_ids: parents, size_bytes: size,
       md5_checksum: md5, sha1_checksum: sha1, sha256_checksum: sha256, created_time: created, modified_time: modified,
-      version: posInt(f.version), has_thumbnail: f.hasThumbnail === true, image_width: posInt(img.width), image_height: posInt(img.height),
+      version: posInt(f.version), has_thumbnail: f.hasThumbnail === true, image_width: posInt(img.width), image_height: posInt(img.height), video_duration_ms: posInt(vid.durationMillis),
       state, state_detail: detail, trashed: f.trashed === true,
     },
   };
@@ -122,18 +124,18 @@ async function upsertItems(src: DriveSource, rows: Row[]): Promise<{ upserted: n
   const unique = [...new Map(rows.map((r) => [r.file_id, r])).values()].map(({ trashed: _t, ...r }) => r);
   const res = await q<{ inserted: boolean }>(
     `INSERT INTO drive_items (brand_id, source_id, file_id, name, mime_type, is_folder, parent_ids, path, depth, size_bytes, md5_checksum, sha1_checksum,
-       sha256_checksum, created_time, modified_time, version, has_thumbnail, image_width, image_height, state, state_detail)
+       sha256_checksum, created_time, modified_time, version, has_thumbnail, image_width, image_height, video_duration_ms, state, state_detail)
      SELECT $1, $2, x.file_id, x.name, x.mime_type, x.is_folder, x.parent_ids, x.path, x.depth, x.size_bytes, x.md5_checksum, x.sha1_checksum,
-            x.sha256_checksum, x.created_time, x.modified_time, x.version, x.has_thumbnail, x.image_width, x.image_height, x.state, x.state_detail
+            x.sha256_checksum, x.created_time, x.modified_time, x.version, x.has_thumbnail, x.image_width, x.image_height, x.video_duration_ms, x.state, x.state_detail
      FROM jsonb_to_recordset($3::jsonb) AS x(file_id text, name text, mime_type text, is_folder boolean, parent_ids text[], path text, depth int,
             size_bytes bigint, md5_checksum text, sha1_checksum text, sha256_checksum text, created_time timestamptz, modified_time timestamptz,
-            version bigint, has_thumbnail boolean, image_width int, image_height int, state text, state_detail text)
+            version bigint, has_thumbnail boolean, image_width int, image_height int, video_duration_ms bigint, state text, state_detail text)
      ON CONFLICT (source_id, file_id) DO UPDATE SET
        name = EXCLUDED.name, mime_type = EXCLUDED.mime_type, is_folder = EXCLUDED.is_folder, parent_ids = EXCLUDED.parent_ids,
        path = EXCLUDED.path, depth = EXCLUDED.depth, size_bytes = EXCLUDED.size_bytes, md5_checksum = EXCLUDED.md5_checksum,
        sha1_checksum = EXCLUDED.sha1_checksum, sha256_checksum = EXCLUDED.sha256_checksum, created_time = EXCLUDED.created_time,
        modified_time = EXCLUDED.modified_time, version = EXCLUDED.version, has_thumbnail = EXCLUDED.has_thumbnail,
-       image_width = EXCLUDED.image_width, image_height = EXCLUDED.image_height, state = EXCLUDED.state, state_detail = EXCLUDED.state_detail,
+       image_width = EXCLUDED.image_width, image_height = EXCLUDED.image_height, video_duration_ms = EXCLUDED.video_duration_ms, state = EXCLUDED.state, state_detail = EXCLUDED.state_detail,
        last_seen_at = now()
      RETURNING (xmax = 0) AS inserted`,
     [src.brand_id, src.id, JSON.stringify(unique.map((r) => ({ ...r, parent_ids: r.parent_ids })))],

@@ -24,6 +24,7 @@ import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation }
 import { parseStudioRequest, type StudioRequest } from "@/lib/video/studio";
 import { describeSpec, parseVideoSpec, type VideoSpec } from "@/lib/video/spec";
 import { validateVideoPlan, type PlanValidation } from "@/lib/video/plan-validation";
+import { brainContextFor, recordOutputSources } from "@/lib/brain/context";
 
 const LEASE_MS = 60_000;
 
@@ -394,8 +395,11 @@ async function runPlan(ctx: RunCtx, workerId: string) {
   // Konuşmanın devamı: önceki mesajlar, onay bekleyen öneri ve kayıt sayımı (yönetici bilinen bilgiyi tekrar sormasın)
   const [conversation, pending] = await Promise.all([recentConversation(task.brand_id, task.project_id), pendingProposal(task.brand_id)]);
   const catalog = catalogCheck(brandCtx);
+  // Erişim öncelikli: AI Yöneticisi yanıt/plan üretmeden önce yetkisi dahilindeki arşiv içeriğini alır
+  const brain = await brainContextFor({ brandId: task.brand_id, agent: "manager", taskId: task.id, projectId: task.project_id, instruction: task.instruction });
   const extra = [
     `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>`,
+    brain.block,
     `<catalog_check>\n<data>${JSON.stringify(catalog)}</data>\n</catalog_check>`,
     conversation.length ? `<conversation>\n<data>${JSON.stringify(conversation)}</data>\n</conversation>` : "",
     pending && pending.projectId !== task.project_id
@@ -416,16 +420,25 @@ async function runPlan(ctx: RunCtx, workerId: string) {
     if (!awaiting) await createPlanTasks(c, { brandId: task.brand_id, projectId: task.project_id, tasks, maxAttempts: limits.maxAttempts });
 
     const out = await createOutput({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, agent: "manager", kind: "plan", title: awaiting ? "Plan önerisi (onay bekliyor)" : "Görev planı" }, c);
-    await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, awaiting_approval: awaiting, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo }, c);
+    const planVersion = await addVersion({ brandId: task.brand_id, outputId: out.id, content: { ...res.data, awaiting_approval: awaiting, sanitized_tasks: tasks, dropped }, createdBy: "agent:manager", generator: res.generator, isDemo: res.isDemo }, c);
+    const src = await recordOutputSources(task.brand_id, planVersion.id, brain.search, res.data, c);
     const lines = tasks.map((t, i) => `${i + 1}. ${agentName(t.agent)} — ${t.title}${t.depends_on.length ? ` (önce: ${t.depends_on.join(", ")})` : ""}`);
     const questions = (res.data.questions_for_owner ?? []).filter((x) => x.trim() && !contradictsCatalog(x, catalog.product_count)).slice(0, 10);
     if (awaiting) questions.push("Bu planı onaylıyor musunuz? Başlatmak için “onaylıyorum” yazmanız yeterli.");
     await q(`UPDATE projects SET questions = $2 WHERE id = $1`, [task.project_id, JSON.stringify(questions)], c);
-    const msg = [res.data.reply + catalogNote, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\n${awaiting ? "Önerilen görevler (onayınızı bekliyor)" : "Görevler"}:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : ""].join("\n");
+    const msg = [res.data.reply + catalogNote, res.data.goals.length ? `\nHedefler:\n${res.data.goals.map((g) => `• ${g}`).join("\n")}` : "", lines.length ? `\n${awaiting ? "Önerilen görevler (onayınızı bekliyor)" : "Görevler"}:\n${lines.join("\n")}` : "", questions.length ? `\nSizden gereken bilgiler:\n${questions.map((x) => `? ${x}`).join("\n")}` : "", dropped.length ? `\nPlandan çıkarılanlar: ${dropped.join(", ")}` : "", sourcesLine(brain.search, res.data, src.cited)].filter(Boolean).join("\n");
     await q(`INSERT INTO chat_messages (brand_id, project_id, role, content, data) VALUES ($1,$2,'manager',$3,$4)`, [task.brand_id, task.project_id, msg.trim(), JSON.stringify({ isDemo: res.isDemo, generator: res.generator })], c);
     await finish(task, workerId, { status: "completed", outputId: out.id, model: res.model, service: ctx.model.service }, c);
   });
   // Görevsiz plan: soru varsa "bilgi bekliyor", yoksa tamamlandı (updateProjectStatus belirler)
+}
+
+/** Sohbet yanıtına eklenen kaynak satırı: yalnızca yanıtta atıf yapılan arşiv dosyaları (yoksa hiçbir şey yazılmaz). */
+function sourcesLine(search: Awaited<ReturnType<typeof brainContextFor>>["search"], content: unknown, cited: number) {
+  if (!search?.hits.length || !cited) return "";
+  const text = JSON.stringify(content ?? "");
+  const used = search.hits.filter((h) => new RegExp(`\\b${h.label}\\b`).test(text) || (h.name.length >= 6 && text.includes(h.name)));
+  return used.length ? `\nKaynaklar (Drive arşivi): ${used.map((h) => `[${h.label}] ${h.path ?? h.name}`).join("; ")}` : "";
 }
 
 // ---------------------------------------------------------------- Uzman üretimi
@@ -606,7 +619,10 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
   const upstream = await upstreamOutputs(task);
   if (upstream.length) assertTool(agent, "outputs.read");
   const schema = OUTPUT_SCHEMAS[agent] as import("zod").ZodType<any>;
-  const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined, studio ? studioBlock(studio, ctx.limits) : undefined].filter(Boolean).join("\n") || undefined;
+  // Erişim öncelikli: uzman, FriBee'ye özgü bilgi için önce rolünün görebildiği arşiv içeriğini alır (güvenilmeyen veri olarak)
+  const projectInstruction = (await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [task.project_id, task.brand_id]))?.instruction ?? null;
+  const brain = await brainContextFor({ brandId: task.brand_id, agent, taskId: task.id, projectId: task.project_id, instruction: task.instruction, projectInstruction });
+  const extra = [await extraForAgent(agent, task.brand_id), video ? videoTargetsBlock(video) : undefined, studio ? studioBlock(studio, ctx.limits) : undefined, brain.block].filter(Boolean).join("\n") || undefined;
   const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, upstream, feedback: task.feedback, extra });
   // Aynı talep için daha önce doğrulanmış (render'ı teknik nedenle başarısız olmuş) plan varsa yeniden kullanılır: model çağrısı yok
   const cached = agent === "video" && !task.feedback ? await cachedVideoPlan(task, ctx.model.isDemo) : null;
@@ -627,6 +643,7 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
       outputId = out.id;
     }
     const v = await addVersion({ brandId: task.brand_id, outputId, content: res.data, createdBy: `agent:${agent}`, generator: res.generator, isDemo: res.isDemo }, c);
+    await recordOutputSources(task.brand_id, v.id, brain.search, res.data, c);
     await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: `agent:${agent}`, action: "output.version", message: `${agentName(agent)} çıktı üretti: ${task.title} (sürüm ${v.version}${res.isDemo ? ", DEMO" : ""})` }, c);
 
     if (agent === "quality") {
