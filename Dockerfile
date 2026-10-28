@@ -5,8 +5,9 @@
 FROM node:22-bookworm-slim AS base
 ENV NEXT_TELEMETRY_DISABLED=1
 # ffmpeg: video kurgu · fonts: görsel derleme ve altyazı · postgresql-client-17: günlük yedek (pg_dump)
+# poppler-utils: Brand Brain PDF metin çıkarımı (pdftotext; ayrı süreç, AI değil)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gnupg ffmpeg fonts-dejavu-core \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg ffmpeg fonts-dejavu-core poppler-utils \
  && install -d /usr/share/keyrings \
  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
  && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \

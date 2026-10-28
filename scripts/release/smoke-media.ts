@@ -8,6 +8,28 @@ import os from "node:os";
 import path from "node:path";
 import { renderEdit } from "@/lib/adapters/video-edit";
 import { verifyVideoFile } from "@/lib/video/verify";
+import JSZip from "jszip";
+import { parseDocx, parsePdf } from "@/lib/brain/parsers";
+
+/** Brand Brain ayrıştırıcıları üretim imajında: poppler pdftotext ve OOXML (AI değil). */
+async function brainParsers() {
+  const stream = "BT /F1 12 Tf 72 720 Td (FriBee Space Alien story) Tj ET";
+  const objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  let pdf = "%PDF-1.4\n";
+  const off: number[] = [];
+  objs.forEach((o, i) => { off.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const x = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${off.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF\n`;
+  const p = await parsePdf(Buffer.from(pdf, "latin1"));
+  if (!p.ok || !p.sections[0].text.includes("FriBee Space Alien story")) throw new Error(`PDF ayrıştırılamadı: ${JSON.stringify(p)}`);
+  const z = new JSZip();
+  z.file("word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Music collection</w:t></w:r></w:p></w:body></w:document>`);
+  const d = await parseDocx(await z.generateAsync({ type: "nodebuffer" }));
+  if (!d.ok || !d.sections[0].text.includes("Music collection")) throw new Error("DOCX ayrıştırılamadı");
+  return { pdf: "ok", docx: "ok", pdftotext: execFileSync("pdftotext", ["-v"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim().split("\n")[0] || "ok" };
+}
 
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smoke-"));
@@ -42,7 +64,8 @@ async function main() {
     if (s.codec_name !== "h264" || s.width !== 1080 || s.height !== 1920) throw new Error(`Beklenmeyen çıktı: ${JSON.stringify(s)}`);
     const dur = Number(probe.format.duration);
     if (Math.abs(dur - r.expectedDuration) > 0.5) throw new Error(`Süre ${dur} sn, beklenen ${r.expectedDuration} sn`);
-    console.log(JSON.stringify({ ok: true, ffmpeg: ffmpegVersion, codec: s.codec_name, width: s.width, height: s.height, pixFmt: s.pix_fmt, audio: ev.audio_codec, decoded: ev.decoded, durationS: dur, expectedS: r.expectedDuration, bytes: r.video.length, overlays: r.overlays.length }));
+    const brain = await brainParsers();
+    console.log(JSON.stringify({ ok: true, brain, ffmpeg: ffmpegVersion, codec: s.codec_name, width: s.width, height: s.height, pixFmt: s.pix_fmt, audio: ev.audio_codec, decoded: ev.decoded, durationS: dur, expectedS: r.expectedDuration, bytes: r.video.length, overlays: r.overlays.length }));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

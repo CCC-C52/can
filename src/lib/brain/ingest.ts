@@ -142,10 +142,14 @@ async function claimNext(brandId: string, workerId: string): Promise<KbDocument 
 
 type Chunk = { section: string; text: string; sensitivity: Sensitivity; flags: string[]; collections: string[] };
 
+/** Gizli bilgi (anahtar, parola, kart) şüphesi taşıyan parçanın metni dizine HİÇ yazılmaz; yalnızca yer tutucu saklanır. */
+export const SECRET_PLACEHOLDER = "[Gizli bilgi şüphesi: bu bölümün metni dizine alınmadı ve hiçbir ajana verilmez. Kaynak dosyayı Drive'da inceleyin.]";
+
 function buildChunks(sections: Section[], base: Sensitivity, path: string): Chunk[] {
   return chunkSections(sections).slice(0, MAX_CHUNKS_PER_DOC).map((c) => {
     const s = contentSensitivity(base, c.text);
-    return { section: c.section, text: c.text, sensitivity: s.sensitivity, flags: [...s.flags, ...injectionFlags(c.text)], collections: collectionsIn(`${path} ${c.section} ${c.text}`) };
+    const secret = s.flags.includes("secret_withheld");
+    return { section: c.section, text: secret ? SECRET_PLACEHOLDER : c.text, sensitivity: s.sensitivity, flags: [...s.flags, ...(secret ? [] : injectionFlags(c.text))], collections: secret ? [] : collectionsIn(`${path} ${c.section} ${c.text}`) };
   });
 }
 

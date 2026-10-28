@@ -44,6 +44,13 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
       `SELECT id, status, error, input_refs FROM tasks WHERE output_id = $1 AND brand_id = $2 AND kind = 'render' ORDER BY created_at DESC LIMIT 1`, [id, brand.id]).then((r) => r[0] ?? null),
   ]);
   const videoArtifacts: any[] = renderTask?.input_refs?.version_id === current.id ? renderTask.input_refs?.result?.artifacts ?? [] : [];
+  // Brand Brain kaynakları: gösterilen sürümün (yoksa onu üreten en yakın önceki sürümün) bağlamına verilen arşiv parçaları
+  const sourceRows = await q<{ version: number; label: string; name: string; path: string | null; section: string | null; verification: string; cited: boolean; file_id: string; doc_status: string | null }>(
+    `SELECT v.version, s.label, s.name, s.path, s.section, s.verification, s.cited, s.file_id, d.status AS doc_status
+     FROM kb_output_sources s JOIN output_versions v ON v.id = s.output_version_id LEFT JOIN kb_documents d ON d.id = s.document_id
+     WHERE v.output_id = $1 AND s.brand_id = $2 AND v.version <= $3 ORDER BY v.version DESC, s.rank`, [id, brand.id, shown.version]);
+  const sourcesVersion = sourceRows[0]?.version ?? null;
+  const sources = sourceRows.filter((r) => r.version === sourcesVersion);
   const needsMp4 = out.kind === "video_plan" && (current.content?.videos ?? []).some((v: any) => v.mode === "edit_existing" || v.mode === "generate_new" || v.mode === "compose");
   const hasMp4 = assets.some((a) => current.asset_ids.includes(a.id) && a.kind === "video" && (a.generation_method === "ffmpeg_edit" || a.generation_method?.startsWith("ai_video:")));
   const latestDecision = approvals.find((a) => a.output_version_id === current.id && !a.revoked_at);
@@ -175,6 +182,26 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
               ))}
             </section>
           )}
+
+          <section className="card space-y-2" aria-labelledby="src-h">
+            <h2 id="src-h" className="h2">Kullanılan arşiv kaynakları</h2>
+            {sources.length ? (
+              <>
+                <p className="text-xs text-muted">Brand Brain bu çıktıyı üretirken uzmana {sources.length} arşiv parçası verdi{sourcesVersion !== shown.version ? ` (sürüm ${sourcesVersion})` : ""}; çıktıda atıf yapılanlar işaretli. Kaynak alıntıları doğrulanmış marka gerçeği değildir.</p>
+                <ul className="space-y-1 text-xs">
+                  {sources.map((s) => (
+                    <li key={s.label}>
+                      <span className="font-mono">[{s.label}]</span>{" "}
+                      <a className="link" href={`https://drive.google.com/file/d/${encodeURIComponent(s.file_id)}/view`} target="_blank" rel="noopener noreferrer">{s.path ?? s.name}</a>
+                      {s.section ? <span className="text-muted"> · {s.section}</span> : null}
+                      {" "}<Badge tone={s.cited ? "ok" : "neutral"}>{s.cited ? "atıf yapıldı" : "yalnızca bağlamda"}</Badge>
+                      <span className="block text-muted">{s.verification}{s.doc_status === "removed" ? " · kaynak artık arşivde yok" : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : <p className="text-xs text-muted">Bu çıktı için arşivden içerik alınmadı (Brand Brain eşleşme bulmadı veya çıktı arşiv erişiminden önce üretildi). Uzman Drive belgelerini kullandığını iddia edemez.</p>}
+          </section>
 
           <section className="card space-y-2" aria-labelledby="cost-h">
             <h2 id="cost-h" className="h2">Maliyet</h2>

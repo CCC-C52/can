@@ -41,7 +41,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: SP
       <PageHeader
         title="Marka Bilgi Merkezi"
         subtitle={<>FriBee Master Archive (Google Drive) dizini, sahibin doğruladığı baskılar ve kaynaklı bilgiler. Ajanlara yalnızca <strong>onaylı</strong> bilgiler, yalnızca kendi rollerinin görebildiği hassasiyette verilir.</>}
-        actions={<Link href="/pr-ajansi" className="btn">PR Ajansı ve 24 aylık plan</Link>}
+        actions={<div className="flex flex-wrap gap-2"><Link href="/bilgi/beyin" className="btn-primary">Brand Brain (içerik dizini)</Link><Link href="/pr-ajansi" className="btn">PR Ajansı ve 24 aylık plan</Link></div>}
       />
       <Flash ok={ok} err={err} />
 

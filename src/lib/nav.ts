@@ -48,6 +48,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: "/markalar", label: "Marka Yönetimi", icon: "book", hint: "Marka kılavuzu" },
       { href: "/hafiza", label: "Marka Hafızası", icon: "brain" },
       { href: "/bilgi", label: "Marka Bilgi Merkezi", icon: "library" },
+      { href: "/bilgi/beyin", label: "Brand Brain", icon: "search" },
       { href: "/drive-arsivi", label: "Drive Arşivi", icon: "drive" },
     ],
   },

@@ -90,7 +90,7 @@ jobs:
             echo "deb [signed-by=/etc/apt/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
             sudo apt-get update -qq
           fi
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core postgresql-client-17
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core poppler-utils postgresql-client-17
           "$PG_DUMP_PATH" --version | grep -q "(PostgreSQL) 17\." || { echo "pg_dump 17 bulunamadı: $("$PG_DUMP_PATH" --version 2>&1)"; exit 1; }
           "$PG_DUMP_PATH" --version
           pip install --quiet "moto[server]==${MOTO_VERSION}"
@@ -133,7 +133,7 @@ jobs:
       - name: ffmpeg, yazı tipleri, S3 taklidi
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core poppler-utils
           pip install --quiet "moto[server]==${MOTO_VERSION}"
           nohup moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
           for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:5055/ && break; sleep 1; done
