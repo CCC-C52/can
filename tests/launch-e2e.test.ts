@@ -47,7 +47,13 @@ class FakeOmni implements VideoGenerator {
   constructor(private clip: Buffer) {}
   estimateCostUsd(s: number) { return 0.25 * s; }
   async submit(req: VideoGenRequest) { this.submits.push(req); return { externalId: `v1_scene${this.submits.length}`, request: {} }; }
-  async poll(id: string) { return { state: "succeeded" as const, videoUri: `interaction:${id}` }; }
+  private polls = new Map<string, number>();
+  async poll(id: string) {
+    // E2E_GEMINI_POLLS: sağlayıcı sahneyi bu kadar sorguda "çalışıyor" bildirir (gerçek bekleme)
+    const n = (this.polls.get(id) ?? 0) + 1;
+    this.polls.set(id, n);
+    return n <= Number(process.env.E2E_GEMINI_POLLS ?? 0) ? { state: "running" as const } : { state: "succeeded" as const, videoUri: `interaction:${id}` };
+  }
   async download() { return this.clip; }
 }
 
@@ -69,7 +75,7 @@ class NitpickingModel implements TextModelAdapter {
   estimateCostUsd() { return 0; }
   async generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>> {
     this.calls.push({ agent: req.agent, purpose: req.purpose });
-    if (req.purpose === "review") {
+    if (req.purpose === "review" && process.env.E2E_REVIEW !== "approve") {
       const n = this.calls.length;
       return { data: { verdict: "needs_changes", score: 62, checks: [{ name: "İç notlar", status: "fail", detail: `ayrıntı ${n}` }], required_changes: [`brand_analysis.gaps içindeki ${n}. ifadeyi düzeltin.`] } as T, generator: this.id, isDemo: true, model: this.id, usage: null, actualCostUsd: 0 };
     }
@@ -156,6 +162,8 @@ describe("Sahip mesajından videoya (uçtan uca)", () => {
       await fs.writeFile(f, await getStorage().get(ad.storage_key));
       const pr = await probeVideo(f);
       probes.push([pr.width, pr.height, String(pr.video_codec), String(pr.audio_codec ?? "none")]);
+      // İsteğe bağlı: üretilen MP4'ler incelemek için dışa aktarılır (E2E_EXPORT_DIR)
+      if (process.env.E2E_EXPORT_DIR) await fs.copyFile(f, path.join(process.env.E2E_EXPORT_DIR, ad.filename));
       expect(pr.duration).toBeGreaterThan(15);
     }
     await fs.rm(dir, { recursive: true, force: true });
@@ -164,6 +172,6 @@ describe("Sahip mesajından videoya (uçtan uca)", () => {
     // Strateji ve diğer model görevleri: itirazlar danışma notu olarak onaya geldi
     tasks = await listTasks(brandId, { projectId: project.id });
     const marketing = tasks.find((t) => t.agent === "marketing" && t.kind === "work")!;
-    expect(marketing.status).toBe("approval_pending");
+    expect(marketing.status).toBe(process.env.E2E_REVIEW === "approve" ? "completed" : "approval_pending");
   }, 600_000);
 });
