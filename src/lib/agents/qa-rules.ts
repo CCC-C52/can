@@ -140,9 +140,16 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
     let langText = joined;
     for (const n of names) langText = langText.split(n).join(" ");
     const lang = detectLanguage(langText);
-    if (lang !== "unknown" && lang !== ctx.brand.content_language) {
+    if (lang !== "unknown" && lang !== ctx.brand.content_language && agent === "marketing") {
+      // Strateji operatöre yönelik iç belgedir; müşteri metinleri sosyal/tasarım/video/Shopify görevlerinde ayrıca denetlenir.
+      // Burada dil yüzünden başarısız olması tüm kampanyayı (bağlı görevleri) durdururdu.
+      checks.push({ name: "İçerik dili", status: "warn", detail: `Strateji mesajları '${lang}' görünüyor; müşteri metinleri bağlı görevlerde '${ctx.brand.content_language}' diline yazılır.` });
+    } else if (lang !== "unknown" && lang !== ctx.brand.content_language) {
+      // Hangi metinlerin çevrileceği açıkça yazılır: genel bir uyarıyla yeniden üretim aynı metinleri bırakabiliyordu
+      const strip = (t: string) => names.reduce((acc, n) => acc.split(n).join(" "), t);
+      const offending = texts.filter((t) => detectLanguage(strip(t)) === lang).map((t) => `“${t.replace(/\s+/g, " ").trim().slice(0, 80)}${t.length > 80 ? "…" : ""}”`);
       checks.push({ name: "İçerik dili", status: "fail", detail: `Müşteri metinleri '${lang}' görünüyor; marka içerik dili '${ctx.brand.content_language}'.` });
-      required.push(`Müşteriye yönelik metinleri '${ctx.brand.content_language}' diline çevirin.`);
+      required.push(`Müşteriye yönelik metinleri '${ctx.brand.content_language}' diline çevirin${offending.length ? ` (${offending.length} metin): ${offending.slice(0, 4).join(", ")}${offending.length > 4 ? " …" : ""}` : "."}`);
     } else {
       checks.push({ name: "İçerik dili", status: lang === "unknown" ? "warn" : "pass", detail: lang === "unknown" ? "Dil otomatik belirlenemedi." : `Dil uyumlu (${lang}).` });
     }
