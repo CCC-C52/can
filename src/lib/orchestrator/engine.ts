@@ -18,7 +18,7 @@ import { renderDesign, renderVideo, RENDER_POLL_MS, type RenderCtx } from "./ren
 import { analysisFrames, compactAnalysis, ensureAnalysis, type MediaAnalysis } from "@/lib/media-analysis";
 import type { MediaAsset } from "@/lib/services/media";
 import { getStorage } from "@/lib/storage";
-import { textModelMode } from "@/lib/models";
+import { getReviewModel, textModelMode } from "@/lib/models";
 import { createPlanTasks, type Task } from "./projects";
 import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation, recentWork } from "./conversation";
 import { parseStudioRequest, type StudioRequest } from "@/lib/video/studio";
@@ -84,7 +84,7 @@ export class Engine {
       `INSERT INTO worker_heartbeats (worker_id, started_at, last_seen, info) VALUES ($1, now(), now(), $2)
        ON CONFLICT (worker_id) DO UPDATE SET last_seen = now(), info = EXCLUDED.info`,
       // commit: dağıtım hattı işleyicinin yeni sürümle çalıştığını buradan doğrular
-      [this.workerId, JSON.stringify({ active: this.inflight.size, pid: process.pid, commit: releaseCommit() })],
+      [this.workerId, JSON.stringify({ active: this.inflight.size, pid: process.pid, commit: releaseCommit(), rss_mb: Math.round(process.memoryUsage().rss / 1048576) })],
     );
   }
 
@@ -313,6 +313,22 @@ export async function updateProjectStatus(projectId: string) {
 // ---------------------------------------------------------------- Model çağrısı (sınır + bütçe + maliyet)
 
 async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, prompt: { prefix: string; rest: string }, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]) {
+  if (purpose === "review") {
+    // İnceleme daha ucuz modelde; bu model isteği reddederse (400/404) aynı inceleme bir kez ana modelle yapılır
+    const reviewer = getReviewModel(ctx.model);
+    if (reviewer !== ctx.model) {
+      try {
+        return await callModelWith({ ...ctx, model: reviewer }, agent, purpose, schema, prompt, demoInput, maxTokens, images);
+      } catch (err) {
+        if (!(err instanceof PermanentError) || !/isteği reddetti/.test(err.message)) throw err;
+        log("warn", "qa.review_model_rejected", { taskId: ctx.task.id, model: reviewer.id, error: err.message });
+      }
+    }
+  }
+  return callModelWith(ctx, agent, purpose, schema, prompt, demoInput, maxTokens, images);
+}
+
+async function callModelWith<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, prompt: { prefix: string; rest: string }, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]) {
   const { task, model, limits } = ctx;
   if (ctx.signal.aborted) throw ctx.signal.reason;
   if (model.unavailableReason) throw new ModelUnavailableError(model.unavailableReason);
@@ -671,6 +687,12 @@ async function runGenerate(ctx: RunCtx, workerId: string) {
 
 /** Video planında yeniden üretim (yaratıcı revizyon) sınırı: teknik sorunlar AI'ya hiç gönderilmez, yaratıcı itiraz en fazla bir kez. */
 export const VIDEO_PLAN_MAX_REGENERATIONS = 1;
+/**
+ * Kural denetiminden geçmiş bir çıktıda yalnızca model incelemesi itiraz ediyorsa en çok bu kadar yeniden üretim yapılır;
+ * sonra itirazlar insan onayına danışma notu olarak taşınır. Her turda yeni ayrıntılar bulan inceleme (ör. iç notlardaki
+ * analiz durumu) yeniden üretimi hiç yakınsamayan, pahalı bir döngüye sokuyordu.
+ */
+export const MODEL_REVIEW_MAX_REGENERATIONS = 1;
 /** Deterministik doğrulayıcının onardığı teknik denetimler: onarımdan sonra hâlâ başarısızsa AI'ya geri gönderilmez, görev başarısız olur. */
 const TECHNICAL_VIDEO_CHECKS = new Set(["Çekim seçimi", "Sahne bölümleri", "Sahne doğrulaması", "Altyazı zamanlaması"]);
 
@@ -722,11 +744,14 @@ async function runReview(ctx: RunCtx, workerId: string) {
   const user = userPromptParts({ instruction: `Review the ${task.agent} output for task: ${task.instruction}`, ctx: brandCtx, target: { agent: task.agent, content: v.content } });
   const res = skipModel ? null : await callModel(ctx, "quality", "review", QaReviewSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [], target: { agent: task.agent, content: v.content } }, 6000);
   let merged = mergeReviews(rule, (res?.data as QaReview) ?? null, res ? (res.isDemo ? "demo" : "model") : "rules");
-  const maxRegen = task.agent === "video" ? Math.min(limits.maxRegenerations, VIDEO_PLAN_MAX_REGENERATIONS) : limits.maxRegenerations;
+  // Kural denetimi geçti, itiraz yalnızca model incelemesinden: yeniden üretim hakkı kısadır (video planı dahil 1)
+  const modelOnly = merged.verdict !== "pass" && rule.verdict === "pass";
+  const maxRegen = task.agent === "video" ? Math.min(limits.maxRegenerations, VIDEO_PLAN_MAX_REGENERATIONS)
+    : modelOnly ? Math.min(limits.maxRegenerations, MODEL_REVIEW_MAX_REGENERATIONS) : limits.maxRegenerations;
   let advisory: string[] = [];
-  if (task.agent === "video" && merged.verdict !== "pass" && rule.verdict === "pass" && task.regen_count >= maxRegen) {
-    // Plan teknik ve marka kurallarından geçti; yalnızca model incelemesinin itirazı kaldı ve yeniden üretim hakkı bitti.
-    // İtirazlar insan onayına uyarı olarak taşınır; MP4 render edilir ve insan onayı olmadan hiçbir yerde kullanılmaz.
+  if (modelOnly && task.regen_count >= maxRegen) {
+    // Çıktı teknik ve marka kurallarından geçti; yalnızca model incelemesinin itirazı kaldı ve yeniden üretim hakkı bitti.
+    // İtirazlar insan onayına uyarı olarak taşınır; çıktı insan onayı olmadan hiçbir yerde kullanılmaz.
     advisory = merged.required_changes;
     merged = {
       ...merged, verdict: "pass", required_changes: [],
@@ -742,7 +767,7 @@ async function runReview(ctx: RunCtx, workerId: string) {
     await spawnFollowUps(task, v, brandCtx);
     if (task.agent === "social") await createCalendarEntries(task, v);
     // Video planı: render edilen MP4 doğrulanıp insan onayı verilene kadar "tamamlandı" sayılmaz (onay kapısı outputs.decide içinde)
-    const needsHuman = task.requires_approval || (task.agent === "video" && videoNeedsArtifact(v.content));
+    const needsHuman = task.requires_approval || advisory.length > 0 || (task.agent === "video" && videoNeedsArtifact(v.content));
     await finish(task, workerId, { status: needsHuman ? "approval_pending" : "completed" });
     return;
   }

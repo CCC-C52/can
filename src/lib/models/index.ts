@@ -33,6 +33,15 @@ export function getTextModel(): TextModelAdapter {
   return new UnavailableAdapter();
 }
 
+/**
+ * Kalite kontrolü için model: gerçek modda ANTHROPIC_REVIEW_MODEL (varsayılan Sonnet 5.5, Opus'un yarı fiyatı).
+ * Demo/test adaptöründe veya inceleme modeli üretim modeliyle aynıysa ana adaptör kullanılır.
+ */
+export function getReviewModel(main: TextModelAdapter): TextModelAdapter {
+  if (g.__textModelOverride || !(main instanceof AnthropicAdapter) || config.anthropic.reviewModel === config.anthropic.model) return main;
+  return new AnthropicAdapter(config.anthropic.reviewModel);
+}
+
 export function textModelMode(): { mode: "real" | "demo" | "off"; label: string } {
   if (config.anthropic.apiKey) return { mode: "real", label: `Gerçek AI modu (${config.anthropic.model})` };
   if (config.demoAllowed) return { mode: "demo", label: "DEMO modu — model anahtarı yok, çıktılar kural tabanlı şablonlardır" };

@@ -48,6 +48,8 @@ export const config = {
     // Uygulamaya özel ad önceliklidir; böylece Claude Code oturumunun kendi ANTHROPIC_API_KEY kullanımıyla çakışmaz.
     get apiKey() { return str("AIOPS_ANTHROPIC_API_KEY") ?? str("ANTHROPIC_API_KEY"); },
     get model() { return str("ANTHROPIC_MODEL") ?? "claude-opus-5-5"; },
+    /** Kalite kontrolü (inceleme) modeli: sınıflandırma işi; üretim modelinin yarı fiyatlı modeli yeterlidir. */
+    get reviewModel() { return str("ANTHROPIC_REVIEW_MODEL") ?? "claude-sonnet-5-5"; },
     get effort() { return (str("ANTHROPIC_EFFORT") ?? "medium") as "low" | "medium" | "high" | "xhigh" | "max"; },
   },
   openaiImages: {

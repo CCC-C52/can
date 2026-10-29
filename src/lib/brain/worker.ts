@@ -12,6 +12,8 @@ import { processNextDocument, recoverBrainLeases, syncDocuments, type ProcessOut
 export type BrainTick = { brandId: string; sync: Awaited<ReturnType<typeof syncDocuments>>; processed: ProcessOutcome[]; embedded: number; embedNote: string | null; recovered: number };
 
 export async function runBrainTick(workerId: string, opts: { docs?: number; budgetMs?: number; brandId?: string } = {}): Promise<BrainTick[]> {
+  // Video render'ı sürerken arşiv okunmaz: ikisi aynı küçük sunucuda belleği paylaşır; render önceliklidir
+  if (await q1(`SELECT 1 FROM tasks WHERE kind = 'render' AND status = 'running' LIMIT 1`)) return [];
   const recovered = await recoverBrainLeases();
   const deadline = Date.now() + (opts.budgetMs ?? 25_000);
   const brands = await q<{ brand_id: string }>(

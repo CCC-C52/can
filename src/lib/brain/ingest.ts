@@ -25,7 +25,13 @@ import { estimateTokens } from "./embeddings";
 //  4) recoverBrainLeases: işleyici çökerse süresi dolan kiralar kuyruğa geri döner.
 
 export const BRAIN_LEASE_MS = 10 * 60_000;
-export const MAX_CONTENT_BYTES = 60 * 1024 * 1024;
+/**
+ * Belleğe alınıp ayrıştırılan en büyük dosya. İşleyici küçük bir sunucuda (Render starter, 512 MB) video render'ıyla aynı
+ * süreçte çalışır; 60 MB'lık bir dosyanın ayrıştırılması belleği taşırıp çalışan render'ı da düşürebiliyordu.
+ * E-tablolar sıkıştırılmış XML'dir (açılınca ~10 kat): ayrı, daha küçük sınır. BRAIN_MAX_CONTENT_MB ile değiştirilebilir.
+ */
+export const MAX_CONTENT_BYTES = Math.max(1, Number(process.env.BRAIN_MAX_CONTENT_MB) || 15) * 1024 * 1024;
+export const MAX_SHEET_BYTES = Math.min(MAX_CONTENT_BYTES, 5 * 1024 * 1024);
 const MAX_CHUNKS_PER_DOC = 400;
 const SYNC_BATCH = 2000;
 
@@ -263,9 +269,10 @@ export async function processNextDocument(brandId: string, workerId: string, opt
       await finishDoc(doc, { status: plan.media === "other" ? "unsupported" : "metadata_only", parser: `metadata:${plan.media}`, limitation: plan.limitation, chunks: buildChunks([section], base, item.path ?? ""), meta }, item);
       return { docId: doc.id, name: doc.name, status: plan.media === "other" ? "unsupported" : "metadata_only" };
     }
-    if (item.size_bytes && Number(item.size_bytes) > MAX_CONTENT_BYTES) {
+    const sizeLimit = /xlsx|sheet/i.test(plan.parser) ? MAX_SHEET_BYTES : MAX_CONTENT_BYTES;
+    if (item.size_bytes && Number(item.size_bytes) > sizeLimit) {
       const { section } = await metadataSection(doc, item, "other");
-      await finishDoc(doc, { status: "metadata_only", parser: plan.parser, limitation: `Dosya çok büyük (${(Number(item.size_bytes) / 1e6).toFixed(0)} MB > ${MAX_CONTENT_BYTES / 1e6} MB); yalnızca üst veri dizinlendi.`, chunks: buildChunks([section], base, item.path ?? "") }, item);
+      await finishDoc(doc, { status: "metadata_only", parser: plan.parser, limitation: `Dosya çok büyük (${(Number(item.size_bytes) / 1e6).toFixed(1)} MB > ${(sizeLimit / 1e6).toFixed(0)} MB); yalnızca üst veri dizinlendi.`, chunks: buildChunks([section], base, item.path ?? "") }, item);
       return { docId: doc.id, name: doc.name, status: "metadata_only" };
     }
     // Aynı Drive özeti (md5) zaten işlendiyse indirme yapılmaz: içerik kopyası olarak bağlanır (kaynak izi korunur)
@@ -279,7 +286,7 @@ export async function processNextDocument(brandId: string, workerId: string, opt
         return { docId: doc.id, name: doc.name, status: "duplicate" };
       }
     }
-    const buf = await driveDownload(item.file_id, opts.token ?? tokenProvider(brandId), { maxBytes: MAX_CONTENT_BYTES, ...(plan.exportMime ? { exportMime: plan.exportMime } : {}) });
+    const buf = await driveDownload(item.file_id, opts.token ?? tokenProvider(brandId), { maxBytes: sizeLimit, ...(plan.exportMime ? { exportMime: plan.exportMime } : {}) });
     const parsed = await parseContent(plan, buf);
     if (!parsed.ok) {
       const { section } = await metadataSection(doc, item, "other");
