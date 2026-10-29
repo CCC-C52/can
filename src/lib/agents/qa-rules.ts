@@ -233,7 +233,8 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
         if (opts.studio.minSeconds && est < opts.studio.minSeconds - 1) {
           // Model AI sahnelerini istenenden az/kısa planladıysa veya yalnızca AI sahnesi istendiyse eksik modelindir: başarısız
           const gen = new Map<string, any>((content.videos ?? []).filter((v: any) => v.mode === "generate_new").map((v: any) => [v.id, v]));
-          const plannedAi = parts.filter((p) => p.kind === "ai_scene").reduce((a, p) => a + Math.min(Number(p.duration_s) || 0, Number(gen.get(p.ref)?.duration_s) || Number(p.duration_s) || 0), 0);
+          const plannedAi = parts.filter((p) => p.kind === "ai_scene").reduce((a, p) => a + Math.min(Number(p.duration_s) || 0, Number(gen.get(p.ref)?.duration_s) || Number(p.duration_s) || 0), 0)
+            + parts.filter((p) => p.kind === "archive_clip" && isAiClip(mediaById.get(p.ref))).reduce((a, p) => a + (Number(p.duration_s) || Math.max(0, Number(p.source_end) - Number(p.source_start)) || 0), 0);
           const requestedAi = opts.studio.aiScenes * opts.studio.sceneSeconds;
           if (opts.studio.aiOnly || plannedAi < requestedAi - 1) {
             checks.push({ name: "Reklam süresi", status: "fail", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi (AI sahneleri ${plannedAi.toFixed(1)} sn, istenen ${requestedAi} sn).` });
@@ -312,7 +313,9 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
     }
   }
   if (agent === "video") {
-    // Birleştirilen reklam tek koleksiyonu göstermeli: AI sahnelerinin referansları ve ürün fotoğrafı parçaları aynı koleksiyondan
+    // Sahip tek bir koleksiyon seçtiyse (Video Stüdyosu) reklam yalnızca o koleksiyonu gösterir. Koleksiyon seçilmediyse
+    // birden çok koleksiyon bilinçli olabilir (ör. dört koleksiyonu sırayla gösteren lansman filmi): karıştırma engellenmez;
+    // tek bir AI sahnesinin referanslarının aynı koleksiyondan olması collectionChecks ile ayrıca denetlenir.
     const byAsset = collectionOfAssets(ctx);
     const vids: any[] = content.videos ?? [];
     for (const c of vids.filter((v) => v.mode === "compose")) {
@@ -322,7 +325,7 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
         if (p.kind === "ai_scene") ids.push(...(vids.find((v) => v.id === p.ref)?.selected_asset_ids ?? []));
       }
       const cols = [...new Set(ids.map((id) => byAsset.get(id)).filter(Boolean))];
-      if (cols.length > 1 || (opts.studio?.collection && cols.some((x) => x !== opts.studio!.collection))) {
+      if (opts.studio?.collection && cols.some((x) => x !== opts.studio!.collection)) {
         checks.push({ name: "Koleksiyon ve baskı eşleşmesi", status: "fail", detail: `${c.id}: reklam farklı koleksiyonların ürünlerini karıştırıyor (${cols.join(", ")}).` });
         required.push("Bir reklamda yalnızca seçilen koleksiyonun ürün fotoğraflarını ve AI sahnelerini kullanın.");
       }
@@ -332,11 +335,13 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
     const vids: any[] = content.videos ?? [];
     const gen = vids.filter((v) => v.mode === "generate_new");
     const comp = vids.filter((v) => v.mode === "compose");
-    if (!gen.length || !comp.length) {
+    // Daha önce üretilmiş (ödenmiş) Gemini sahnelerinin yeniden kullanımı da AI sahnesidir: yeni ücret gerekmez
+    const reusedAi = comp.flatMap((c) => (c.parts ?? []).filter((p: any) => p.kind === "archive_clip" && isAiClip(mediaById.get(p.ref))));
+    if ((!gen.length && !reusedAi.length) || !comp.length) {
       checks.push({ name: "Stüdyo talebi", status: "fail", detail: `Sahip Video Stüdyosu'nda "${opts.studio.mode}" modunu seçti; plan ${gen.length} AI sahnesi ve ${comp.length} birleştirme (compose) içeriyor. Yalnızca arşiv kurgusu kabul edilmez.` });
       required.push(`${opts.studio.aiScenes} adet generate_new AI sahnesi ve bunları birleştiren bir compose videosu planlayın.`);
     } else {
-      checks.push({ name: "Stüdyo talebi", status: "pass", detail: `${gen.length} AI sahnesi ve ${comp.length} birleştirme planlandı.` });
+      checks.push({ name: "Stüdyo talebi", status: "pass", detail: `${gen.length} yeni AI sahnesi${reusedAi.length ? `, ${reusedAi.length} yeniden kullanılan AI sahnesi` : ""} ve ${comp.length} birleştirme planlandı.` });
     }
   }
   if (agent === "social") {
@@ -444,6 +449,11 @@ function composeChecks(v: any, content: any, mediaById: Map<string, any>, checks
     else if (p.kind === "product_photo") {
       const m = mediaById.get(p.ref);
       why = !m || m.kind !== "photo" ? "arşivde olmayan veya fotoğraf olmayan dosya" : !(d >= 1 && d <= 8) ? "süre 1-8 sn olmalı" : null;
+    } else if (p.kind === "archive_clip" && isAiClip(mediaById.get(p.ref))) {
+      // Daha önce üretilmiş AI sahnesi: sahne analizi gerekmez, klibin süresi içinde kullanılır
+      const m = mediaById.get(p.ref);
+      const s0 = Number(p.source_start) || 0, e0 = Number(p.source_end) || Number(m?.duration_s) || 0;
+      why = !(e0 - s0 >= 0.5) ? "geçersiz/0,5 sn'den kısa aralık" : m?.duration_s && e0 > Number(m.duration_s) + 0.15 ? "klip süresi dışında" : null;
     } else if (p.kind === "archive_clip") {
       const m = mediaById.get(p.ref);
       const a = m?.analysis as any;
@@ -465,6 +475,11 @@ function composeChecks(v: any, content: any, mediaById: Map<string, any>, checks
   if (!String(v.outro_text ?? "").trim()) {
     checks.push({ name: "Marka kapanışı", status: "warn", detail: `${v.id}: outro_text boş; kapanışta marka adı kullanılacak.` });
   }
+}
+
+/** Daha önce bu sistemde üretilmiş AI video sahnesi (Gemini çıktısı, medya arşivinde). */
+export function isAiClip(m: { kind?: string; origin?: string } | undefined | null) {
+  return !!m && m.kind === "video" && m.origin === "ai_generated";
 }
 
 /** Ürün tasarımını/rengini değiştirmeye yönelik istem ifadeleri (marka tasarımları sabittir). */

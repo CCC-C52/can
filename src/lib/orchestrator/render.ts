@@ -350,8 +350,10 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
         if (!m || m.kind !== "video") { o.failed.push(`${vid.id}: parça ${i + 1} — arşiv videosu bulunamadı`); return; }
         const analysis = await latestAnalysis(task.brand_id, m.id);
         const scene = (analysis?.status === "completed" ? analysis.result?.local?.scenes ?? [] : []).find((x: any) => x.index === Number(p.scene_index));
-        const start = Number(p.source_start), end = Number(p.source_end);
-        if (!scene || !(end - start >= 0.5) || start < scene.start - SCENE_TOLERANCE_S || end > scene.end + SCENE_TOLERANCE_S) {
+        const start = Number(p.source_start) || 0;
+        const aiClip = m.origin === "ai_generated"; // daha önce üretilmiş AI sahnesi: sahne analizi gerekmez
+        const end = aiClip && !(Number(p.source_end) > start) ? Number(m.duration_s) || 0 : Number(p.source_end);
+        if (aiClip ? !(end - start >= 0.5) : (!scene || !(end - start >= 0.5) || start < scene.start - SCENE_TOLERANCE_S || end > scene.end + SCENE_TOLERANCE_S)) {
           o.failed.push(`${vid.id}: parça ${i + 1} — arşiv sahnesi doğrulanamadı (sahne ${p.scene_index}, ${start}–${end} sn)`);
           return;
         }

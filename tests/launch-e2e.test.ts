@@ -178,3 +178,89 @@ describe("Sahip mesajından videoya (uçtan uca)", () => {
     expect(marketing.status).toBe(process.env.E2E_REVIEW === "approve" ? "completed" : "approval_pending");
   }, 600_000);
 });
+
+/**
+ * Canlıdaki durum (29 Ekim 06:00): dört koleksiyonun doğrulanmış Drive fotoğrafları ve önceki denemeden kalan, ödenmiş
+ * Gemini sahneleri var. AI Yönetici film görevine "önceki AI sahnelerini yeniden kullan, ürün yalnızca doğrulanmış
+ * fotoğraflardan (her koleksiyondan)" dedi; video uzmanı bu planı üretti. Eski kurallar bu filmi iki kez reddediyordu:
+ * "Koleksiyon ve baskı eşleşmesi" (farklı koleksiyonlar) ve "Stüdyo talebi" (yeni generate_new sahnesi yok).
+ */
+describe("Dört koleksiyonlu film ve yeniden kullanılan Gemini sahneleri (canlı senaryo)", () => {
+  it("plan kurallardan geçer; yeni Gemini isteği olmadan dört koleksiyon fotoğraflı 9:16 + 16:9 film üretilir", async () => {
+    const b = (await createBrand({ name: "FriBee Canlı Senaryo", content_language: "en" })).id;
+    const source = (await q1<{ id: string }>(`INSERT INTO drive_sources (brand_id, status, folder_id) VALUES ($1,'active','folderLIVE00001') RETURNING id`, [b]))!.id;
+    const tees: [string, string][] = [["space_alien", "#141414"], ["music", "#f5f5f2"], ["anime", "#f58214"], ["save_the_bee", "#aad6e8"]];
+    const photoIds: Record<string, string> = {};
+    let n = 0;
+    for (const [theme, colour] of tees) {
+      const up = await uploadMedia(b, { buffer: await productPhoto(colour), filename: `IMG_77${++n}0.jpg` });
+      photoIds[theme] = up.asset.id;
+      const item = (await q1<{ id: string }>(
+        `INSERT INTO drive_items (brand_id, source_id, file_id, name, mime_type, path, has_thumbnail, image_width, image_height, state)
+         VALUES ($1,$2,$3,$4,'image/jpeg',$5,true,1200,1500,'indexed') RETURNING id`, [b, source, `liveFile${n}xyz`, `IMG_77${n}0.jpg`, `FriBee Master Archive/IMG_77${n}0.jpg`]))!.id;
+      await q(`INSERT INTO drive_references (brand_id, item_id, theme, view, status, artwork_confirmed, media_asset_id, verified_by, verified_at)
+               VALUES ($1,$2,$3,'front','verified',true,$4,'kural:renk',now())`, [b, item, theme, up.asset.id]);
+    }
+    const clip = await colorScenesVideo([{ color: "purple", seconds: 5 }], { audio: true });
+    const aiClips: string[] = [];
+    for (const name of ["fribee_rebirth_ai_01_dark_to_light-ai.mp4", "fribee_rebirth_ai_02_space_black-ai.mp4", "fribee_rebirth_ai_03_four_lights_finale-ai.mp4"]) {
+      aiClips.push((await uploadMedia(b, { buffer: clip, filename: name }, { origin: "ai_generated", rightsStatus: "owned" })).asset.id);
+    }
+    const logo = await sharp({ create: { width: 300, height: 100, channels: 4, background: "#f97316" } }).png().toBuffer();
+    await uploadMedia(b, { buffer: logo, filename: "Artboard 1.png" }, { kind: "logo" });
+
+    // Video uzmanının canlıdaki planı: önceki AI sahneleri + her koleksiyondan bir doğrulanmış fotoğraf, yeni AI sahnesi yok
+    const ai = (i: number) => ({ kind: "archive_clip", ref: aiClips[i], scene_index: 0, source_start: 0, source_end: 5, duration_s: 5, on_screen_text: "" });
+    const photo = (theme: string) => ({ kind: "product_photo", ref: photoIds[theme], duration_s: 2.5, motion: "zoom_in", on_screen_text: "" });
+    const parts = [ai(0), photo("space_alien"), photo("music"), ai(1), photo("anime"), photo("save_the_bee"), ai(2)];
+    const demo = new DemoAdapter();
+    const reuseModel: TextModelAdapter = {
+      id: "reuse", isDemo: true, service: "reuse", estimateCostUsd: () => 0,
+      async generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>> {
+        const res = await demo.generate(req);
+        if (req.agent === "video" && req.purpose !== "review") {
+          const base = (res.data as any).videos?.[0] ?? {};
+          const film = { ...base, id: "rebirth_film", title: "Rebirth", mode: "compose", format: "9:16", duration_s: 25, selected_asset_ids: [], segments: [], subtitles: [], script: [], generation_prompt: "", transition: "fade", framing: "fill", intro_text: "", outro_text: "FriBee", parts };
+          return { ...res, data: { ...(res.data as any), videos: [film] } as T };
+        }
+        return res;
+      },
+    };
+    setTextModelOverride(reuseModel);
+    const omni = new FakeOmni(clip);
+    setVideoGeneratorOverride(omni);
+    try {
+      const { project } = await submitInstruction({ brandId: b, instruction: MESSAGE, idempotencyKey: key() });
+      await drive(new Engine("launch-live"));
+      const tasks = await listTasks(b, { projectId: project.id });
+      const failed = tasks.filter((t) => t.status === "failed" || t.status === "cancelled").map((t) => `${t.title}: ${t.error}`);
+      if (failed.length) console.error(JSON.stringify(failed, null, 2));
+      expect(failed).toEqual([]);
+      const filmTask = tasks.find((t) => t.agent === "video" && t.kind === "work")!;
+      const qa = (await q1<{ qa: any }>(`SELECT v.qa_report AS qa FROM outputs o JOIN output_versions v ON v.output_id = o.id AND v.version = o.current_version WHERE o.id = $1`, [filmTask.output_id]))!.qa;
+      expect(qa.checks.find((c: any) => c.name === "Stüdyo talebi")).toMatchObject({ status: "pass" });
+      expect(qa.checks.filter((c: any) => c.name === "Koleksiyon ve baskı eşleşmesi" && c.status === "fail")).toEqual([]);
+      expect(omni.submits).toHaveLength(0); // önceki sahneler yeniden kullanıldı: yeni Gemini ücreti yok
+
+      const render = tasks.find((t) => t.kind === "render" && t.agent === "video")!;
+      expect(render?.status).toBe("completed");
+      const ads = await q<any>(`SELECT * FROM media_assets WHERE source_task_id = $1 AND kind = 'video' AND generation_method = 'ffmpeg_edit' ORDER BY filename`, [render.id]);
+      expect(ads).toHaveLength(2);
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "launch-live-"));
+      for (const ad of ads) {
+        const f = path.join(dir, ad.filename);
+        await fs.writeFile(f, await getStorage().get(ad.storage_key));
+        const pr = await probeVideo(f);
+        expect([pr.video_codec, pr.audio_codec]).toEqual(["h264", "aac"]);
+        expect(pr.duration).toBeGreaterThanOrEqual(19);
+        expect(pr.duration).toBeLessThanOrEqual(31);
+        expect(ad.tags.map((t: any) => t.tag)).toContain("ürün fotoğrafı:4");
+        if (process.env.E2E_EXPORT_DIR) await fs.copyFile(f, path.join(process.env.E2E_EXPORT_DIR, `live-${ad.filename}`));
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    } finally {
+      setTextModelOverride(model);
+      setVideoGeneratorOverride(new FakeOmni(await colorScenesVideo([{ color: "orange", seconds: 5 }], { audio: true })));
+    }
+  }, 600_000);
+});
