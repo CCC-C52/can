@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import sharp from "sharp";
 import os from "node:os";
 import path from "node:path";
 import { probeVideo, extractFrame, type VideoProbe } from "@/lib/media-analysis/video";
@@ -273,12 +274,30 @@ export async function photoMotionClip(args: { photo: string; out: string; format
     none: ["1", "0", "0"],
   };
   const [z, x, y] = zx[args.motion] ?? zx.zoom_in;
+  const photo = await fitStill(args.photo, SW, SH);
   const vf = `scale=${SW}:${SH}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${SW}:${SH}:(ow-iw)/2:(oh-ih)/2:color=${bg},setsar=1,` +
     `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${W}x${H}:fps=${FPS},${RGB_TO_BT709},format=yuv420p`;
-  await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", ...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-i", args.photo,
+  await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", ...SAFE_INPUT, "-loop", "1", "-framerate", String(FPS), "-i", photo,
     "-vf", vf, "-frames:v", String(n), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", String(FFMPEG_THREADS), "-pix_fmt", "yuv420p", "-r", String(FPS), ...BT709_TAGS, args.out],
     { step: "ürün fotoğrafı hareketi", timeoutMs: args.timeoutMs ?? 120_000, signal: args.signal });
   return { duration: await partDuration(args.out), width: W, height: H };
+}
+
+/**
+ * Döngülü görsel girdisinde ffmpeg fotoğrafı HER KAREDE yeniden çözer ve küçültür; tam çözünürlüklü bir orijinal
+ * (ör. 6000x4000) küçük sunucuda render'ı dakikalarca uzatıyordu. Fotoğraf bir kez, ffmpeg'in zaten kullanacağı
+ * çalışma boyutuna (w x h içine, oran korunur, büyütme yok) lanczos ile indirilir; JPEG q95 4:4:4 (saydamlık varsa PNG).
+ * Çıktı karesi değişmez: ffmpeg aynı boyuta ölçekleyecekti. EXIF yönü uygulanır. Orijinal dosyaya dokunulmaz.
+ */
+export async function fitStill(file: string, w: number, h: number) {
+  const meta = await sharp(file).metadata();
+  const [mw, mh] = (meta.orientation ?? 1) >= 5 ? [meta.height ?? 0, meta.width ?? 0] : [meta.width ?? 0, meta.height ?? 0];
+  if (mw <= w && mh <= h && (meta.orientation ?? 1) === 1) return file;
+  const alpha = !!meta.hasAlpha;
+  const out = `${file}.fit.${alpha ? "png" : "jpg"}`;
+  const img = sharp(file).rotate().resize(w, h, { fit: "inside", withoutEnlargement: true, kernel: "lanczos3" });
+  await (alpha ? img.png() : img.jpeg({ quality: 95, chromaSubsampling: "4:4:4" })).toFile(out);
+  return out;
 }
 
 async function partDuration(file: string) {

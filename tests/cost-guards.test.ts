@@ -88,3 +88,28 @@ describe("Maliyet korumaları", () => {
     expect(MAX_SHEET_BYTES).toBeLessThanOrEqual(5 * 1024 * 1024);
   });
 });
+
+describe("Ürün fotoğrafı klibi", () => {
+  it("tam çözünürlüklü fotoğraf ffmpeg'e bir kez çalışma boyutunda verilir; küçük fotoğraf olduğu gibi kullanılır", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const sharp = (await import("sharp")).default;
+    const { fitStill, photoMotionClip } = await import("@/lib/adapters/video-edit");
+    const { probeVideo } = await import("@/lib/media-analysis/video");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "still-"));
+    const big = path.join(dir, "big.jpg"), small = path.join(dir, "small.jpg");
+    await sharp({ create: { width: 6000, height: 4000, channels: 3, background: { r: 245, g: 130, b: 20 } } }).jpeg({ quality: 90 }).toFile(big);
+    await sharp({ create: { width: 800, height: 1000, channels: 3, background: { r: 18, g: 18, b: 18 } } }).jpeg().toFile(small);
+    const fitted = await fitStill(big, 1620, 2880);
+    expect(fitted).not.toBe(big);
+    const m = await sharp(fitted).metadata();
+    expect([m.width, m.height]).toEqual([1620, 1080]);
+    expect(await fitStill(small, 1620, 2880)).toBe(small);
+    const out = path.join(dir, "clip.mp4");
+    const r = await photoMotionClip({ photo: big, out, format: "9:16", seconds: 1, motion: "zoom_in", bg: "#111111" });
+    expect([r.width, r.height]).toEqual([1080, 1920]);
+    expect((await probeVideo(out)).duration).toBeGreaterThan(0.9);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});
