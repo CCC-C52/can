@@ -164,7 +164,10 @@ describe("Sahip mesajından videoya (uçtan uca)", () => {
       probes.push([pr.width, pr.height, String(pr.video_codec), String(pr.audio_codec ?? "none")]);
       // İsteğe bağlı: üretilen MP4'ler incelemek için dışa aktarılır (E2E_EXPORT_DIR)
       if (process.env.E2E_EXPORT_DIR) await fs.copyFile(f, path.join(process.env.E2E_EXPORT_DIR, ad.filename));
-      expect(pr.duration).toBeGreaterThan(15);
+      // Sahibin aralığı (20-30 sn) ve gerçek ürün fotoğrafı: plan fotoğraf içermese de doğrulanmış ürün fotoğrafı eklenir
+      expect(pr.duration).toBeGreaterThanOrEqual(19);
+      expect(pr.duration).toBeLessThanOrEqual(31);
+      expect(ad.tags.map((t: any) => t.tag).find((t: string) => t.startsWith("ürün fotoğrafı:"))).not.toBe("ürün fotoğrafı:0");
     }
     await fs.rm(dir, { recursive: true, force: true });
     expect(probes).toEqual(expect.arrayContaining([[1080, 1920, "h264", "aac"], [1920, 1080, "h264", "aac"]]));

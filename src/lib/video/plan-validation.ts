@@ -3,6 +3,8 @@ import { isUuid } from "@/lib/ids";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { CARD_S, timeline } from "@/lib/adapters/video-edit";
 import type { VideoSpec } from "./spec";
+import { unverifiedDriveAssetIds, verifiedCatalogPhotos } from "@/lib/drive/references";
+import { FRIBEE_THEMES } from "@/lib/drive/themes";
 
 // Video planının DETERMİNİSTİK doğrulaması ve onarımı (AI çağrısı yok). AI yapılandırılmış bir plan üretir; bu modül
 // planı veritabanındaki gerçek kayıtlara göre denetler ve render'ın birebir uygulayacağı biçime getirir:
@@ -185,7 +187,27 @@ const EMPTY_EDIT = { mode: "edit_existing", format: "9:16", duration_s: 0, selec
  * Video planını doğrular/onarır. `fallbackSourceIds`: sahibin talimatta açıkça istediği, analizi tamamlanmış videolar;
  * AI planı kullanılabilir bölüm vermezse kurgu bu videoların doğrulanmış sahnelerinden kurulur.
  */
-export async function validateVideoPlan(brandId: string, content: any, opts: { spec: VideoSpec; fallbackSourceIds?: string[] }): Promise<PlanValidation> {
+/**
+ * Karma reklam için gerçek ürün fotoğrafları: her koleksiyondan (Space Alien, Music, Anime, Save the Bee) bir doğrulanmış
+ * katalog fotoğrafı; hiç yoksa ürüne bağlı, doğrulanmamış Drive referansı olmayan marka fotoğrafları (en çok 4).
+ */
+export async function filmProductPhotos(brandId: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const theme of FRIBEE_THEMES) {
+    const p = (await verifiedCatalogPhotos(brandId, theme, 1))[0];
+    if (p && !out.includes(p.media_asset_id)) out.push(p.media_asset_id);
+  }
+  if (out.length) return out;
+  const rows = await q<{ id: string }>(
+    `SELECT id FROM media_assets WHERE brand_id = $1 AND kind = 'photo' AND product_id IS NOT NULL AND mime_type IN ('image/jpeg','image/png','image/webp')
+     ORDER BY created_at DESC LIMIT 8`,
+    [brandId],
+  );
+  const bad = new Set(await unverifiedDriveAssetIds(brandId, rows.map((r) => r.id)));
+  return rows.map((r) => r.id).filter((id) => !bad.has(id)).slice(0, 4);
+}
+
+export async function validateVideoPlan(brandId: string, content: any, opts: { spec: VideoSpec; fallbackSourceIds?: string[]; autoProductPhotos?: boolean }): Promise<PlanValidation> {
   const plan = JSON.parse(JSON.stringify(content ?? {}));
   const repairs: string[] = [];
   const errors: string[] = [];
@@ -287,6 +309,29 @@ export async function validateVideoPlan(brandId: string, content: any, opts: { s
         repairs.push(`${v.id}: parça ${i + 1} sahne ${sc.index} sınırlarına göre ${s}–${e} sn olarak düzeltildi`);
         Object.assign(p, { scene_index: sc.index, source_start: s, source_end: e, duration_s: r3(e - s) });
       }
+    }
+  }
+
+  // Karma reklamda gerçek ürün görünmeli: plan hiç ürün fotoğrafı içermiyorsa doğrulanmış ürün fotoğrafları AI sahnelerinin
+  // arasına eklenir (sahip ürünün yalnızca gerçek fotoğraflardan görünmesini istedi; model bunu her zaman planlamıyordu)
+  if (opts.autoProductPhotos) {
+    for (const v of videos.filter((x) => x.mode === "compose")) {
+      const parts: any[] = Array.isArray(v.parts) ? v.parts : [];
+      if (parts.some((p) => p?.kind === "product_photo")) continue;
+      const queue = await filmProductPhotos(brandId);
+      if (!queue.length) continue;
+      const added = queue.length;
+      const motions = ["zoom_in", "pan_left", "zoom_out", "pan_right"];
+      const next: any[] = [];
+      let k = 0;
+      const photo = () => ({ kind: "product_photo", ref: queue.shift(), duration_s: PHOTO_DEFAULT_S, motion: motions[k++ % motions.length], on_screen_text: "" });
+      for (const p of parts) {
+        next.push(p);
+        if (p?.kind === "ai_scene" && queue.length) next.push(photo());
+      }
+      while (queue.length) next.push(photo());
+      v.parts = next;
+      repairs.push(`${v.id}: ${added} doğrulanmış ürün fotoğrafı AI sahnelerinin arasına eklendi`);
     }
   }
 

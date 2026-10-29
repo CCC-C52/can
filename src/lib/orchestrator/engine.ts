@@ -803,7 +803,9 @@ async function validateVideoVersion(task: Task, workerId: string, v: OutputVersi
   const project = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1 AND brand_id = $2`, [task.project_id, task.brand_id]);
   const spec = parseVideoSpec(project?.instruction, task.instruction);
   const targets = await resolveVideoTargets(task.brand_id, `${task.instruction}\n${project?.instruction ?? ""}`);
-  const validation = { ...(await validateVideoPlan(task.brand_id, v.content, { spec, fallbackSourceIds: targets.explicit ? targets.assets.map((a) => a.id) : [] })), spec };
+  const studio = parseStudioRequest(project?.instruction);
+  const autoProductPhotos = !!studio && studio.mode === "hybrid" && !studio.aiOnly;
+  const validation = { ...(await validateVideoPlan(task.brand_id, v.content, { spec, fallbackSourceIds: targets.explicit ? targets.assets.map((a) => a.id) : [], autoProductPhotos })), spec };
   let version = v;
   if (validation.changed && !validation.errors.length) {
     await assertOwned(task, workerId);
