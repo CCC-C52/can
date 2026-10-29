@@ -45,6 +45,13 @@ export class TransientError extends Error {
   }
 }
 
+/** Model çıktısı max_tokens sınırında kesildi. Kesilen çağrı da faturalanır: gerçekleşen maliyet hatayla taşınır. */
+export class OutputTruncatedError extends TransientError {
+  constructor(readonly maxTokens: number, readonly actualCostUsd: number | null, readonly usage: unknown) {
+    super("Model çıktısı token sınırında kesildi.");
+  }
+}
+
 /** Model bağlı değil (canlı ortamda anahtar yok, demo kapalı). Görev "Bağlantı bekliyor" olur. */
 export class ModelUnavailableError extends Error {}
 

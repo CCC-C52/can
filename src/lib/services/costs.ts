@@ -52,9 +52,10 @@ export async function monthlyServiceSpend(service: string, db: Queryable = getPo
   return Number(row?.actual ?? 0);
 }
 
+/** Görev başı sınır için harcama. Çıktı sınırında kesilen çağrılar sayılmaz (günlük bütçeye ve görev maliyetine sayılır). */
 export async function taskSpend(taskId: string, db: Queryable = getPool()) {
   const row = await q1<{ actual: number }>(
-    `SELECT COALESCE(SUM(amount_usd), 0) AS actual FROM cost_entries WHERE task_id = $1 AND kind = 'actual'`,
+    `SELECT COALESCE(SUM(amount_usd), 0) AS actual FROM cost_entries WHERE task_id = $1 AND kind = 'actual' AND NOT (units ? 'truncated_step')`,
     [taskId],
     db,
   );
@@ -83,7 +84,7 @@ async function committedSpend(filter: { day?: boolean; month?: boolean; taskId?:
  * Ücretli çağrıdan ÖNCE çalışır. Tahmin sınırı aşıyorsa veya tahmin yapılamıyorsa (ve ayar gerektiriyorsa) engeller.
  * Ücretsiz (demo/yerel) işlemler için estimate = 0 verilir ve engellenmez.
  */
-export async function assertBudget(args: { taskId: string | null; estimateUsd: number | null; service: string; excludeJobId?: string | null }, db: Queryable = getPool()) {
+export async function assertBudget(args: { taskId: string | null; estimateUsd: number | null; service: string; excludeJobId?: string | null; ignoreTaskCap?: boolean }, db: Queryable = getPool()) {
   const limits = await getLimits(db);
   if (args.estimateUsd === 0) return;
   const providerLimit = limits.providerMonthlyUsd?.[args.service];
@@ -97,7 +98,7 @@ export async function assertBudget(args: { taskId: string | null; estimateUsd: n
   // yapar (ör. 3 AI sahnesi, 8 görsel) ve 1 $ varsayılanıyla yarıda kesiliyordu; render'ı günlük bütçe, proje AI video
   // saniye sınırı ve sağlayıcı aylık sınırları sınırlar.
   const isRender = args.taskId ? (await q1<{ kind: string }>(`SELECT kind FROM tasks WHERE id = $1`, [args.taskId], db))?.kind === "render" : false;
-  if (limits.perTaskBudgetUsd !== null && args.taskId && !isRender) {
+  if (limits.perTaskBudgetUsd !== null && args.taskId && !isRender && !args.ignoreTaskCap) {
     const spent = (await taskSpend(args.taskId, db)) + (await committedSpend({ taskId: args.taskId, excludeJobId: args.excludeJobId }, db));
     if (spent + args.estimateUsd > limits.perTaskBudgetUsd) {
       throw new BudgetExceededError(`Görev bütçesi aşılacak: harcanan $${spent.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${limits.perTaskBudgetUsd}`);

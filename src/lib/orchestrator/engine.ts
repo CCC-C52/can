@@ -6,7 +6,7 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import { log } from "@/lib/log";
 import { getLimits, getSetting, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
-import { ModelUnavailableError, PermanentError, TransientError, type GenerateRequest, type TextModelAdapter } from "@/lib/models/types";
+import { ModelUnavailableError, OutputTruncatedError, PermanentError, TransientError, type GenerateRequest, type GenerateResult, type TextModelAdapter } from "@/lib/models/types";
 import { buildBrandContext, type BrandContext } from "@/lib/agents/context";
 import { AGENTS, agentName, assertTool, isSpecialist, ToolPermissionError } from "@/lib/agents/registry";
 import { OUTPUT_KIND, OUTPUT_SCHEMAS, PlanSchema, QaReviewSchema, type AgentId, type Plan, type ProjectReport, type QaReview, type SpecialistId } from "@/lib/agents/schemas";
@@ -80,6 +80,8 @@ type RunCtx = {
   signal: AbortSignal;
   limits: Limits;
   model: TextModelAdapter;
+  /** Görevin süre sınırını şimdiden itibaren en az `ms` olacak şekilde uzatır (kısaltmaz). */
+  extendTimeout?: (ms: number) => void;
 };
 
 /**
@@ -139,8 +141,17 @@ export class Engine {
       `INSERT INTO task_attempts (task_id, attempt, phase, worker_id) VALUES ($1,$2,$3,$4) RETURNING id`,
       [task.id, task.attempts, task.phase, this.workerId],
     );
-    const timeoutMs = effectiveTimeoutMs(task, limits);
-    const timeout = setTimeout(() => ctrl.abort(new TimeoutError(`Görev süre sınırını aştı (${Math.round(timeoutMs / 1000)} sn)`)), timeoutMs);
+    let timeoutMs = effectiveTimeoutMs(task, limits);
+    let deadline = Date.now() + timeoutMs;
+    const onTimeout = () => ctrl.abort(new TimeoutError(`Görev süre sınırını aştı (${Math.round(timeoutMs / 1000)} sn)`));
+    let timeout = setTimeout(onTimeout, timeoutMs);
+    const extendTimeout = (ms: number) => {
+      if (Date.now() + ms <= deadline) return;
+      clearTimeout(timeout);
+      timeoutMs += Date.now() + ms - deadline;
+      deadline = Date.now() + ms;
+      timeout = setTimeout(onTimeout, ms);
+    };
     const renew = setInterval(async () => {
       try {
         const r = await q1<{ status: string }>(
@@ -156,7 +167,7 @@ export class Engine {
     let errMsg: string | null = null;
     const startedAt = Date.now();
     try {
-      const ctx: RunCtx = { task, signal: ctrl.signal, limits, model: getTextModel() };
+      const ctx: RunCtx = { task, signal: ctrl.signal, limits, model: getTextModel(), extendTimeout };
       await audit({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, actor: `agent:${task.agent}`, action: "task.start", message: `${agentName(task.agent)} başladı: ${task.title}${task.phase === "review" ? " (kalite kontrol)" : ""}` });
       if (task.kind === "plan") await runPlan(ctx, this.workerId);
       else if (task.kind === "report") await runReport(ctx, this.workerId);
@@ -344,7 +355,42 @@ async function callModel<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema
   return callModelWith(ctx, agent, purpose, schema, prompt, demoInput, maxTokens, images);
 }
 
-async function callModelWith<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, prompt: { prefix: string; rest: string }, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]) {
+/**
+ * Çıktı sınırına takılan çağrı aynı sınırla tekrar edilirse yine kesilir (uyarlanabilir düşünme sınırı paylaşır; ör. 14 günlük
+ * sosyal medya takvimi). Kesilen çağrının ücreti kaydedilir (günlük bütçeye sayılır) ve çağrı bir kez daha geniş sınırla
+ * yapılır. Aynı görevin aynı adımı (ör. yeniden üretim, görev yeniden denemesi) sonra doğrudan geniş sınırla çağrılır.
+ * Görev başı sınır geniş sınırlı çağrılarda uygulanmaz (1 $ varsayılanı tek bir 32K tahminine yakın; yeniden üretim adedi
+ * zaten sınırlı) ve diğer adımlarda kesilen çağrının ücretini saymaz; günlük bütçe ve sağlayıcı aylık sınırları uygulanır.
+ */
+export const TRUNCATION_RETRY_MAX_TOKENS = 32000;
+/** Geniş sınırlı devam çağrısı için görev süresi (32K token akışı birkaç dakika sürer; 180 sn görev sınırı yetmez). */
+export const TRUNCATION_RETRY_TIMEOUT_MS = 600_000;
+
+async function callModelWith<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, prompt: { prefix: string; rest: string }, demoInput: unknown, maxTokens = 16000, images?: GenerateRequest<T>["images"]): Promise<GenerateResult<T>> {
+  const step = `${agent}:${purpose}`;
+  let wide = maxTokens >= TRUNCATION_RETRY_MAX_TOKENS;
+  if (!wide && (await q1(`SELECT 1 FROM cost_entries WHERE task_id = $1 AND units->>'truncated_step' = $2 LIMIT 1`, [ctx.task.id, step]))) {
+    wide = true;
+    maxTokens = TRUNCATION_RETRY_MAX_TOKENS;
+    ctx.extendTimeout?.(TRUNCATION_RETRY_TIMEOUT_MS);
+  }
+  for (;;) {
+    try {
+      return await callModelOnce(ctx, agent, purpose, schema, prompt, demoInput, maxTokens, images, wide);
+    } catch (err) {
+      if (!(err instanceof OutputTruncatedError)) throw err;
+      await recordCost({ brandId: ctx.task.brand_id, projectId: ctx.task.project_id, taskId: ctx.task.id, service: ctx.model.service, kind: "actual", amountUsd: err.actualCostUsd, units: { ...(err.usage ?? {}), truncated_step: step }, note: `${step} çıktı ${err.maxTokens} token sınırında kesildi` });
+      // Geniş sınırda da kesildiyse görevi aynı çağrılarla tekrar etmek yalnızca para yakar: kalıcı hata, sahip görür.
+      if (wide) throw new PermanentError(`Model çıktısı ${err.maxTokens} token sınırında da kesildi; istenen çıktı tek görevde üretilemeyecek kadar uzun. Görevi daha küçük parçalara bölün.`);
+      log("warn", "model.output_truncated", { taskId: ctx.task.id, agent, purpose, maxTokens, retryMaxTokens: TRUNCATION_RETRY_MAX_TOKENS });
+      wide = true;
+      maxTokens = TRUNCATION_RETRY_MAX_TOKENS;
+      ctx.extendTimeout?.(TRUNCATION_RETRY_TIMEOUT_MS);
+    }
+  }
+}
+
+async function callModelOnce<T>(ctx: RunCtx, agent: AgentId, purpose: string, schema: import("zod").ZodType<T>, prompt: { prefix: string; rest: string }, demoInput: unknown, maxTokens: number, images: GenerateRequest<T>["images"] | undefined, ignoreTaskCap: boolean): Promise<GenerateResult<T>> {
   const { task, model, limits } = ctx;
   if (ctx.signal.aborted) throw ctx.signal.reason;
   if (model.unavailableReason) throw new ModelUnavailableError(model.unavailableReason);
@@ -353,7 +399,7 @@ async function callModelWith<T>(ctx: RunCtx, agent: AgentId, purpose: string, sc
   const system = systemPrompt(agent, purpose);
   const { prefix: userPrefix, rest: user } = prompt;
   const estimate = model.estimateCostUsd({ system, user, userPrefix, maxTokens, imageCount: images?.length ?? 0 });
-  await assertBudget({ taskId: task.id, estimateUsd: estimate, service: model.service });
+  await assertBudget({ taskId: task.id, estimateUsd: estimate, service: model.service, ignoreTaskCap });
   await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: model.service, kind: "estimated", amountUsd: estimate, note: `${agent}:${purpose} üst sınır tahmini` });
   const res = await model.generate({ agent, purpose, system, user, userPrefix, schema, maxTokens, signal: ctx.signal, demoInput, ...(images?.length ? { images } : {}) });
   await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: model.service, kind: "actual", amountUsd: res.actualCostUsd, units: res.usage ?? {}, note: res.isDemo ? "DEMO — ücret yok" : `${agent}:${purpose}` });

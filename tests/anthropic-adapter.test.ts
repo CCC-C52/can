@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { AnthropicAdapter } from "@/lib/models/anthropic";
 import { StrategySchema } from "@/lib/agents/schemas";
-import { PermanentError, TransientError } from "@/lib/models/types";
+import { OutputTruncatedError, PermanentError, TransientError } from "@/lib/models/types";
 
 // Gerçek API çağrılmaz. Sahte SSE akışıyla istek biçimi ve yanıt işleme doğrulanır.
 
@@ -62,6 +62,16 @@ describe("AnthropicAdapter (sahte HTTP)", () => {
     await expect(a.generate({ agent: "marketing", purpose: "work", system: "s", user: "u", schema: StrategySchema, maxTokens: 100, demoInput: null })).rejects.toBeInstanceOf(TransientError);
     globalThis.fetch = vi.fn(async () => sse("", "refusal")) as any;
     await expect(new AnthropicAdapter("claude-opus-5-5", "sk-ant-test").generate({ agent: "marketing", purpose: "work", system: "s", user: "u", schema: StrategySchema, maxTokens: 100, demoInput: null })).rejects.toBeInstanceOf(PermanentError);
+  });
+
+  it("token sınırında kesilen yanıt geçici hata; gerçekleşen maliyet ve kullanım hatayla taşınır", async () => {
+    globalThis.fetch = vi.fn(async () => sse('{"summary": "yar', "max_tokens", { input_tokens: 1000, output_tokens: 16000 })) as any;
+    const err = await new AnthropicAdapter("claude-opus-5-5", "sk-ant-test").generate({ agent: "social", purpose: "work", system: "s", user: "u", schema: StrategySchema, maxTokens: 16000, demoInput: null }).catch((e) => e);
+    expect(err).toBeInstanceOf(OutputTruncatedError);
+    expect(err).toBeInstanceOf(TransientError);
+    expect(err.maxTokens).toBe(16000);
+    expect(err.actualCostUsd).toBeCloseTo((1000 * 4 + 16000 * 20) / 1_000_000);
+    expect(err.usage).toMatchObject({ input_tokens: 1000, output_tokens: 16000 });
   });
 
   it("401 kalıcı, 529/500 geçici hata olarak sınıflanır", async () => {

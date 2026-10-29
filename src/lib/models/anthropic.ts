@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { config } from "@/lib/config";
-import { PermanentError, TransientError, type GenerateRequest, type GenerateResult, type TextModelAdapter } from "./types";
+import { OutputTruncatedError, PermanentError, TransientError, type GenerateRequest, type GenerateResult, type TextModelAdapter } from "./types";
 
 // USD / 1M token (Anthropic birinci taraf API fiyatları; değişirse burayı güncelleyin)
 const PRICES: Record<string, { input: number; output: number }> = {
@@ -154,7 +154,7 @@ export class AnthropicAdapter implements TextModelAdapter {
       throw new PermanentError("Model isteği reddetti (refusal). Talimatı gözden geçirin.");
     }
     if (response.stop_reason === "max_tokens") {
-      throw new TransientError("Model çıktısı token sınırında kesildi.");
+      throw new OutputTruncatedError(req.maxTokens, actualCostUsd, usage);
     }
     const text = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
     let parsed: unknown;
