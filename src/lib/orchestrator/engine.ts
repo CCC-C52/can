@@ -20,7 +20,7 @@ import type { MediaAsset } from "@/lib/services/media";
 import { getStorage } from "@/lib/storage";
 import { textModelMode } from "@/lib/models";
 import { createPlanTasks, type Task } from "./projects";
-import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation } from "./conversation";
+import { catalogCheck, contradictsCatalog, pendingProposal, recentConversation, recentWork } from "./conversation";
 import { parseStudioRequest, type StudioRequest } from "@/lib/video/studio";
 import { describeSpec, parseVideoSpec, type VideoSpec } from "@/lib/video/spec";
 import { validateVideoPlan, type PlanValidation } from "@/lib/video/plan-validation";
@@ -387,27 +387,36 @@ export function sanitizePlan(plan: Plan, maxTasks: number) {
   return { tasks, dropped };
 }
 
+/**
+ * Planlama çıktı sınırı. Uyarlanabilir düşünme bu sınırı plan JSON'uyla paylaşır; çok teslimatlı kapsamlı bir talepte
+ * 8000 belirteç yetmez (çıktı kesilir, aynı sınırla tekrar denemek yine keser). Uzman üretimiyle aynı sınır.
+ */
+export const PLAN_MAX_TOKENS = 16000;
+/** Kapsamlı planlama tek model çağrısıdır ve 3 dakikayı aşabilir; ayrı süre sınırı. */
+export const PLAN_TIMEOUT_MS = 360_000;
+
 async function runPlan(ctx: RunCtx, workerId: string) {
   const { task, limits } = ctx;
   assertTool("manager", "brand.read");
   assertTool("manager", "tasks.manage");
   const brandCtx = await buildBrandContext(task.brand_id, undefined, { agent: "manager" });
   // Konuşmanın devamı: önceki mesajlar, onay bekleyen öneri ve kayıt sayımı (yönetici bilinen bilgiyi tekrar sormasın)
-  const [conversation, pending] = await Promise.all([recentConversation(task.brand_id, task.project_id), pendingProposal(task.brand_id)]);
+  const [conversation, pending, work] = await Promise.all([recentConversation(task.brand_id, task.project_id), pendingProposal(task.brand_id), recentWork(task.brand_id, task.project_id)]);
   const catalog = catalogCheck(brandCtx);
   // Erişim öncelikli: AI Yöneticisi yanıt/plan üretmeden önce yetkisi dahilindeki arşiv içeriğini alır
   const brain = await brainContextFor({ brandId: task.brand_id, agent: "manager", taskId: task.id, projectId: task.project_id, instruction: task.instruction });
   const extra = [
-    `<limits>At most ${limits.maxTasksPerProject - 1} tasks.</limits>`,
+    `<limits>At most ${limits.maxTasksPerProject - 1} tasks. Keep each task instruction self-contained and concise (about 200 words at most) but carry over every measurable requirement from the owner (durations, formats, counts, cover time, collections).</limits>`,
     brain.block,
     `<catalog_check>\n<data>${JSON.stringify(catalog)}</data>\n</catalog_check>`,
     conversation.length ? `<conversation>\n<data>${JSON.stringify(conversation)}</data>\n</conversation>` : "",
+    work.length ? `<recent_work>\n<data>${JSON.stringify(work)}</data>\n</recent_work>` : "",
     pending && pending.projectId !== task.project_id
       ? `<pending_proposal>\n<data>${JSON.stringify({ title: pending.title, instruction: pending.instruction, reply: pending.reply, goals: pending.goals, tasks: pending.tasks })}</data>\n</pending_proposal>`
       : "",
   ].filter(Boolean).join("\n\n");
   const user = userPromptParts({ instruction: task.instruction, ctx: brandCtx, extra });
-  const res = await callModel(ctx, "manager", "plan", PlanSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [] }, 8000);
+  const res = await callModel(ctx, "manager", "plan", PlanSchema, user, { instruction: task.instruction, ctx: brandCtx, upstream: [] }, PLAN_MAX_TOKENS);
   const { tasks, dropped } = sanitizePlan(res.data, limits.maxTasksPerProject - 1);
   // Sahip planı önce görmek istediyse görevler öneri olarak saklanır; "onaylıyorum" gibi kısa bir onayla başlar.
   const awaiting = res.data.awaiting_approval === true && tasks.length > 0;
@@ -463,9 +472,11 @@ async function extraForAgent(agent: SpecialistId, brandId: string): Promise<stri
   return `<cost_records><data>${JSON.stringify(costs)}</data></cost_records>\n<connections><data>${JSON.stringify(statuses)}</data></connections>\n<performance_data><data>No performance source is connected. Do not invent metrics.</data></performance_data>`;
 }
 
-/** Render görevleri (ffmpeg) için ayrı, daha uzun süre sınırı. */
+/** Render görevleri (ffmpeg) ve planlama için ayrı, daha uzun süre sınırı. */
 export function effectiveTimeoutMs(task: Pick<Task, "kind">, limits: Limits) {
-  return task.kind === "render" ? Math.max(limits.taskTimeoutMs, limits.renderTimeoutMs ?? 0) : limits.taskTimeoutMs;
+  if (task.kind === "render") return Math.max(limits.taskTimeoutMs, limits.renderTimeoutMs ?? 0);
+  if (task.kind === "plan") return Math.max(limits.taskTimeoutMs, PLAN_TIMEOUT_MS);
+  return limits.taskTimeoutMs;
 }
 
 /** Plan dosya üretimi içeriyor mu (kurgu veya AI video)? */

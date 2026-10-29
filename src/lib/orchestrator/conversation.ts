@@ -20,7 +20,10 @@ export type PendingProposal = {
 /** Onay bekleyen öneri bu süreden eskiyse kısa bir onayla otomatik başlatılmaz. */
 export const PROPOSAL_MAX_AGE_HOURS = 72;
 const HISTORY_MESSAGES = 12;
-const HISTORY_MESSAGE_CHARS = 1500;
+/** Sahibin mesajı talimat sınırına (8000) kadar tam verilir; yönetici yanıtları kısaltılır. */
+const OWNER_MESSAGE_CHARS = 8000;
+const MANAGER_MESSAGE_CHARS = 1500;
+const RECENT_PROJECTS = 6;
 
 const CONFIRM_PHRASES = [
   "onaylıyorum", "onaylıyoruz", "onay veriyorum", "onay veriyoruz", "onaylandı", "onaylı", "onay", "onayladım",
@@ -98,7 +101,41 @@ export async function recentConversation(brandId: string, projectId: string, db:
     [brandId, projectId, HISTORY_MESSAGES],
     db,
   );
-  return rows.map((r) => ({ role: r.role === "user" ? "owner" : r.role, at: r.created_at, text: r.content.slice(0, HISTORY_MESSAGE_CHARS) }));
+  return rows.map((r) => ({ role: r.role === "user" ? "owner" : r.role, at: r.created_at, text: historyText(r.role, r.content) }));
+}
+
+/**
+ * Geçmişte gösterilen metin. Kısaltma açıkça işaretlenir: yönetici kesilmiş bir mesajı "yarım kaydedilmiş" sanmasın
+ * (kayıt her zaman tamdır). Form gönderimindeki CRLF satır sonları tek karaktere indirilir.
+ */
+export function historyText(role: string, content: string) {
+  const text = content.replace(/\r\n/g, "\n");
+  const max = role === "user" ? OWNER_MESSAGE_CHARS : MANAGER_MESSAGE_CHARS;
+  return text.length <= max ? text : `${text.slice(0, max)} […kısaltıldı: kayıttaki tam metin ${text.length} karakter]`;
+}
+
+export type RecentWork = {
+  title: string;
+  at: string;
+  status: string;
+  tasks: { agent: string; kind: string; title: string; status: string; error: string | null }[];
+};
+
+/**
+ * Bu projeden önceki son projeler ve görev durumları (hata metniyle). Yönetici önceki taleplerin ne olduğunu
+ * (başladı mı, neden başarısız oldu) tahmin etmek yerine bu kayıttan bildirir.
+ */
+export async function recentWork(brandId: string, projectId: string, db: Queryable = getPool()): Promise<RecentWork[]> {
+  return q<RecentWork>(
+    `SELECT p.title, p.created_at AS at, p.status,
+       COALESCE(json_agg(json_build_object('agent', t.agent, 'kind', t.kind, 'title', t.title, 'status', t.status, 'error', left(t.error, 300))
+         ORDER BY t.created_at) FILTER (WHERE t.id IS NOT NULL), '[]'::json) AS tasks
+     FROM projects p LEFT JOIN tasks t ON t.project_id = p.id
+     WHERE p.brand_id = $1 AND p.id <> $2 AND p.created_at < (SELECT created_at FROM projects WHERE id = $2 AND brand_id = $1)
+     GROUP BY p.id ORDER BY p.created_at DESC LIMIT $3`,
+    [brandId, projectId, RECENT_PROJECTS],
+    db,
+  );
 }
 
 /**

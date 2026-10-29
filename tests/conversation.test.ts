@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { q, q1 } from "@/lib/db/pool";
-import { Engine } from "@/lib/orchestrator/engine";
+import { Engine, PLAN_MAX_TOKENS, PLAN_TIMEOUT_MS, effectiveTimeoutMs } from "@/lib/orchestrator/engine";
 import { submitInstruction, listTasks, getProject } from "@/lib/orchestrator/projects";
-import { isShortConfirmation, contradictsCatalog, pendingProposal } from "@/lib/orchestrator/conversation";
+import { isShortConfirmation, contradictsCatalog, pendingProposal, historyText } from "@/lib/orchestrator/conversation";
+import { getLimits } from "@/lib/settings";
 import { createBrand, createProduct } from "@/lib/services/brands";
 import { addMemory } from "@/lib/services/brand-memory";
 import { setTextModelOverride } from "@/lib/models";
@@ -16,10 +17,14 @@ class Recording implements TextModelAdapter {
   readonly isDemo = true;
   readonly service = "recording";
   planPrompts: string[] = [];
+  planMaxTokens: number[] = [];
   private demo = new DemoAdapter();
   estimateCostUsd() { return 0; }
   async generate<T>(req: GenerateRequest<T>): Promise<GenerateResult<T>> {
-    if (req.agent === "manager" && req.purpose === "plan") this.planPrompts.push(`${req.userPrefix ?? ""}\n${req.user}`);
+    if (req.agent === "manager" && req.purpose === "plan") {
+      this.planPrompts.push(`${req.userPrefix ?? ""}\n${req.user}`);
+      this.planMaxTokens.push(req.maxTokens);
+    }
     return this.demo.generate(req);
   }
 }
@@ -117,6 +122,42 @@ describe("Ana yönetici — onay ve konuşma bağlamı", () => {
     const r = await submitInstruction({ brandId: other, instruction: "tamam", idempotencyKey: key() });
     expect(r.confirmedProposal).toBeUndefined();
     expect(r.project.instruction).toBe("tamam");
+  });
+});
+
+describe("Yönetici bağlamı — tam mesaj ve önceki taleplerin durumu", () => {
+  it("uzun sahip mesajı geçmişte kesilmeden verilir; planlaması başarısız olan talebin hatası yöneticiye iletilir", async () => {
+    const b = (await createBrand({ name: "Bağlam Testi", content_language: "tr" })).id;
+    // Tarayıcı formu satır sonlarını CRLF gönderir; 1500 karakterden uzun, çok teslimatlı talep
+    const lines = Array.from({ length: 30 }, (_, i) => `- Teslim ${i + 1}: dört koleksiyon sırayla kendi ürün rengiyle, hepsinin bir araya geldiği final.`);
+    const longMsg = ["FriBee — Rebirth kampanyası: tam yaratıcı paket.", ...lines, "SON SATIR: hareketli logo kapanışı."].join("\r\n");
+    expect(longMsg.length).toBeGreaterThan(2500); // eski geçmiş sınırı 1500 karakterdi
+    const first = await submitInstruction({ brandId: b, instruction: longMsg, idempotencyKey: key() });
+    // Bu talebin planlaması model çıktı sınırında başarısız olmuş (iş başlamadı)
+    await q(`UPDATE tasks SET status = 'failed', error = $2 WHERE project_id = $1 AND kind = 'plan'`, [first.project.id, "Deneme sınırı doldu (3): Model çıktısı token sınırında kesildi."]);
+
+    const seen = model.planPrompts.length;
+    await submitInstruction({ brandId: b, instruction: "Son isteğim ne oldu?", idempotencyKey: key() });
+    await runUntilIdle(new Engine("conv-ctx"));
+    const prompt = model.planPrompts.slice(seen).find((p) => p.includes("Son isteğim ne oldu?"))!;
+    expect(prompt).toBeTruthy();
+    expect(prompt).toContain("SON SATIR: hareketli logo kapanışı."); // önceki mesajın sonu da görülür
+    expect(prompt).not.toContain("kısaltıldı");
+    const work = JSON.parse(/<recent_work>\n<data>([\s\S]*?)<\/data>/.exec(prompt)![1]);
+    expect(work[0].title).toBe("FriBee — Rebirth kampanyası: tam yaratıcı paket.");
+    expect(work[0].tasks).toEqual([expect.objectContaining({ kind: "plan", status: "failed", error: "Deneme sınırı doldu (3): Model çıktısı token sınırında kesildi." })]);
+    // Kapsamlı planlama için çıktı ve süre sınırı (uyarlanabilir düşünme aynı sınırı paylaşır)
+    expect(model.planMaxTokens.at(-1)).toBe(PLAN_MAX_TOKENS);
+    expect(PLAN_MAX_TOKENS).toBeGreaterThanOrEqual(16000);
+    const limits = await getLimits();
+    expect(effectiveTimeoutMs({ kind: "plan" }, limits)).toBe(Math.max(limits.taskTimeoutMs, PLAN_TIMEOUT_MS));
+    expect(effectiveTimeoutMs({ kind: "work" }, limits)).toBe(limits.taskTimeoutMs);
+  });
+
+  it("yönetici yanıtı kısaltılırsa açıkça işaretlenir; CRLF tek satır sonuna iner", () => {
+    expect(historyText("manager", "a".repeat(2000))).toMatch(/^a{1500} \[…kısaltıldı: kayıttaki tam metin 2000 karakter\]$/);
+    expect(historyText("user", "x\r\ny")).toBe("x\ny");
+    expect(historyText("user", "b".repeat(8000))).toBe("b".repeat(8000));
   });
 });
 

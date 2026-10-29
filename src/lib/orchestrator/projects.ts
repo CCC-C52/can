@@ -112,7 +112,7 @@ export async function submitInstruction(args: { brandId: string; instruction: st
       const pending = await pendingProposal(args.brandId, c, { forUpdate: true });
       if (pending) return { ...(await approveProposal(c, args.brandId, pending, instruction, args.idempotencyKey)), duplicate: false, confirmedProposal: true };
     }
-    const title = instruction.split("\n")[0].slice(0, 90);
+    const title = instruction.split(/\r?\n/)[0].trim().slice(0, 90);
     const inserted = await q1<Project>(
       `INSERT INTO projects (brand_id, title, instruction, idempotency_key) VALUES ($1,$2,$3,$4)
        ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
