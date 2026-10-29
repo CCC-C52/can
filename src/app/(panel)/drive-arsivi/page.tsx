@@ -5,10 +5,11 @@ import { envConfigured, getConnection } from "@/lib/services/connections";
 import { MEMORY_KINDS } from "@/lib/services/brand-memory";
 import { findArchiveFolders, safeError, type FolderCandidate } from "@/lib/drive/source";
 import { DOC_MIME, driveDashboard, searchDriveItems, verifiedReferences } from "@/lib/drive/references";
+import { colourRuleSummary } from "@/lib/drive/colour-rule";
 import { FRIBEE_THEMES, REFERENCE_VIEWS, THEME_INFO, VIEW_LABEL } from "@/lib/drive/themes";
 import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import {
-  driveAutoQueueAction, driveBulkReviewAction, driveDisconnectAction, driveImportAction, drivePauseAction, driveProposeMemoryAction, driveReviewAction, driveScanNowAction, driveSelectFolderAction, driveSuggestAction,
+  driveAutoQueueAction, driveBulkReviewAction, driveColourRuleAction, driveDisconnectAction, driveImportAction, drivePauseAction, driveProposeMemoryAction, driveReviewAction, driveScanNowAction, driveSelectFolderAction, driveSuggestAction,
 } from "@/app/actions";
 import { AutoRefresh, SubmitButton } from "@/components/client";
 import { Badge, Empty, Flash, PageHeader, Stat, dt } from "@/components/ui";
@@ -275,6 +276,31 @@ async function Files({ brandId, search, filter, page }: { brandId: string; searc
   );
 }
 
+/** Sahip renk kuralı: durum, sayılar ve aç/kapat (kural açıkken fotoğraflar rengine göre otomatik doğrulanır). */
+async function ColourRule({ brandId }: { brandId: string }) {
+  const r = await colourRuleSummary(brandId);
+  return (
+    <section className="card space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="h2">Sahip renk kuralı</h2>
+        <Badge tone={r.enabled ? "ok" : "neutral"}>{r.enabled ? "Açık" : "Kapalı"}</Badge>
+      </div>
+      <p className="text-sm">Turuncu tişört = Anime · Beyaz = Music · Siyah = Space Alien · Bebe mavisi (arkasında arı) = Save the Bee</p>
+      <p className="text-xs text-muted">
+        Açıkken işleyici kuyruktaki ürün fotoğraflarının rengini ölçer ve kurala uyanları sizin adınıza doğrular; orijinaller medya arşivine
+        alınır ve stüdyolar ile uzmanlar doğrudan kullanır. Logo/grafik, düşük çözünürlüklü, rengi belirlenemeyen veya adı başka koleksiyonu
+        söyleyen fotoğraflar burada sizin incelemenize kalır. Yanlış ayrılan bir fotoğrafı “Doğrulanmış referanslar”da “İncelemeye geri al”
+        ile geri alabilirsiniz; kural ona bir daha dokunmaz.
+      </p>
+      <p className="text-sm">Kuralla doğrulanan: <strong>{r.verified}</strong> · İncelemede bırakılan: <strong>{r.kept}</strong> · Sırada: <strong>{r.waiting}</strong></p>
+      <form action={driveColourRuleAction}>
+        <input type="hidden" name="enabled" value={r.enabled ? "0" : "1"} />
+        <SubmitButton className="btn" confirm={r.enabled ? "Renk kuralı kapatılsın mı? Yeni fotoğraflar yalnızca sizin onayınızla doğrulanır." : undefined}>{r.enabled ? "Kuralı kapat" : "Kuralı aç"}</SubmitButton>
+      </form>
+    </section>
+  );
+}
+
 async function Review({ brandId, page }: { brandId: string; page: number }) {
   const PAGE = 60;
   const rows = await searchDriveItems(brandId, { filter: "uncertain", limit: PAGE + 1, offset: page * PAGE });
@@ -286,7 +312,7 @@ async function Review({ brandId, page }: { brandId: string; page: number }) {
       <span className="text-xs text-muted">Tarama sonrası otomatik yapılır; logo/grafik ve düşük çözünürlüklü dosyalar alınmaz.</span>
     </form>
   );
-  if (!items.length) return <div className="space-y-3"><Empty>İnceleme bekleyen görsel yok.</Empty>{autoQueue}</div>;
+  if (!items.length) return <div className="space-y-3"><ColourRule brandId={brandId} /><Empty>İnceleme bekleyen görsel yok.</Empty>{autoQueue}</div>;
   const groups = new Map<string, typeof items>();
   for (const i of items) {
     const k = i.ref_theme ?? "unknown";
@@ -297,6 +323,7 @@ async function Review({ brandId, page }: { brandId: string; page: number }) {
   const approvable = items.filter((i) => i.ref_theme && !(i.image_width && i.image_height && referenceTooSmall(i.image_width, i.image_height)));
   return (
     <div className="space-y-4">
+      <ColourRule brandId={brandId} />
       {autoQueue}
       <form action={driveBulkReviewAction} className="space-y-4">
         {approvable.map((i) => <input key={i.ref_id} type="hidden" name="all" value={i.ref_id!} />)}

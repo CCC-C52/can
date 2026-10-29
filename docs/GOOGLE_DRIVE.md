@@ -1,15 +1,35 @@
 # Google Drive marka arşivi
 
 FriBee'nin Google Drive'daki ana arşiv klasörü (varsayılan ad: **FriBee Master Archive**) panele salt okunur bağlanır.
-Sistem klasörü dizinler, içeriği uygun birime yönlendirir ve **hiçbir şeyi sahibin onayı olmadan** ajanlara veya AI
-üretimine vermez.
+Sistem klasörü dizinler ve içeriği uygun birime yönlendirir. Ürün fotoğrafları, sahibin renk kuralıyla (aşağıda)
+veya sahibin onayıyla doğrulanmadan ajanlara veya AI üretimine verilmez.
+
+## Sahip renk kuralı (29 Ekim 2026 talimatı)
+
+| Tişört rengi | Koleksiyon |
+|---|---|
+| Turuncu | Anime |
+| Beyaz | Music (mandala Music'e aittir) |
+| Siyah | Space Alien |
+| Bebe mavisi (arkasında arı) | Save the Bee |
+
+- Kural **varsayılan olarak açık**; Drive Arşivi → İnceleme kuyruğu → “Sahip renk kuralı” kartından kapatılabilir.
+- İşleyici kuyruktaki ürün fotoğraflarının Drive önizlemesini indirir (salt okunur, ücretsiz) ve görselin ortasındaki
+  giysi bölgesinin rengini ölçer (`src/lib/drive/colour-rule.ts`). Kural rengi orta bölgenin en az %35'ini kaplıyorsa
+  fotoğraf sahip adına doğrulanır (`verified_by = kural:renk`), koleksiyonuna ayrılır ve orijinali medya arşivine
+  alınır; stüdyolar ve uzmanlar doğrudan kullanır. Koleksiyon renkleri onaylı bilgi olarak kaydedilir.
+- İncelemede kalanlar: logo/grafik, düşük çözünürlük, rengi belirlenemeyen (ör. yeşil, gri, tek renk görsel) ve dosya
+  adı başka koleksiyonu söyleyen fotoğraflar. Nedeni kayıtta yazılıdır.
+- Her fotoğraf bir kez değerlendirilir. Sahibin “incelemeye geri al” veya “reddet” dediği fotoğrafa kural bir daha dokunmaz.
+- Bilinen risk: renk dışında bir ayırt etme yoktur; aynı renkte baskısız veya başka tasarımlı bir tişört de o koleksiyona
+  girer, gökyüzü veya düz zemin ağırlıklı bir fotoğraf yanlış sınıflanabilir. Yayın öncesi onay ve kalite kontrolü değişmez.
 
 ## Ne nereye gider?
 
 | Drive içeriği | Nereye | Nasıl |
 |---|---|---|
 | Tüm dosya ve klasörler | Drive Arşivi → Dosyalar | Otomatik dizin: ad, yol, tür, boyut, çözünürlük, MD5. Dosya içeriği kopyalanmaz. |
-| Ürün/tasarım görselleri | İnceleme kuyruğu → Doğrulanmış referanslar → Medya arşivi | Sahip seçer → sistem tema/görünüm önerir → sahip tema, görünüm (ön/arka/detay) ve “tasarım, kalıp, renk birebir doğru” onayı ile doğrular → **orijinal dosya** medya arşivine alınır. |
+| Ürün/tasarım görselleri | İnceleme kuyruğu → Doğrulanmış referanslar → Medya arşivi | Tarama sonrası kuyruğa girer → sahip renk kuralı açıksa rengine göre otomatik doğrulanır; kalanları sahip “Tümünü onayla — işaretliler hariç” ile tek seferde doğrular → **orijinal dosya** medya arşivine alınır. |
 | Hikâye, karakterler, marka kuralları (Google Dokümanı, .txt, .md) | Marka Hafızası (öneri) | Sahip “Marka hafızasına öner” der → metin bölümlere ayrılıp **öneri** olarak eklenir → sahip Marka Hafızası'nda etkinleştirince ajanlar kullanır. |
 
 ## Ultra netlik ve tasarım sadakati

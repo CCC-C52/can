@@ -38,6 +38,7 @@ import { addKnowledgeFact, collectionKey, confirmFribeeCollections, decideKnowle
 import type { EntityType } from "@/lib/knowledge/graph";
 import type { Sensitivity } from "@/lib/knowledge/types";
 import { THEME_INFO, isTheme, type FribeeTheme } from "@/lib/drive/themes";
+import { setColourRule } from "@/lib/drive/colour-rule";
 import { autoQueueReferences, bulkReview, reviewSelection, getDriveItem, verifiedCatalogPhotos, verifiedThemesOf, importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds, type ReviewInput } from "@/lib/drive/references";
 
 // ---------------------------------------------------------------- Oturum
@@ -486,6 +487,17 @@ export async function driveAutoQueueAction() {
   await act(`${DRIVE_PAGE}?tab=review`, async () => {
     const r = await autoQueueReferences(brand.id, { limit: 2000 });
     return `${r.queued} ürün fotoğrafı inceleme kuyruğuna eklendi${r.skipped ? `; ${r.skipped} dosya (logo/grafik veya düşük çözünürlük) alınmadı` : ""}.`;
+  });
+}
+
+export async function driveColourRuleAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(`${DRIVE_PAGE}?tab=review`, async () => {
+    const enabled = str(fd, "enabled") === "1";
+    await setColourRule(brand.id, enabled);
+    return enabled
+      ? "Sahip renk kuralı açık: arşivdeki ürün fotoğrafları rengine göre koleksiyonuna ayrılıp otomatik doğrulanacak."
+      : "Sahip renk kuralı kapatıldı: yeni fotoğraflar yalnızca sizin onayınızla doğrulanır (önceki kararlar değişmez).";
   });
 }
 

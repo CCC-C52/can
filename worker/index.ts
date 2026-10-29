@@ -14,6 +14,7 @@ import { runUploadQueueOnce } from "@/lib/uploads";
 import { reconcileStaleSubmissions } from "@/lib/services/provider-jobs";
 import { runDriveScanOnce } from "@/lib/drive/indexer";
 import { runReferenceImportOnce } from "@/lib/drive/references";
+import { runColourRuleOnce } from "@/lib/drive/colour-rule";
 import { runPrAgencyTick } from "@/lib/services/pr-agency";
 import { runBrainTick } from "@/lib/brain/worker";
 
@@ -71,6 +72,9 @@ async function main() {
         driveRunning = true;
         runDriveScanOnce(workerId)
           .then((r) => r && log(r.status === "failed" ? "warn" : "info", "drive.scan", { brandId: r.brandId, status: r.status, pages: r.stats.pages, upserted: r.stats.upserted, removed: r.stats.removed, error: r.error }))
+          // Sahip renk kuralı: kuyruktaki ürün fotoğrafları rengine göre koleksiyonuna ayrılır ve doğrulanır
+          .then(() => runColourRuleOnce())
+          .then((r) => r.length && log("info", "drive.colour_rule", { evaluated: r.length, verified: r.filter((x) => x.theme).length }))
           // Doğrulanmış referansların orijinalleri arka planda medya arşivine alınır
           .then(() => runReferenceImportOnce())
           .then((r) => r.forEach((x) => log(x.ok ? "info" : "warn", "drive.reference_import", x)))

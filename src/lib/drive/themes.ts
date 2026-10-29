@@ -1,10 +1,9 @@
-// FriBee tema kuralları. Sistem yalnızca ÖNERİ üretir; doğrulama her zaman sahibe aittir.
-// Kaynaklar ücretsiz ve yereldir: dosya/klasör adı ve (isteğe bağlı) Drive önizlemesinin baskın rengi (sharp).
+// FriBee tema kuralları. Kaynaklar ücretsiz ve yereldir: dosya/klasör adı ve Drive önizlemesinin rengi (sharp).
 // Hiçbir LLM veya ücretli görsel analiz servisi çağrılmaz.
 //
-// Renk tek başına baskıyı kanıtlamaz: düz turuncu bir tişört Anime baskılı ürün DEĞİLDİR. Renk ipucu bu yüzden
-// en düşük güvenle ve "baskı kontrolü gerekli" notuyla verilir; doğrulamada basılı tasarımın görünür ve doğru olduğu
-// sahip tarafından ayrıca onaylanır (artwork_confirmed).
+// SAHİP RENK KURALI (29 Ekim 2026 talimatı): tişört rengi koleksiyonu belirler — turuncu = Anime, beyaz = Music,
+// siyah = Space Alien, bebe mavisi (arkasında arı) = Save the Bee. Kural açıkken işleyici arşiv fotoğraflarını bu
+// kurala göre sahibin onayı beklemeden doğrular (bkz. colour-rule.ts); sahip istediği fotoğrafı geri alabilir.
 
 export const FRIBEE_THEMES = ["space_alien", "music", "anime", "save_the_bee"] as const;
 export type FribeeTheme = (typeof FRIBEE_THEMES)[number];
@@ -15,13 +14,13 @@ export type GarmentColour = "black" | "white" | "orange" | "light_blue";
 export const THEME_INFO: Record<FribeeTheme, { label: string; garment: GarmentColour; garmentLabel: string; note: string }> = {
   space_alien: { label: "Space Alien", garment: "black", garmentLabel: "siyah", note: "Siyah ürün üzerinde Space Alien baskısı." },
   music: { label: "Music", garment: "white", garmentLabel: "beyaz", note: "Beyaz ürün. Mandala tasarımı Music temasına aittir." },
-  anime: { label: "Anime", garment: "orange", garmentLabel: "turuncu", note: "Turuncu ürün üzerinde basılı Anime tasarımı. Düz/baskısız turuncu tişört Anime sayılmaz." },
-  save_the_bee: { label: "Save the Bee", garment: "light_blue", garmentLabel: "açık mavi", note: "Açık mavi ürün üzerinde Save the Bee baskısı." },
+  anime: { label: "Anime", garment: "orange", garmentLabel: "turuncu", note: "Turuncu tişört Anime koleksiyonudur (sahip kuralı)." },
+  save_the_bee: { label: "Save the Bee", garment: "light_blue", garmentLabel: "bebe mavisi", note: "Bebe mavisi (açık mavi) tişört, arkasında arı baskısı: Save the Bee." },
 };
 
 export const VIEW_LABEL: Record<ReferenceView, string> = { front: "Ön", back: "Arka", detail: "Detay", other: "Diğer", unknown: "Bilinmiyor" };
 
-const COLOUR_THEME: Record<GarmentColour, FribeeTheme> = { black: "space_alien", white: "music", orange: "anime", light_blue: "save_the_bee" };
+export const COLOUR_THEME: Record<GarmentColour, FribeeTheme> = { black: "space_alien", white: "music", orange: "anime", light_blue: "save_the_bee" };
 
 function fold(text: string) {
   return text
@@ -106,12 +105,11 @@ export function combineSuggestion(text: string, colour: GarmentColour | null): S
     reasons.push("Yalnızca dosya/klasör adına dayanıyor.");
   } else if (colourTheme) {
     theme = colourTheme;
-    confidence = colourTheme === "anime" ? 0.15 : 0.3;
-    reasons.push("Yalnızca baskın renge dayanıyor; baskı görünür olmalı.");
+    confidence = 0.5;
+    reasons.push("Sahip renk kuralı: tişört rengi koleksiyonu belirler.");
   } else {
     reasons.push("Tema ipucu bulunamadı.");
   }
-  if (theme === "anime" || colourTheme === "anime") reasons.push("Turuncu renk Anime baskısını kanıtlamaz: basılı tasarımı görselde kontrol edin.");
   if (t.view === null) reasons.push("Ön/arka/detay adda belirtilmemiş.");
   return { theme, view: t.view ?? "unknown", confidence, detail: { text_themes: t.themeHits, text_view: t.view, colour, colour_theme: colourTheme, reasons } };
 }
