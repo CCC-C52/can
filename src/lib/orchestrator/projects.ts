@@ -216,6 +216,17 @@ export async function cancelProject(brandId: string, projectId: string) {
 }
 
 /** Başarısız/iptal/bağlantı bekleyen görevi tekrar kuyruğa alır; bağımlı iptal edilmiş görevleri de geri planlar. */
+/**
+ * Projedeki tüm başarısız görevleri tekrar kuyruğa alır (bağımlılık yüzünden iptal edilenler de geri gelir). Kalite
+ * kontrolünde kalan görev yeniden ÜRETİLMEZ, yalnızca yeniden incelenir; render'da daha önce ödenmiş AI işleri yeniden
+ * kullanılır. Döndürülen: tekrar kuyruğa alınan görev sayısı.
+ */
+export async function retryProjectFailures(brandId: string, projectId: string) {
+  const failed = await q<{ id: string }>(`SELECT id FROM tasks WHERE brand_id = $1 AND project_id = $2 AND status = 'failed' ORDER BY created_at`, [brandId, projectId]);
+  for (const t of failed) await retryTask(brandId, t.id);
+  return failed.length;
+}
+
 export async function retryTask(brandId: string, taskId: string) {
   return tx(async (c) => {
     const t = await q1<Task>(`SELECT * FROM tasks WHERE id = $1 AND brand_id = $2 FOR UPDATE`, [taskId, brandId], c);

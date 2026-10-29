@@ -93,7 +93,11 @@ export async function assertBudget(args: { taskId: string | null; estimateUsd: n
     }
     return;
   }
-  if (limits.perTaskBudgetUsd !== null && args.taskId) {
+  // Görev başına sınır metin (model) görevleri içindir. Görsel/video render görevi tek görevde birden çok ücretli üretim
+  // yapar (ör. 3 AI sahnesi, 8 görsel) ve 1 $ varsayılanıyla yarıda kesiliyordu; render'ı günlük bütçe, proje AI video
+  // saniye sınırı ve sağlayıcı aylık sınırları sınırlar.
+  const isRender = args.taskId ? (await q1<{ kind: string }>(`SELECT kind FROM tasks WHERE id = $1`, [args.taskId], db))?.kind === "render" : false;
+  if (limits.perTaskBudgetUsd !== null && args.taskId && !isRender) {
     const spent = (await taskSpend(args.taskId, db)) + (await committedSpend({ taskId: args.taskId, excludeJobId: args.excludeJobId }, db));
     if (spent + args.estimateUsd > limits.perTaskBudgetUsd) {
       throw new BudgetExceededError(`Görev bütçesi aşılacak: harcanan $${spent.toFixed(4)} + tahmini $${args.estimateUsd.toFixed(4)} > sınır $${limits.perTaskBudgetUsd}`);

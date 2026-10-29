@@ -1,3 +1,4 @@
+import { composeEstimate } from "@/lib/video/plan-validation";
 import type { StudioRequest } from "@/lib/video/studio";
 import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import type { BrandContext } from "./context";
@@ -226,12 +227,11 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
           checks.push({ name: "Yalnızca AI video", status: "fail", detail: `${c.id}: sahip yalnızca AI video sahneleri istedi; plan fotoğraf hareketi veya arşiv parçası içeriyor.` });
           required.push("compose parçalarını yalnızca generate_new AI sahnelerinden (ai_scene) oluşturun.");
         }
-        const gen = new Map<string, any>((content.videos ?? []).filter((v: any) => v.mode === "generate_new").map((v: any) => [v.id, v]));
-        const est = parts.reduce((a, p) => a + (p.kind === "ai_scene" ? Math.min(Number(p.duration_s) || 0, Number(gen.get(p.ref)?.duration_s) || Number(p.duration_s) || 0) : Number(p.duration_s) || 0), 0)
-          + 3 - Math.max(0, parts.length) * 0.5;
+        // Ürün fotoğrafı süreleri plan doğrulayıcısında aralığa oturtulur; yine de kısa kalırsa film üretilir ve not düşülür
+        // (hiç üretilmeyen film yerine kısa film; AI sahne sayısı ve süresi sahibin stüdyo seçimidir)
+        const est = composeEstimate(c, content.videos ?? []);
         if (opts.studio.minSeconds && est < opts.studio.minSeconds - 1) {
-          checks.push({ name: "Reklam süresi", status: "fail", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi.` });
-          required.push(`Toplam süreyi en az ${opts.studio.minSeconds} sn yapın (sahne sayısı × süre).`);
+          checks.push({ name: "Reklam süresi", status: "warn", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi. Daha uzun film için ürün fotoğrafı veya gerçek çekim parçası eklenebilir.` });
         }
       }
     }

@@ -2,6 +2,7 @@ import { q, q1, tx, getPool, type Queryable } from "@/lib/db/pool";
 import { audit } from "@/lib/audit";
 import { capture } from "@/lib/telemetry";
 import { releaseCommit } from "@/lib/release";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { log } from "@/lib/log";
 import { getLimits, getSetting, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
@@ -26,7 +27,12 @@ import { describeSpec, parseVideoSpec, type VideoSpec } from "@/lib/video/spec";
 import { validateVideoPlan, type PlanValidation } from "@/lib/video/plan-validation";
 import { brainContextFor, recordOutputSources } from "@/lib/brain/context";
 
-const LEASE_MS = 60_000;
+/**
+ * Görev kirası; çalışan görev 10 sn'de bir yeniler. Tek işleyicide olay döngüsü bir dakikadan uzun meşgul kalırsa (ör. büyük
+ * bir arşiv dosyasının ayrıştırılması) 60 sn'lik kira dolup çalışan render "İşleyici yanıt vermedi" diye yeniden kuyruğa
+ * alınıyordu. Çöken işleyici ayrıca 30 sn'lik kalp atışı kontrolüyle yakalanır.
+ */
+const LEASE_MS = 5 * 60_000;
 
 class PausedError extends Error {}
 class CancelledError extends Error {}
@@ -59,6 +65,16 @@ export const FAILURE_ACTION: Record<FailureClass, { label: string; action: strin
 };
 class ModelCallLimitError extends Error {}
 
+/** Olay döngüsü gecikmesi (son kalp atışından beri en yüksek, ms): kira kaybının nedenini teşhis etmek için. */
+const loopDelay = monitorEventLoopDelay({ resolution: 50 });
+loopDelay.enable();
+function loopLagMs() {
+  const v = Math.round(loopDelay.max / 1e6);
+  loopDelay.reset();
+  if (v > 10_000) log("warn", "worker.event_loop_blocked", { maxDelayMs: v });
+  return v;
+}
+
 type RunCtx = {
   task: Task;
   signal: AbortSignal;
@@ -84,7 +100,7 @@ export class Engine {
       `INSERT INTO worker_heartbeats (worker_id, started_at, last_seen, info) VALUES ($1, now(), now(), $2)
        ON CONFLICT (worker_id) DO UPDATE SET last_seen = now(), info = EXCLUDED.info`,
       // commit: dağıtım hattı işleyicinin yeni sürümle çalıştığını buradan doğrular
-      [this.workerId, JSON.stringify({ active: this.inflight.size, pid: process.pid, commit: releaseCommit(), rss_mb: Math.round(process.memoryUsage().rss / 1048576) })],
+      [this.workerId, JSON.stringify({ active: this.inflight.size, pid: process.pid, commit: releaseCommit(), rss_mb: Math.round(process.memoryUsage().rss / 1048576), loop_lag_ms: loopLagMs() })],
     );
   }
 

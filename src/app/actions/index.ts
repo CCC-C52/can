@@ -11,7 +11,7 @@ import { config } from "@/lib/config";
 import {
   addBrandFact, addProductFact, addVariant, createBrand, createProduct, deleteBrandFact, deleteProductFact, deleteVariant, getBrand, parseBrandColors, updateBrand, updateProduct,
 } from "@/lib/services/brands";
-import { submitInstruction, cancelTask, cancelProject, retryTask, requestRegeneration, setPaused, retryWaitingConnections, getTask } from "@/lib/orchestrator/projects";
+import { submitInstruction, cancelTask, cancelProject, retryTask, retryProjectFailures, requestRegeneration, setPaused, retryWaitingConnections, getTask } from "@/lib/orchestrator/projects";
 import { decide, editOutput, revokeApproval } from "@/lib/services/outputs";
 import { executeExternalAction, reconcileAction, type ActionType } from "@/lib/services/gateway";
 import { updateMediaMeta, getMedia } from "@/lib/services/media";
@@ -223,6 +223,15 @@ export async function retryTaskAction(fd: FormData) {
   await act(str(fd, "back") || "/gorevler", async () => {
     await retryTask(brand.id, str(fd, "taskId"));
     return "Görev tekrar kuyruğa alındı.";
+  });
+}
+
+export async function retryProjectAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(str(fd, "back") || "/gorevler", async () => {
+    const n = await retryProjectFailures(brand.id, str(fd, "projectId"));
+    if (!n) throw new Error("Bu projede başarısız görev yok.");
+    return `${n} başarısız görev tekrar kuyruğa alındı; bağlı görevler de geri alındı.`;
   });
 }
 

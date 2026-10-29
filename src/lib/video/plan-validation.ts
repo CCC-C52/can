@@ -30,6 +30,22 @@ const MIN_SEG = 0.5;
 const MIN_TRIM_SEG = 1.0;
 const FALLBACK_SCENE_CAP = 4;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+/** Karma reklamda ürün fotoğrafı parçasının süre sınırları (hareket klibi en çok 8 sn üretir). */
+const PHOTO_MIN_S = 1.5;
+const PHOTO_MAX_S = 6;
+const PHOTO_DEFAULT_S = 2.5;
+
+/**
+ * Karma (compose) reklamın tahmini süresi: parçalar (AI sahnesi, üretilen sahnenin süresiyle sınırlı) + hareketli logo
+ * kapanışı (3 sn) − geçişler (parça başına 0,5 sn). Kalite kuralı ve süre onarımı aynı hesabı kullanır.
+ */
+export function composeEstimate(v: any, videos: any[]) {
+  const parts: any[] = Array.isArray(v?.parts) ? v.parts : [];
+  const gen = new Map<string, any>(videos.filter((x) => x?.mode === "generate_new").map((x) => [x.id, x]));
+  const dur = (p: any) => p?.kind === "ai_scene" ? Math.min(Number(p.duration_s) || 0, Number(gen.get(p.ref)?.duration_s) || Number(p.duration_s) || 0)
+    : p?.kind === "product_photo" ? Number(p.duration_s) || PHOTO_DEFAULT_S : Number(p?.duration_s) || 0;
+  return parts.reduce((a, p) => a + dur(p), 0) + 3 - parts.length * 0.5;
+}
 
 /**
  * Plandaki video başvurularını çözer: kimlik veya (AI dosya adı yazdıysa) dosya adı. Yalnızca bu markanın, Drive referansı
@@ -272,6 +288,26 @@ export async function validateVideoPlan(brandId: string, content: any, opts: { s
         Object.assign(p, { scene_index: sc.index, source_start: s, source_end: e, duration_s: r3(e - s) });
       }
     }
+  }
+
+  // compose süresi: sahibin aralığına ürün fotoğrafı parçalarının süresi ayarlanarak oturtulur (AI sahneleri sabittir, ücretlidir).
+  // Model bunu yeniden üretimde güvenilir biçimde düzeltemiyordu ("Toplam süreyi en az 20 sn yapın") ve film hiç üretilmiyordu.
+  for (const v of videos.filter((x) => x.mode === "compose")) {
+    const photos: any[] = (Array.isArray(v.parts) ? v.parts : []).filter((p: any) => p?.kind === "product_photo");
+    if (!photos.length) continue;
+    const before = composeEstimate(v, videos);
+    const cur = (p: any) => Number(p.duration_s) || PHOTO_DEFAULT_S;
+    if (opts.spec.minSeconds !== null && before < opts.spec.minSeconds) {
+      const room = photos.reduce((a, p) => a + Math.max(0, PHOTO_MAX_S - cur(p)), 0);
+      const need = Math.min(room, opts.spec.minSeconds + 0.5 - before);
+      if (need > 0) for (const p of photos) p.duration_s = r3(cur(p) + (need * Math.max(0, PHOTO_MAX_S - cur(p))) / room);
+    } else if (opts.spec.maxSeconds !== null && before > opts.spec.maxSeconds) {
+      const room = photos.reduce((a, p) => a + Math.max(0, cur(p) - PHOTO_MIN_S), 0);
+      const cut = Math.min(room, before - (opts.spec.maxSeconds - 0.5));
+      if (cut > 0) for (const p of photos) p.duration_s = r3(cur(p) - (cut * Math.max(0, cur(p) - PHOTO_MIN_S)) / room);
+    }
+    const after = composeEstimate(v, videos);
+    if (Math.abs(after - before) > 0.01) repairs.push(`${v.id}: ürün fotoğrafı süreleri ayarlandı; tahmini süre ${before.toFixed(1)} → ${after.toFixed(1)} sn`);
   }
 
   // Anahtar sırası karşılaştırmaya girmez (jsonb anahtarları yeniden sıralar): yalnızca içerik değiştiyse yeni sürüm

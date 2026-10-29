@@ -9,7 +9,7 @@ import { Badge, DemoBadge, Flash, PageHeader, dt, usd } from "@/components/ui";
 import { AutoRefresh, SubmitButton } from "@/components/client";
 import { PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE } from "@/lib/labels";
 import { agentName } from "@/lib/agents/registry";
-import { cancelProjectAction } from "@/app/actions";
+import { cancelProjectAction, retryProjectAction } from "@/app/actions";
 
 export default async function ProjectPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SP }) {
   const { id } = await params;
@@ -25,6 +25,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
   const ordered = [...tasks].reverse();
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const running = tasks.some((t) => ["planned", "ready", "running", "review_pending"].includes(t.status));
+  const failedCount = tasks.filter((t) => t.status === "failed").length;
   const report = project.report;
   const cost = (k: string) => costs.find((c) => c.kind === k);
   return (
@@ -34,6 +35,9 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
         subtitle={<>Durum: {PROJECT_STATUS_LABEL[project.status] ?? project.status} · {dt(project.created_at)} · model çağrısı: {project.model_calls}</>}
         actions={<>
           <AutoRefresh active={running} />
+          {failedCount > 0 && (
+            <form action={retryProjectAction}><input type="hidden" name="projectId" value={id} /><input type="hidden" name="back" value={`/projeler/${id}`} /><SubmitButton className="btn-primary" confirm="Başarısız görevler tekrar denensin mi? Kalite kontrolünde kalanlar yeniden üretilmez, yeniden incelenir; ödenmiş AI video sahneleri yeniden kullanılır.">Başarısız görevleri tekrar dene ({failedCount})</SubmitButton></form>
+          )}
           {running && (
             <form action={cancelProjectAction}><input type="hidden" name="projectId" value={id} /><input type="hidden" name="back" value={`/projeler/${id}`} /><SubmitButton className="btn-danger" confirm="Projedeki tüm açık görevler iptal edilsin mi?">Projeyi iptal et</SubmitButton></form>
           )}
