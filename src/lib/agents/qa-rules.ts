@@ -231,7 +231,16 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
         // (hiç üretilmeyen film yerine kısa film; AI sahne sayısı ve süresi sahibin stüdyo seçimidir)
         const est = composeEstimate(c, content.videos ?? []);
         if (opts.studio.minSeconds && est < opts.studio.minSeconds - 1) {
-          checks.push({ name: "Reklam süresi", status: "warn", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi. Daha uzun film için ürün fotoğrafı veya gerçek çekim parçası eklenebilir.` });
+          // Model AI sahnelerini istenenden az/kısa planladıysa veya yalnızca AI sahnesi istendiyse eksik modelindir: başarısız
+          const gen = new Map<string, any>((content.videos ?? []).filter((v: any) => v.mode === "generate_new").map((v: any) => [v.id, v]));
+          const plannedAi = parts.filter((p) => p.kind === "ai_scene").reduce((a, p) => a + Math.min(Number(p.duration_s) || 0, Number(gen.get(p.ref)?.duration_s) || Number(p.duration_s) || 0), 0);
+          const requestedAi = opts.studio.aiScenes * opts.studio.sceneSeconds;
+          if (opts.studio.aiOnly || plannedAi < requestedAi - 1) {
+            checks.push({ name: "Reklam süresi", status: "fail", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi (AI sahneleri ${plannedAi.toFixed(1)} sn, istenen ${requestedAi} sn).` });
+            required.push(`AI sahnelerini sahibin istediği sayıda ve sürede (${opts.studio.aiScenes} × ${opts.studio.sceneSeconds} sn) planlayın; toplam en az ${opts.studio.minSeconds} sn olmalı.`);
+          } else {
+            checks.push({ name: "Reklam süresi", status: "warn", detail: `${c.id}: tahmini süre ${est.toFixed(1)} sn; sahip en az ${opts.studio.minSeconds} sn istedi. Daha uzun film için ürün fotoğrafı veya gerçek çekim parçası eklenebilir.` });
+          }
         }
       }
     }
