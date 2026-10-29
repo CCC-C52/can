@@ -11,7 +11,7 @@ import { systemPrompt } from "@/lib/agents/prompts";
 import { DRIVE_SCOPES, FOLDER_MIME, driveRuntime } from "@/lib/drive/google";
 import { completeDriveOAuth, consumeDriveState, disconnectDrive, findArchiveFolders, getDriveSource, selectArchiveFolder, startDriveOAuth } from "@/lib/drive/source";
 import { runDriveScanOnce } from "@/lib/drive/indexer";
-import { autoQueueReferences, bulkReview, chunkText, importReferenceOriginal, isNonProductImage, proposeMemoryFromDocument, reviewReference, runReferenceImportOnce, suggestReferences, unverifiedDriveAssetIds } from "@/lib/drive/references";
+import { autoQueueReferences, bulkReview, reviewSelection, chunkText, importReferenceOriginal, isNonProductImage, proposeMemoryFromDocument, reviewReference, runReferenceImportOnce, suggestReferences, unverifiedDriveAssetIds } from "@/lib/drive/references";
 
 // Sahte Google (OAuth + Drive v3). Gerçek Google'a hiçbir istek gitmez.
 type FakeFile = { id: string; name: string; mimeType: string; parents: string[]; trashed?: boolean; content?: Buffer; width?: number; height?: number; md5Override?: string };
@@ -350,10 +350,15 @@ describe("Google Drive arşivi", () => {
     const front = await ref("music-front.jpg"), back = await ref("music-back.jpg");
     const decisions = [{ referenceId: front, theme: "music", view: "front" }, { referenceId: back, theme: "music", view: "back" }];
     await expect(bulkReview(brandId, decisions, "verify")).rejects.toThrow(/birebir doğru/);
-    const missingView = await bulkReview(brandId, [{ referenceId: front, theme: "music", view: null }], "verify", { artworkConfirmed: true });
-    expect(missingView).toMatchObject({ done: 0 });
-    expect(missingView.errors[0]).toMatch(/görünümü/);
-    expect(await bulkReview(brandId, decisions, "verify", { artworkConfirmed: true })).toEqual({ done: 2, errors: [] });
+    const missingTheme = await bulkReview(brandId, [{ referenceId: front, theme: null, view: "front" }], "verify", { artworkConfirmed: true });
+    expect(missingTheme).toMatchObject({ done: 0 });
+    expect(missingTheme.errors[0]).toMatch(/dört FriBee temasından/);
+    // "Tümünü onayla": gösterilen öneriler, işaretlenenler hariç; diğer düğmeler yalnızca işaretlenenler
+    expect(reviewSelection("verify_all", [front, back], [])).toEqual([front, back]);
+    expect(reviewSelection("verify_all", [front, back], [back])).toEqual([front]);
+    expect(reviewSelection("verify", [front, back], [back])).toEqual([back]);
+    expect(reviewSelection("reject", [front, back], [])).toEqual([]);
+    expect(await bulkReview(brandId, reviewSelection("verify_all", [front, back], []).map((id) => decisions.find((d) => d.referenceId === id)!), "verify", { artworkConfirmed: true })).toEqual({ done: 2, errors: [] });
 
     const results = await runReferenceImportOnce(10);
     expect(results.filter((r) => r.ok).map((r) => r.referenceId).sort()).toEqual([front, back].sort());
@@ -364,7 +369,9 @@ describe("Google Drive arşivi", () => {
 
     // Görsel olarak okunamayan dosya: 3 denemeden sonra durur, hata kayıtta görünür
     const broken = await ref("bee-2.png");
-    await bulkReview(brandId, [{ referenceId: broken, theme: "save_the_bee", view: "front" }], "verify", { artworkConfirmed: true });
+    // Toplu onayda görünüm seçilmemişse "Diğer" kaydedilir (koleksiyon zorunlu kalır)
+    expect(await bulkReview(brandId, [{ referenceId: broken, theme: "save_the_bee", view: null }], "verify", { artworkConfirmed: true })).toEqual({ done: 1, errors: [] });
+    expect((await q1<{ view: string }>(`SELECT view FROM drive_references WHERE id = $1`, [broken]))!.view).toBe("other");
     for (let i = 0; i < 4; i++) await runReferenceImportOnce(10);
     const b = (await q1<{ media_asset_id: string | null; detail: any }>(`SELECT media_asset_id, suggestion_detail AS detail FROM drive_references WHERE id = $1`, [broken]))!;
     expect(b.media_asset_id).toBeNull();

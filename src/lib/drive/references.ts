@@ -343,6 +343,15 @@ export type BulkDecision = { referenceId: string; theme?: string | null; view?: 
  * Toplu inceleme: seçilen referanslar tek seferde doğrulanır veya reddedilir. Doğrulamada sahip, seçilen tüm görsellerde
  * baskı, renk ve kalıbın birebir doğru olduğunu tek onayla beyan eder. Orijinaller işleyicide otomatik arşive alınır.
  */
+/**
+ * İnceleme formunda işlenecek referanslar. "Tümünü onayla" (verify_all): sayfada gösterilen, koleksiyon önerisi olan tüm
+ * görseller; sahip ekranda gördüğünü tek beyanla onaylar, işaretledikleri HARİÇ tutulur (yanlışı ayırmak için işaretlemek
+ * yeterli). Diğer düğmeler yalnızca işaretlenenleri işler.
+ */
+export function reviewSelection(choice: string, shown: string[], selected: string[]) {
+  return choice === "verify_all" ? shown.filter((id) => !selected.includes(id)) : selected;
+}
+
 export async function bulkReview(brandId: string, decisions: BulkDecision[], action: "verify" | "reject", opts: { artworkConfirmed?: boolean; actor?: string } = {}) {
   const list = decisions.filter((d) => isUuid(d.referenceId)).slice(0, 200);
   if (!list.length) throw new DriveValidationError("En az bir görsel seçin.");
@@ -351,7 +360,8 @@ export async function bulkReview(brandId: string, decisions: BulkDecision[], act
   const errors: string[] = [];
   for (const d of list) {
     try {
-      await reviewReference(brandId, d.referenceId, { action, theme: d.theme ?? null, view: d.view ?? null, artworkConfirmed: action === "verify" }, opts.actor ?? "user");
+      // Toplu onayda görünüm seçilmemişse "Diğer" kaydedilir (koleksiyon yine zorunlu; görünüm yalnızca sıralamayı etkiler)
+      await reviewReference(brandId, d.referenceId, { action, theme: d.theme ?? null, view: d.view || (action === "verify" ? "other" : null), artworkConfirmed: action === "verify" }, opts.actor ?? "user");
       done.push(d.referenceId);
     } catch (err) {
       errors.push(err instanceof Error ? err.message : String(err));

@@ -293,10 +293,13 @@ async function Review({ brandId, page }: { brandId: string; page: number }) {
     groups.set(k, [...(groups.get(k) ?? []), i]);
   }
   const order = [...FRIBEE_THEMES, "unknown"].filter((k) => groups.has(k));
+  // "Tümünü onayla" yalnızca koleksiyon önerisi olan ve referans için yeterli çözünürlükteki görselleri kapsar
+  const approvable = items.filter((i) => i.ref_theme && !(i.image_width && i.image_height && referenceTooSmall(i.image_width, i.image_height)));
   return (
     <div className="space-y-4">
       {autoQueue}
       <form action={driveBulkReviewAction} className="space-y-4">
+        {approvable.map((i) => <input key={i.ref_id} type="hidden" name="all" value={i.ref_id!} />)}
         {order.map((k) => (
           <section key={k} className="card">
             <h2 className="h2 mb-2">{k === "unknown" ? "Koleksiyonu belirsiz" : `${THEME_INFO[k as (typeof FRIBEE_THEMES)[number]].label} (${THEME_INFO[k as (typeof FRIBEE_THEMES)[number]].garmentLabel}) — öneri`}</h2>
@@ -329,11 +332,13 @@ async function Review({ brandId, page }: { brandId: string; page: number }) {
           </section>
         ))}
         <div className="card sticky bottom-2 space-y-2">
-          <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="artworkConfirmed" value="1" className="mt-1" /> Seçtiğim görsellerde baskı, kalıp, renk ve logo birebir doğru; koleksiyon ve görünüm seçimleri doğru.</label>
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="artworkConfirmed" value="1" className="mt-1" /> Onayladığım görsellere baktım: gerçek ürün fotoğrafı; baskı, kalıp, renk ve logo birebir doğru; koleksiyon seçimleri doğru.</label>
           <div className="flex flex-wrap gap-2">
-            <button name="action" value="verify" className="btn-primary">Seçilenleri onayla</button>
+            {approvable.length > 0 && <button name="action" value="verify_all" className="btn-primary">Tümünü onayla — işaretliler hariç ({approvable.length})</button>}
+            <button name="action" value="verify" className="btn">Seçilenleri onayla</button>
             <button name="action" value="reject" className="btn-danger">Seçilenleri reddet</button>
           </div>
+          <p className="text-xs text-muted">Hızlı yol: yanlış olan görselleri işaretleyin ve “Tümünü onayla”ya basın; işaretliler onaylanmaz, incelemede kalır. Tümünü onayla, bu sayfadaki görselleri önerilen (veya sizin seçtiğiniz) koleksiyonla kaydeder; “Koleksiyonu belirsiz” ve düşük çözünürlüklü görselleri kapsamaz. Görünüm seçilmezse “Diğer” kaydedilir.</p>
           <p className="text-xs text-muted">Onaylanan görsellerin orijinalleri (tam çözünürlük, MD5 doğrulamalı) arka planda otomatik olarak medya arşivine alınır; ardından Video ve Görsel Stüdyosu&apos;nda kullanılabilir.</p>
         </div>
       </form>

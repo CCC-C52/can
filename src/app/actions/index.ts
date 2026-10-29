@@ -38,7 +38,7 @@ import { addKnowledgeFact, collectionKey, confirmFribeeCollections, decideKnowle
 import type { EntityType } from "@/lib/knowledge/graph";
 import type { Sensitivity } from "@/lib/knowledge/types";
 import { THEME_INFO, isTheme, type FribeeTheme } from "@/lib/drive/themes";
-import { autoQueueReferences, bulkReview, getDriveItem, verifiedCatalogPhotos, verifiedThemesOf, importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds, type ReviewInput } from "@/lib/drive/references";
+import { autoQueueReferences, bulkReview, reviewSelection, getDriveItem, verifiedCatalogPhotos, verifiedThemesOf, importReferenceOriginal, proposeMemoryFromDocument, reviewReference, suggestReferences, unverifiedDriveAssetIds, type ReviewInput } from "@/lib/drive/references";
 
 // ---------------------------------------------------------------- Oturum
 
@@ -492,8 +492,9 @@ export async function driveAutoQueueAction() {
 export async function driveBulkReviewAction(fd: FormData) {
   const brand = await requireBrand();
   await act(`${DRIVE_PAGE}?tab=review`, async () => {
-    const action = str(fd, "action") === "reject" ? "reject" : "verify";
-    const ids = fd.getAll("sel").map(String);
+    const choice = str(fd, "action");
+    const action = choice === "reject" ? "reject" : "verify";
+    const ids = reviewSelection(choice, fd.getAll("all").map(String), fd.getAll("sel").map(String));
     const r = await bulkReview(brand.id, ids.map((id) => ({ referenceId: id, theme: str(fd, `theme:${id}`) || null, view: str(fd, `view:${id}`) || null })), action, { artworkConfirmed: str(fd, "artworkConfirmed") === "1" });
     const head = action === "verify" ? `${r.done} görsel onaylandı; orijinaller arka planda arşive alınıyor.` : `${r.done} görsel reddedildi.`;
     if (r.errors.length) throw new Error(`${head} ${r.errors.length} görsel işlenemedi: ${[...new Set(r.errors)].slice(0, 3).join(" · ")}`);
