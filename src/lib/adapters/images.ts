@@ -55,6 +55,23 @@ export class OpenAIImageGenerator implements ImageGenerator {
   }
 }
 
+/** Referansın uzun kenarı en çok bu kadar gönderilir (çıktı en çok 1536 px; Drive orijinalleri 6000 px'e varabilir). */
+export const REFERENCE_MAX_PX = 2048;
+
+/**
+ * Referans fotoğrafı gönderim boyutuna indirir (512 MB işleyicide tam çözünürlüklü orijinalin birkaç kopyası bellek
+ * taşırıyordu). Küçük ve döndürme gerektirmeyen fotoğraf olduğu gibi gider; şeffaflık varsa PNG, yoksa JPEG q95 4:4:4.
+ */
+export async function fitReference(r: ReferenceImage): Promise<ReferenceImage & { resized: boolean }> {
+  const meta = await sharp(r.buffer).metadata();
+  const [w, h] = (meta.orientation ?? 1) >= 5 ? [meta.height ?? 0, meta.width ?? 0] : [meta.width ?? 0, meta.height ?? 0];
+  if (Math.max(w, h) <= REFERENCE_MAX_PX && (meta.orientation ?? 1) === 1) return { ...r, resized: false };
+  const alpha = !!meta.hasAlpha;
+  const img = sharp(r.buffer).rotate().resize(REFERENCE_MAX_PX, REFERENCE_MAX_PX, { fit: "inside", withoutEnlargement: true, kernel: "lanczos3" });
+  const buffer = await (alpha ? img.png() : img.jpeg({ quality: 95, chromaSubsampling: "4:4:4" })).toBuffer();
+  return { buffer, mime: alpha ? "image/png" : "image/jpeg", filename: r.filename.replace(/\.[a-z0-9]+$/i, alpha ? ".png" : ".jpg"), resized: true };
+}
+
 /**
  * Üretilen görselin gerçek, çözülebilir bir görsel olduğunu doğrular. Boş/tek renk/çok küçük dosyalar
  * (yer tutucu) başarılı üretim sayılmaz.

@@ -265,14 +265,30 @@ export async function claimTasks(workerId: string, limits: Limits): Promise<Task
     const running = await q1<{ n: number }>(`SELECT COUNT(*)::int AS n FROM tasks WHERE status = 'running'`, [], c);
     const free = limits.maxConcurrentTasks - (running?.n ?? 0);
     if (free <= 0) return [];
+    // Render görevleri (ffmpeg kurgusu, ücretli görsel/video üretimi) aynı anda en fazla bir tane çalışır: 512 MB
+    // işleyicide film render'ı ile görsel üretimi birlikte belleği taşırıp işleyiciyi düşürüyor, yarıda kalan ücretli
+    // gönderimler "sonucu belirsiz" kalıyordu. Metin görevleri render'la birlikte çalışmaya devam eder.
+    const renderRunning = await q1(`SELECT 1 FROM tasks WHERE status = 'running' AND kind = 'render' LIMIT 1`, [], c);
+    const candidates = await q<{ id: string; kind: string }>(
+      `SELECT id, kind FROM tasks WHERE status IN ('ready','review_pending') AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+       ORDER BY created_at, key FOR UPDATE SKIP LOCKED LIMIT 50`,
+      [],
+      c,
+    );
+    let renderSlot = renderRunning ? 0 : 1;
+    const ids: string[] = [];
+    for (const t of candidates) {
+      if (ids.length >= free) break;
+      if (t.kind === "render") { if (!renderSlot) continue; renderSlot--; }
+      ids.push(t.id);
+    }
+    if (!ids.length) return [];
     return q<Task>(
       `UPDATE tasks SET status = 'running', lease_owner = $1, lease_expires_at = now() + ($3 || ' milliseconds')::interval,
          attempts = attempts + 1, started_at = COALESCE(started_at, now()), next_attempt_at = NULL, updated_at = now()
-       WHERE id IN (
-         SELECT id FROM tasks WHERE status IN ('ready','review_pending') AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-         ORDER BY created_at, key FOR UPDATE SKIP LOCKED LIMIT $2)
+       WHERE id = ANY($2::uuid[])
        RETURNING *`,
-      [workerId, free, String(LEASE_MS)],
+      [workerId, ids, String(LEASE_MS)],
       c,
     );
   });

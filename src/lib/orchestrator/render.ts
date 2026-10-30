@@ -12,7 +12,7 @@ import { VideoVerificationError, verifyStoredBytes, verifyStoredVideo, type Vide
 import { EDIT_SIZES } from "@/lib/adapters/video-edit";
 import { log } from "@/lib/log";
 import { latestAnalysis } from "@/lib/media-analysis";
-import { formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
+import { fitReference, formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
 import { getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
 import { assertTool } from "@/lib/agents/registry";
@@ -199,17 +199,17 @@ async function generateImage(ctx: RenderCtx, b: any, o: RenderOutcome) {
   if (blocked || !gen) { o.waiting.push(`${b.id}: AI görsel üretimi — ${blocked ?? "sağlayıcı yapılandırılmamış"}`); return; }
   assertTool("design", "image.generate");
   // Referans: arşivdeki gerçek ürün fotoğrafı (ürün görünümü değiştirilmemeli)
-  const refs: ReferenceImage[] = [];
+  const refs: (ReferenceImage & { resized: boolean })[] = [];
   for (const id of (b.source_asset_ids ?? []).slice(0, 2)) {
     const m = await usableMedia(task.brand_id, id);
-    if (m && m.kind === "photo" && RASTER.has(m.mime_type)) refs.push({ buffer: await readMediaFile(m), mime: m.mime_type, filename: `ref-${m.id}.${m.mime_type.split("/")[1]}` });
+    if (m && m.kind === "photo" && RASTER.has(m.mime_type)) refs.push(await fitReference({ buffer: await readMediaFile(m), mime: m.mime_type, filename: `ref-${m.id}.${m.mime_type.split("/")[1]}` }));
   }
   const prompt = refs.length
     ? `${clean(b.generation_prompt)}\nKeep the product exactly as shown in the reference photo: same shape, colours, materials, logo and proportions. Do not add text.`
     : clean(b.generation_prompt);
   const est = gen.estimateCostUsd();
   const key = `img:${ctx.versionId}:${b.id}`;
-  const existing = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "image_generation", itemRef: b.id, key, estimateUsd: est, request: { model: gen.model, prompt, size: formatToSize(b.format), references: refs.length } });
+  const existing = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "image_generation", itemRef: b.id, key, estimateUsd: est, request: { model: gen.model, prompt, size: formatToSize(b.format), references: refs.length, references_resized: refs.filter((r) => r.resized).length } });
   if (!existing.created) { reportExisting(existing.job, b.id, o); return; }
   const job = existing.job;
   try {
