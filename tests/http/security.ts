@@ -158,6 +158,7 @@ async function main() {
       ["yükleme başlatma", `/api/uploads`, "POST"],
       ["yükleme durumu", `/api/uploads/${s.upB.id}`, "GET"],
       ["dışa aktarma", `/api/exports/${s.exportB.id}`, "GET"],
+      ["sesli uyarı (biten görevler)", `/api/activity?since=2026-01-01T00:00:00Z`, "GET"],
     ] as const) {
       await check(`oturumsuz: ${name} → 401`, async () => {
         const r = await fetch(BASE + url, { method, headers: { "content-type": "application/json" }, body: method === "POST" ? "{}" : undefined });

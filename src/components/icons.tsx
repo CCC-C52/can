@@ -5,7 +5,7 @@ export type IconName =
   | "dashboard" | "spark" | "team" | "board" | "check" | "strategy" | "megaphone" | "radar" | "mic" | "users" | "share"
   | "calendar" | "chart" | "image" | "film" | "draft" | "eye" | "archive" | "layers" | "tag" | "book" | "brain"
   | "library" | "drive" | "cart" | "user" | "trend" | "plug" | "wallet" | "cog" | "bolt" | "pulse" | "search"
-  | "arrow-right" | "menu" | "close" | "lock" | "clock" | "shield" | "alert" | "globe" | "flag" | "pause" | "play";
+  | "arrow-right" | "menu" | "close" | "lock" | "clock" | "shield" | "alert" | "globe" | "flag" | "pause" | "play" | "bell";
 
 const P: Record<IconName, React.ReactNode> = {
   dashboard: <><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.5" /><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></>,
@@ -52,6 +52,7 @@ const P: Record<IconName, React.ReactNode> = {
   flag: <><path d="M5 21V4" /><path d="M5 4h11l-2 4 2 4H5" /></>,
   pause: <><rect x="6.5" y="5" width="3.5" height="14" rx="1" /><rect x="14" y="5" width="3.5" height="14" rx="1" /></>,
   play: <><path d="M7 4.5v15l12-7.5z" /></>,
+  bell: <><path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 1.5h-15z" /><path d="M10 20.5a2 2 0 004 0" /></>,
 };
 
 export function Icon({ name, className = "h-4 w-4", strokeWidth = 1.6 }: { name: IconName; className?: string; strokeWidth?: number }) {

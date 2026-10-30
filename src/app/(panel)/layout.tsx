@@ -11,6 +11,7 @@ import { selectBrandAction, logoutAction, pauseAction } from "@/app/actions";
 import { BottomBar, MobileNav, NavLinks, QuickNav } from "@/components/nav";
 import { Icon } from "@/components/icons";
 import { StatusDot } from "@/components/ui";
+import { TaskAlerts } from "@/components/task-alerts";
 import type { Brand } from "@/lib/services/brands";
 
 export const dynamic = "force-dynamic";
@@ -78,6 +79,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
             ) : (
               <span className="hidden items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-xs font-medium text-success ring-1 ring-success-line xl:inline-flex"><StatusDot tone="ok" />Gerçek AI</span>
             )}
+            {brand && <TaskAlerts />}
             <Link href="/onaylar" className="btn relative hidden h-9 w-9 px-0 md:inline-flex" aria-label={`Onay Merkezi: ${approvals} bekleyen`}>
               <Icon name="check" />
               {approvals > 0 && <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-brand px-1 text-center text-[10px] leading-4 font-semibold text-on-brand">{approvals > 99 ? "99+" : approvals}</span>}
