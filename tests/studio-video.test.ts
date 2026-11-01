@@ -85,7 +85,7 @@ const studioInstruction = (mode: "ai" | "hybrid" | "archive", photos = [{ id: ""
 describe("Video Stüdyosu talebi", () => {
   it("talimat → stüdyo talebi (mod, sahne sayısı/süresi, ürün fotoğrafı kimlikleri) geri okunur; arşiv modu Gemini istemez", () => {
     const text = studioInstruction("hybrid", [{ id: "11111111-2222-4333-8444-555555555555", filename: "tee [front].jpg" }]);
-    expect(text).toMatch(/Gemini Omni ile 2 adet 6 saniyelik/);
+    expect(text).toMatch(/AI video sağlayıcısıyla \(birincil Runway, gerekirse Google Gemini\) 2 adet 6 saniyelik/);
     expect(text).not.toMatch(/Yalnızca bu gerçek çekimleri/);
     expect(parseStudioRequest(text)).toEqual({ mode: "hybrid", aiScenes: 2, sceneSeconds: 6, photoIds: ["11111111-2222-4333-8444-555555555555"], collection: null, musicId: null, extraFormat: null, aiOnly: false, minSeconds: 12, maxSeconds: 15 });
     const archive = buildStudioInstruction({ mode: "archive", videos: [{ id: "x", filename: "a.mp4" }], photos: [], minSeconds: 10, maxSeconds: 15, platform: "Reels", transition: "cut", aiScenes: 2, sceneSeconds: 6, goal: "" });
