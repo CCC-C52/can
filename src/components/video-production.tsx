@@ -23,7 +23,7 @@ export function ProviderCards({ statuses, limits }: { statuses: VideoProviderSta
               <strong>{s.name}</strong>
               <Badge tone={s.ready ? "ok" : "bad"}>{s.ready ? "Hazır" : "Hazır değil"}</Badge>
             </div>
-            <dl className="mt-1 grid grid-cols-[auto,1fr] gap-x-2 text-xs">
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 text-xs">
               <dt className="text-muted">Model</dt><dd>{s.model ?? "—"}</dd>
               <dt className="text-muted">Bağlantı</dt><dd>{s.connected ? `Bağlı${s.keySource === "integration" ? " (Entegrasyon Merkezi)" : s.keySource === "env" ? " (sunucu ortamı)" : ""}` : s.keyConfigured ? "Anahtar var, doğrulanmadı" : "Anahtar yok"}</dd>
               <dt className="text-muted">Fiyat</dt><dd>{s.usdPerSecond !== null ? `${usd(s.usdPerSecond)} / sn · 5 sn sahne ≈ ${usd(s.usdPerSecond * 5, 2)}` : "Girilmedi (ücretli üretim engelli)"}</dd>
