@@ -6,6 +6,7 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import { log } from "@/lib/log";
 import { getLimits, getSetting, isPaused, type Limits } from "@/lib/settings";
 import { getTextModel } from "@/lib/models";
+import { productionRequired } from "@/lib/video/production";
 import { ModelUnavailableError, OutputTruncatedError, PermanentError, TransientError, type GenerateRequest, type GenerateResult, type TextModelAdapter } from "@/lib/models/types";
 import { buildBrandContext, type BrandContext } from "@/lib/agents/context";
 import { AGENTS, agentName, assertTool, isSpecialist, ToolPermissionError } from "@/lib/agents/registry";
@@ -924,6 +925,13 @@ async function createCalendarEntries(task: Task, v: OutputVersion) {
   }
 }
 
+/** PR Ajansı kampanyası ("Üretim onayı: gerekli"): video render görevi sahip onayını bekler. */
+async function productionApprovalRef(task: Task) {
+  if (task.agent !== "video") return {};
+  const p = await q1<{ instruction: string }>(`SELECT instruction FROM projects WHERE id = $1`, [task.project_id]);
+  return productionRequired(p?.instruction) ? { production_approval: { required: true } } : {};
+}
+
 /** Tasarım/video çıktısından sonra render görevleri (yerel derleme, ffmpeg, AI üretimi) oluşturulur. */
 async function spawnFollowUps(task: Task, v: OutputVersion, _ctx: BrandContext) {
   if (task.agent !== "design" && task.agent !== "video") return;
@@ -933,16 +941,18 @@ async function spawnFollowUps(task: Task, v: OutputVersion, _ctx: BrandContext) 
   const existing = await q1<{ id: string; status: string }>(`SELECT id, status FROM tasks WHERE project_id = $1 AND key = $2`, [task.project_id, key]);
   if (existing) {
     if (["completed", "failed", "cancelled", "waiting_connection"].includes(existing.status)) {
-      await q(`UPDATE tasks SET status = 'planned', attempts = 0, error = NULL, finished_at = NULL, input_refs = $2, updated_at = now() WHERE id = $1`, [existing.id, JSON.stringify({ version_id: v.id })]);
+      // Yeni plan sürümü: önceki üretim onayı bu sürümü kapsamaz (yeniden onay gerekir)
+      await q(`UPDATE tasks SET status = 'planned', attempts = 0, error = NULL, finished_at = NULL, input_refs = $2, updated_at = now() WHERE id = $1`, [existing.id, JSON.stringify({ version_id: v.id, ...(await productionApprovalRef(task)) })]);
     }
     return;
   }
   const limits = await getLimits();
   const title = task.agent === "design" ? "Görselleri üret / derle" : "Videoyu render et";
+  const refs = { version_id: v.id, ...(await productionApprovalRef(task)) };
   const row = await q1<{ id: string }>(
     `INSERT INTO tasks (brand_id, project_id, key, agent, kind, title, instruction, status, input_refs, output_id, max_attempts)
      VALUES ($1,$2,$3,$4,'render',$5,$6,'planned',$7,$8,$9) RETURNING id`,
-    [task.brand_id, task.project_id, key, task.agent, title, `${task.title} çıktısının dosyalarını üret`, JSON.stringify({ version_id: v.id }), task.output_id, limits.maxAttempts],
+    [task.brand_id, task.project_id, key, task.agent, title, `${task.title} çıktısının dosyalarını üret`, JSON.stringify(refs), task.output_id, limits.maxAttempts],
   );
   await q(`INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1,$2)`, [row!.id, task.id]);
   // Rapor henüz başlamadıysa render görevini de beklesin

@@ -130,7 +130,7 @@ export const VideoPlanSchema = z.object({
   videos: z.array(
     z.object({
       id: z.string(),
-      mode: z.enum(["edit_existing", "generate_new", "compose"]).describe("edit_existing: arşiv çekiminden kurgu; generate_new: tek bir AI video sahnesi (Gemini Omni, 3-10 sn); compose: AI sahnelerini, gerçek ürün fotoğraflarını ve arşiv sahnelerini tek reklamda birleştiren son kurgu"),
+      mode: z.enum(["edit_existing", "generate_new", "compose"]).describe("edit_existing: arşiv çekiminden kurgu; generate_new: tek bir AI video sahnesi (Runway veya Gemini, 3-10 sn); compose: AI sahnelerini, gerçek ürün fotoğraflarını ve arşiv sahnelerini tek reklamda birleştiren son kurgu"),
       format: z.enum(["9:16", "1:1", "16:9", "4:5"]),
       duration_s: z.number(),
       selected_asset_ids: z.array(z.string()),

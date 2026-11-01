@@ -225,16 +225,26 @@ export default async function OutputPage({ params, searchParams }: { params: Pro
                   <li key={j.id} className="rounded bg-surface-2 p-2">
                     <div className="flex flex-wrap items-center gap-1">
                       <Badge tone={j.status === "succeeded" ? "ok" : j.status === "failed" ? "bad" : "warn"}>{PROVIDER_JOB_STATUS_LABEL[j.status] ?? j.status}</Badge>
-                      {j.item_ref} · {j.kind === "video_generation" ? "AI video" : "AI görsel"} · {j.provider}
+                      {j.item_ref} · {j.kind === "video_generation" ? "AI video" : "AI görsel"} · {j.provider === "runway" ? "Runway" : j.provider === "video_generation" ? "Google Gemini" : j.provider}
                     </div>
                     <div className="text-muted">{dt(j.created_at)} · tahmini {j.cost_estimated_usd === null ? "bilinmiyor" : `$${Number(j.cost_estimated_usd).toFixed(3)}`}{j.cost_actual_usd !== null ? ` · gerçekleşen $${Number(j.cost_actual_usd).toFixed(3)}` : ""}{j.poll_count ? ` · ${j.poll_count} sorgu` : ""}</div>
                     {j.error && <div className="text-danger">{j.error}</div>}
                     {j.result_asset_id && <Link className="text-brand underline" href={`/medya/${j.result_asset_id}`}>Üretilen dosya</Link>}
                     {(j.status === "failed" || j.status === "unknown") && !j.idempotency_key.includes(":released:") && (
-                      <form action={releaseProviderJobAction} className="mt-1">
-                        <input type="hidden" name="jobId" value={j.id} /><input type="hidden" name="back" value={`/taslaklar/${id}`} />
-                        <SubmitButton className="btn px-2 py-0.5 text-xs" confirm={j.status === "unknown" ? "Önceki gönderimin sonucu bilinmiyor; sağlayıcı ücretlendirmiş olabilir. Yine de yeniden gönderilsin mi? (yeni ücret oluşabilir)" : "Yeniden gönderilsin mi? (yeni ücret oluşabilir)"}>Yeniden gönder</SubmitButton>
-                      </form>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <form action={releaseProviderJobAction}>
+                          <input type="hidden" name="jobId" value={j.id} /><input type="hidden" name="back" value={`/taslaklar/${id}`} />
+                          {j.kind === "video_generation" && <input type="hidden" name="retryProvider" value={j.provider === "runway" ? "runway" : "gemini"} />}
+                          <SubmitButton className="btn px-2 py-0.5 text-xs" confirm={j.status === "unknown" ? "Önceki gönderimin sonucu bilinmiyor; sağlayıcı ücretlendirmiş olabilir. Yine de yeniden gönderilsin mi? (yeni ücret oluşabilir)" : "Yeniden gönderilsin mi? (yeni ücret oluşabilir)"}>Yeniden gönder{j.kind === "video_generation" ? ` (${j.provider === "runway" ? "Runway" : "Gemini"})` : ""}</SubmitButton>
+                        </form>
+                        {j.kind === "video_generation" && (
+                          <form action={releaseProviderJobAction}>
+                            <input type="hidden" name="jobId" value={j.id} /><input type="hidden" name="back" value={`/taslaklar/${id}`} />
+                            <input type="hidden" name="retryProvider" value={j.provider === "runway" ? "gemini" : "runway"} />
+                            <SubmitButton className="btn px-2 py-0.5 text-xs" confirm={`Bu sahne ${j.provider === "runway" ? "Google Gemini" : "Runway"} ile yeniden üretilsin mi? Ayrı ve yeni bir ücret oluşur${j.status === "unknown" ? "; önceki gönderimin ücreti de alınmış olabilir" : ""}.`}>{j.provider === "runway" ? "Gemini" : "Runway"} ile yeniden gönder</SubmitButton>
+                          </form>
+                        )}
+                      </div>
                     )}
                   </li>
                 ))}

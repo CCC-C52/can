@@ -26,7 +26,7 @@ export const STUDIO_MAX_PHOTOS = 3;
 
 export const STUDIO_MODE_LABEL: Record<StudioMode, string> = {
   archive: "Arşiv kurgusu (yalnızca gerçek çekimler)",
-  ai: "AI ile üret (Gemini Omni sahneleri + marka kapanışı)",
+  ai: "AI ile üret (Runway/Gemini AI sahneleri + marka kapanışı)",
   hybrid: "Karma (AI sahneleri + gerçek ürün fotoğrafları + arşiv çekimleri)",
 };
 
@@ -89,7 +89,7 @@ export function buildStudioInstruction(args: {
       ]
     : [
         `Video Stüdyosu talebi: ${args.minSeconds}-${args.maxSeconds} saniyelik premium ${args.platform} reklamı hazırla.`,
-        `Google Gemini Omni ile ${args.aiScenes} adet ${args.sceneSeconds} saniyelik sinematik AI sahnesi üret (generate_new)${args.photos.length ? "; seçilen gerçek ürün fotoğraflarını referans olarak gönder, baskı, renk, logo ve oranlar değişmesin" : ""}.`,
+        `AI video sağlayıcısıyla (birincil Runway, gerekirse Google Gemini) ${args.aiScenes} adet ${args.sceneSeconds} saniyelik sinematik AI sahnesi üret (generate_new)${args.photos.length ? "; seçilen gerçek ürün fotoğraflarını referans olarak gönder, baskı, renk, logo ve oranlar değişmesin" : ""}.`,
         `Sahneleri${args.photos.length ? ", hareketlendirilmiş ürün fotoğraflarını" : ""}${args.mode === "hybrid" && files ? ` ve ${files} arşiv çekimlerinden doğrulanmış sahneleri` : ""} tek bir reklam kurgusunda (compose) birleştir; açılışta kısa bir kanca, sonda CTA ve marka kapanışı olsun.`,
       ];
   return [

@@ -45,8 +45,26 @@ export default async function Settings({ searchParams }: { searchParams: SP }) {
             <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" name="blockUnknownCost" defaultChecked={limits.blockUnknownCost} /> Maliyeti tahmin edilemeyen ücretli işlemleri engelle (bütçe sınırı varken)</label>
             <fieldset className="rounded-lg border border-warning-line bg-warning-soft p-3 sm:col-span-2">
               <legend className="px-1 text-sm font-semibold">Ücretli AI medya üretimi (sahip izni)</legend>
-              <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="paidMediaGeneration" defaultChecked={limits.paidMediaGeneration} className="mt-1" /> <span>AI görsel (OpenAI Images) ve AI video (Google Gemini Omni Video) üretimine izin ver. Kapalıyken bu işler hiç gönderilmez ve &quot;izin bekliyor&quot; olarak kalır. Açıkken her gönderim yukarıdaki bütçe sınırlarına tabidir; sonucu belirsiz kalan gönderimler otomatik tekrarlanmaz.</span></label>
-              <div className="mt-2 max-w-xs">{num("maxVideoGenSeconds", "Proje başına AI video sınırı (saniye)", limits.maxVideoGenSeconds, "Veo bir videoda 4-8 sn üretir.")}</div>
+              <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="paidMediaGeneration" defaultChecked={limits.paidMediaGeneration} className="mt-1" /> <span>AI görsel (OpenAI Images) ve AI video (Runway, Google Gemini Omni Video) üretimine izin ver. Kapalıyken bu işler hiç gönderilmez ve &quot;izin bekliyor&quot; olarak kalır. Açıkken her gönderim yukarıdaki bütçe sınırlarına tabidir; sonucu belirsiz kalan gönderimler otomatik tekrarlanmaz.</span></label>
+              <div className="mt-2 max-w-xs">{num("maxVideoGenSeconds", "Proje başına AI video sınırı (saniye)", limits.maxVideoGenSeconds, "30–60 sn reklam için 30–60 yapın (sahne başına 2–10 sn).")}</div>
+            </fieldset>
+            <fieldset className="rounded-lg border border-line p-3 sm:col-span-2">
+              <legend className="px-1 text-sm font-semibold">AI video sağlayıcısı</legend>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block"><span className="label">Birincil sağlayıcı</span>
+                  <select name="videoPrimaryProvider" defaultValue={limits.videoPrimaryProvider} className="input">
+                    <option value="runway">Runway (ikincil: Gemini)</option>
+                    <option value="gemini">Google Gemini (ikincil: Runway)</option>
+                  </select>
+                  <span className="text-xs text-muted">İkincil yalnızca birincil kullanılamıyorsa ve gönderimden önce seçilir. Gönderilmiş bir sahne başka sağlayıcıya kendiliğinden gitmez.</span>
+                </label>
+                <label className="block"><span className="label">Runway modeli</span>
+                  <select name="runwayModel" defaultValue={limits.runwayModel} className="input"><option value="gen4.5">gen4.5 (metinden ve ürün fotoğrafından, 2–10 sn)</option></select>
+                </label>
+                <label className="block"><span className="label">Runway kredi / saniye (seçili model)</span><input name="runwayCreditsPerSecond" inputMode="decimal" defaultValue={limits.runwayCreditsPerSecond ?? ""} className="input" placeholder="Runway fiyat sayfasından" /></label>
+                <label className="block"><span className="label">Runway USD / kredi</span><input name="runwayUsdPerCredit" inputMode="decimal" defaultValue={limits.runwayUsdPerCredit ?? ""} className="input" placeholder="Runway fiyat sayfasından" /></label>
+              </div>
+              <p className="mt-2 text-xs text-muted">Değerleri Runway geliştirici portalının fiyat sayfasından girin. Boşken Runway ile ücretli üretim yapılmaz (fiyat bilinmeden harcama yok). Gerçekleşen ücret her görevde Runway&apos;in bildirdiği kredi ile hesaplanır ve ayrı &quot;runway&quot; maliyet kaydına yazılır.</p>
             </fieldset>
             <div className="sm:col-span-2"><SubmitButton>Kaydet</SubmitButton></div>
           </form>

@@ -17,6 +17,13 @@ export type Limits = {
   researchMonthlyCredits: number;  // aylık araştırma kredisi üst sınırı
   /** Sağlayıcı başına aylık (UTC takvim ayı) harcama sınırı, USD. Anahtar: servis adı (anthropic, openai_images, firecrawl…). */
   providerMonthlyUsd: Record<string, number>;
+  /** AI video birincil sağlayıcısı; diğeri yalnızca birincil kullanılamıyorsa (gönderimden ÖNCE) seçilir. */
+  videoPrimaryProvider: "runway" | "gemini";
+  /** Runway modeli (yalnızca SDK ile doğrulanan modeller). */
+  runwayModel: "gen4.5";
+  /** Runway fiyatı: sahibin Runway fiyat sayfasından girdiği değerler. Boşken Runway ile ücretli üretim yapılmaz. */
+  runwayCreditsPerSecond: number | null;
+  runwayUsdPerCredit: number | null;
 };
 
 export const DEFAULT_LIMITS: Limits = {
@@ -35,6 +42,10 @@ export const DEFAULT_LIMITS: Limits = {
   webResearch: false,
   researchMonthlyCredits: 100,
   providerMonthlyUsd: {},
+  videoPrimaryProvider: "runway",
+  runwayModel: "gen4.5",
+  runwayCreditsPerSecond: null,
+  runwayUsdPerCredit: null,
 };
 
 export async function getSetting<T>(key: string, fallback: T, db: Queryable = getPool()): Promise<T> {

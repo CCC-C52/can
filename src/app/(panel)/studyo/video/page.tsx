@@ -9,8 +9,8 @@ import { Badge, Empty, Flash, PageHeader, dt } from "@/components/ui";
 import { SubmitButton } from "@/components/client";
 import { VisionStatus } from "../vision-status";
 import { getLimits } from "@/lib/settings";
-import { config } from "@/lib/config";
-import { capabilityReady } from "@/lib/services/connections";
+import { videoProviderStatus } from "@/lib/video/providers";
+import { ProductionApprovals, ProductionProgress, ProviderCards } from "@/components/video-production";
 import { STUDIO_MAX_AI_SCENES, STUDIO_MODE_LABEL } from "@/lib/video/studio";
 import { REFERENCE_MIN_SHORT_SIDE, referenceTooSmall } from "@/lib/video/reference";
 import { FRIBEE_THEMES, THEME_INFO } from "@/lib/drive/themes";
@@ -28,20 +28,16 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
   const limits = await getLimits();
   const music = (await listMedia(brand.id, { kind: "audio" })).filter((m) => ["owned", "licensed"].includes(String(m.rights_status))).slice(0, 40);
   const catalog = await Promise.all(FRIBEE_THEMES.map(async (t) => ({ theme: t, photos: await verifiedCatalogPhotos(brand.id, t, 3) })));
-  const gen = await capabilityReady("video_generation", brand.id);
-  const price = config.gemini.costPerSecondUsd;
-  const geminiChecks = [
-    { ok: !!config.gemini.apiKey, label: "GEMINI_API_KEY tanımlı", fix: "Render ortamına ekleyin" },
-    { ok: gen.ready, label: "Google Gemini Omni Video bağlı", fix: gen.reason ?? "Entegrasyonlar → Test et" },
-    { ok: price !== null, label: price !== null ? `Saniye fiyatı ${price} $` : "GEMINI_VIDEO_COST_PER_SECOND_USD tanımlı", fix: "Tanımlı değilse maliyet bilinmediği için üretim engellenir" },
-    { ok: limits.paidMediaGeneration, label: "Ücretli AI medya üretimi izni", fix: "Ayarlar → Ücretli AI medya üretimi" },
-  ];
-  const geminiReady = geminiChecks.every((c) => c.ok);
+  const providers = await videoProviderStatus(brand.id, limits);
+  const active = providers.find((p) => p.ready) ?? null;
+  const price = active?.usdPerSecond ?? null;
+  const geminiReady = !!active && limits.paidMediaGeneration;
   return (
     <div>
-      <PageHeader title="Video Stüdyosu" subtitle="Gemini Omni AI sahneleri, gerçek ürün fotoğrafları ve arşiv çekimleriyle Reels/TikTok reklamı. Talep Ana Yönetici'ye gider; kalite kontrolü, MP4 doğrulaması ve onayınız olmadan hiçbir şey yayınlanmaz." />
+      <PageHeader title="Video Stüdyosu" subtitle="Runway (birincil) ve Gemini (ikincil) AI sahneleri, gerçek ürün fotoğrafları ve arşiv çekimleriyle 30–60 sn Reels/TikTok reklamı; ffmpeg ile tek MP4. Talep Ana Yönetici'ye gider; kalite kontrolü, MP4 doğrulaması ve onayınız olmadan hiçbir şey yayınlanmaz." />
       <Flash ok={ok} err={err} />
       <VisionStatus />
+      <ProductionApprovals brandId={brand.id} limits={limits} back="/studyo/video" />
       <div className="grid gap-4 lg:grid-cols-3">
         <form action={videoStudioAction} className="card space-y-3 lg:col-span-2">
           <input type="hidden" name="idempotencyKey" value={randomUUID()} />
@@ -108,7 +104,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
               </select>
               <span className="mt-1 block text-xs text-muted">{music.length ? "Video boyunca çalar; giriş/çıkış yumuşatılır, ses seviyesi yayın standardına (-14 LUFS) getirilir." : "Medya arşivine MP3/WAV/M4A yükleyin ve kullanım hakkını “Lisanslı” veya “Marka sahibi” seçin."}</span>
             </label>
-            <label className="flex items-start gap-2 text-sm sm:col-span-2"><input type="checkbox" name="aiOnly" value="1" className="mt-1" /><span>Yalnızca gerçek AI video sahneleri (fotoğraf yakınlaştırma/kaydırma veya slayt yok). Ürün fotoğrafları yalnızca Gemini&apos;ye referans olarak gider.</span></label>
+            <label className="flex items-start gap-2 text-sm sm:col-span-2"><input type="checkbox" name="aiOnly" value="1" className="mt-1" /><span>Yalnızca gerçek AI video sahneleri (fotoğraf yakınlaştırma/kaydırma veya slayt yok). Ürün fotoğrafları yalnızca AI sağlayıcısına referans olarak gider.</span></label>
             <label className="block text-sm"><span className="label">Ek format</span>
               <select name="extraFormat" className="input" defaultValue="16:9"><option value="16:9">Yatay 16:9 sürüm de üret (ek AI maliyeti yok)</option><option value="">Yalnızca dikey 9:16</option></select>
             </label>
@@ -120,17 +116,11 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
             <label className="block text-sm"><span className="label">Geçiş</span><select name="transition" className="input"><option value="cut">Kesme (daha az bellek)</option><option value="fade">Yumuşak geçiş</option></select></label>
           </div>
           <label className="block text-sm"><span className="label">Amaç ve notlar</span><textarea name="goal" rows={3} maxLength={1500} className="input" placeholder="Örn: Yeni sezon lansmanı; ilk 2 saniyede ürün görünsün; ekran yazısı kısa olsun." /></label>
-          <p className="text-xs text-muted">AI sahneleri Google Gemini Omni ile üretilir (720p, 3–10 sn, ücretli). Tahmini maliyet: {price !== null ? `2 × 6 sn ≈ ${(price * 12).toFixed(2)} $ (sahne sayısı × süre × ${price} $)` : "saniye fiyatı tanımlı değil"}; proje sınırı {limits.maxVideoGenSeconds} sn (uzun reklam için Ayarlar&apos;dan artırın). En fazla {STUDIO_MAX_AI_SCENES} AI sahnesi. Kapanışta hareketli logo kartı. Ürün rengi değiştirilmez.</p>
+          <p className="text-xs text-muted">AI sahneleri {active ? `${active.name} (${active.model})` : "hazır bir sağlayıcı"} ile üretilir (sahne 3–10 sn, ücretli). Tahmini maliyet: {price !== null ? `2 × 6 sn ≈ ${(price * 12).toFixed(2)} $ (sahne sayısı × süre × ${price.toFixed(4)} $/sn)` : "fiyat girilmedi — üretim engelli"}; proje sınırı {limits.maxVideoGenSeconds} sn (30–60 sn reklam için Ayarlar&apos;dan artırın). En fazla {STUDIO_MAX_AI_SCENES} AI sahnesi. Kapanışta hareketli logo kartı. Ürün rengi, baskısı ve logosu değiştirilmez.</p>
           <SubmitButton className="btn-primary" disabled={!videos.length && !photos.length && !geminiReady}>Ana Yönetici&apos;ye gönder</SubmitButton>
         </form>
         <div className="space-y-4">
-        <section className="card h-fit">
-          <h2 className="h2 mb-2">Gemini Omni hazırlığı</h2>
-          <ul className="space-y-1 text-sm">
-            {geminiChecks.map((c) => <li key={c.label} className="flex items-start gap-2"><Badge tone={c.ok ? "ok" : "bad"}>{c.ok ? "Tamam" : "Eksik"}</Badge><span>{c.label}{c.ok ? "" : <span className="block text-xs text-muted">{c.fix}</span>}</span></li>)}
-          </ul>
-          {!geminiReady && <p className="mt-2 text-xs text-muted">Eksikler giderilene kadar AI sahneleri &quot;izin/bağlantı bekliyor&quot; olarak kalır; hiçbir ücretli istek gönderilmez.</p>}
-        </section>
+        <ProviderCards statuses={providers} limits={limits} />
         <section className="card h-fit">
           <h2 className="h2 mb-2">Son video planları</h2>
           {outputs.length === 0 ? <p className="muted text-sm">Henüz yok.</p> : (
@@ -139,6 +129,7 @@ export default async function VideoStudio({ searchParams }: { searchParams: SP }
         </section>
         </div>
       </div>
+      <div className="mt-4"><ProductionProgress brandId={brand.id} /></div>
     </div>
   );
 }

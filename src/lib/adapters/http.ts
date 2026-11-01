@@ -3,12 +3,13 @@ import { TransientError, PermanentError } from "@/lib/models/types";
 /** Sonucu belirsiz kalan istek (ör. zaman aşımı yanıt gelmeden). Otomatik tekrar GÖNDERİLMEZ. */
 export class UncertainOutcomeError extends Error {}
 
-export async function fetchJson(url: string, init: RequestInit & { timeoutMs?: number; idempotent?: boolean } = {}): Promise<any> {
+export async function fetchJson(url: string, init: RequestInit & { timeoutMs?: number; idempotent?: boolean; fetchImpl?: typeof fetch } = {}): Promise<any> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 30_000);
+  const { fetchImpl = fetch, timeoutMs: _t, idempotent: _i, ...reqInit } = init;
   let res: Response;
   try {
-    res = await fetch(url, { ...init, signal: ctrl.signal });
+    res = await fetchImpl(url, { ...reqInit, signal: ctrl.signal });
   } catch (err) {
     // Ağ hatası: istek sunucuya ulaşmış olabilir. Yazma işlemlerinde sonuç belirsizdir.
     if (init.idempotent === false) throw new UncertainOutcomeError(`İstek sonucu belirsiz: ${(err as Error).name}`);

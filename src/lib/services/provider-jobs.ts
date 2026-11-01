@@ -87,12 +87,17 @@ export async function listJobs(brandId: string, f: { projectId?: string; taskId?
  * Sahip kararı: başarısız veya sonucu bilinmeyen işi yeniden gönderime açar (yeni ücret oluşabilir).
  * Eski kayıt geçmiş için korunur; yalnızca idempotency anahtarı serbest bırakılır.
  */
-export async function releaseJob(brandId: string, jobId: string, db: Queryable = getPool()) {
+export async function releaseJob(brandId: string, jobId: string, opts: { retryProvider?: "runway" | "gemini" | null } = {}, db: Queryable = getPool()) {
+  // retryProvider: video işinde sahip yeniden gönderimi diğer sağlayıcıyla (ör. Runway başarısız → Gemini) yapmayı seçebilir.
+  // Bu seçim yalnızca sahibin açık kararıdır; sistem başarısız/belirsiz işten sonra kendiliğinden başka sağlayıcıya gitmez.
   return q1<ProviderJob>(
     `UPDATE provider_jobs SET idempotency_key = idempotency_key || ':released:' || id::text || ':' || extract(epoch from now())::bigint,
-       error = COALESCE(error, '') || ' — sahip yeniden gönderime izin verdi', updated_at = now()
-     WHERE id = $1 AND brand_id = $2 AND status IN ('failed','unknown') AND idempotency_key NOT LIKE '%:released:%' RETURNING *`,
-    [jobId, brandId],
+       error = COALESCE(error, '') || ' — sahip yeniden gönderime izin verdi' || CASE WHEN $3::text IS NULL THEN '' ELSE ' (' || $3 || ')' END,
+       response = CASE WHEN $3::text IS NULL THEN response ELSE COALESCE(response, '{}'::jsonb) || jsonb_build_object('owner_retry_provider', $3::text) END,
+       updated_at = now()
+     WHERE id = $1 AND brand_id = $2 AND status IN ('failed','unknown') AND idempotency_key NOT LIKE '%:released:%'
+       AND ($3::text IS NULL OR kind = 'video_generation') RETURNING *`,
+    [jobId, brandId, opts.retryProvider ?? null],
     db,
   );
 }

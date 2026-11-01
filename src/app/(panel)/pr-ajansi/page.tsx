@@ -9,6 +9,17 @@ import { Icon, type IconName } from "@/components/icons";
 import { SPECIALISTS, specialistReadiness } from "@/lib/pr-agency/specialists";
 import { listIntegrations } from "@/lib/integrations/service";
 import { agentName } from "@/lib/agents/registry";
+import { randomUUID } from "node:crypto";
+import { q } from "@/lib/db/pool";
+import { getLimits } from "@/lib/settings";
+import { prVideoCampaignAction } from "@/app/actions";
+import { SubmitButton } from "@/components/client";
+import { ProductionApprovals } from "@/components/video-production";
+import { videoProviderStatus } from "@/lib/video/providers";
+import { PRODUCTION_DIRECTIVE } from "@/lib/video/production";
+import { FRIBEE_THEMES, THEME_INFO } from "@/lib/drive/themes";
+import { STUDIO_MAX_AI_SCENES } from "@/lib/video/studio";
+import { PROJECT_STATUS_LABEL } from "@/lib/labels";
 
 const HUB: { href: string; title: string; text: string; icon: IconName }[] = [
   { href: "/pr-ajansi/strateji", title: "Marka Stratejisi 2026–2034", text: "Vizyon, aşamalar, yıllık hedefler, OKR'ler", icon: "strategy" },
@@ -90,6 +101,7 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
               </li>
             ))}
           </ul>
+          <VideoCampaigns brandId={brand.id} />
           <section className="mb-6" aria-labelledby="team-title">
             <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
               <div><div className="eyebrow mb-1">Uzman kadrosu</div><h2 id="team-title" className="h2">AI PR Direktörü ve ekibi</h2></div>
@@ -265,5 +277,56 @@ export default async function PrAgencyPage({ searchParams }: { searchParams: SP 
       </div>
       </>)}
     </div>
+  );
+}
+
+/** Video kampanyası: konsept → kreatif brif → sahne/stil önerisi → maliyet tahmini → sahip üretim onayı → Video Stüdyosu. */
+async function VideoCampaigns({ brandId }: { brandId: string }) {
+  const limits = await getLimits();
+  const providers = await videoProviderStatus(brandId, limits);
+  const active = providers.find((p) => p.ready) ?? null;
+  const campaigns = await q<{ id: string; title: string; status: string; created_at: string; render_status: string | null; ad: string | null }>(
+    `SELECT p.id, p.title, p.status, p.created_at,
+       (SELECT t.status FROM tasks t WHERE t.project_id = p.id AND t.kind = 'render' AND t.agent = 'video' ORDER BY t.created_at DESC LIMIT 1) AS render_status,
+       (SELECT m.id::text FROM media_assets m WHERE m.project_id = p.id AND m.kind = 'video' AND m.generation_method = 'ffmpeg_edit' ORDER BY m.created_at DESC LIMIT 1) AS ad
+     FROM projects p WHERE p.brand_id = $1 AND position($2 in p.instruction) > 0 ORDER BY p.created_at DESC LIMIT 6`,
+    [brandId, PRODUCTION_DIRECTIVE],
+  );
+  return (
+    <section className="mb-6" aria-labelledby="video-campaign-title">
+      <div className="mb-3"><div className="eyebrow mb-1">Kreatif prodüksiyon</div><h2 id="video-campaign-title" className="h2">Video kampanyası (30–60 sn reklam)</h2></div>
+      <ProductionApprovals brandId={brandId} limits={limits} back="/pr-ajansi" />
+      <div className="grid gap-4 lg:grid-cols-3">
+        <form action={prVideoCampaignAction} className="card space-y-3 lg:col-span-2">
+          <input type="hidden" name="idempotencyKey" value={randomUUID()} />
+          <p className="text-xs text-muted">Ajans konsepti, kreatif brifi ve sahne/stil önerilerini hazırlar; video planı kalite kontrolünden geçer ve sahne başına maliyet tahmini çıkar. <strong>Ücretli AI video üretimi yalnızca “Üretimi onayla” dediğinizde başlar</strong>; yayın her zaman ayrı onayınızla olur.</p>
+          <label className="block text-sm"><span className="label">Kampanya amacı ve fikir</span><textarea name="goal" rows={3} maxLength={1500} required minLength={10} className="input" placeholder="Örn: Rebirth lansmanı; karanlıktan ışığa geçiş, dört koleksiyonun hikâyesi, güçlü kapanış." /></label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm"><span className="label">Koleksiyon (doğrulanmış katalog fotoğrafları)</span>
+              <select name="collection" className="input" defaultValue=""><option value="">Seçilmedi (arşivden uygun ürün fotoğrafları)</option>{FRIBEE_THEMES.map((t) => <option key={t} value={t}>{THEME_INFO[t].label} ({THEME_INFO[t].garmentLabel})</option>)}</select>
+            </label>
+            <label className="block text-sm"><span className="label">Reklam süresi</span><select name="length" className="input" defaultValue="30-45"><option value="30-45">30–45 sn</option><option value="45-60">45–60 sn</option></select></label>
+            <label className="block text-sm"><span className="label">AI sahne sayısı (2–{STUDIO_MAX_AI_SCENES})</span><input name="aiScenes" type="number" min={2} max={STUDIO_MAX_AI_SCENES} defaultValue={5} className="input" /></label>
+            <label className="block text-sm"><span className="label">AI sahne süresi (sn, 3–10)</span><input name="sceneSeconds" type="number" min={3} max={10} defaultValue={6} className="input" /></label>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" name="extraFormat" value="16:9" defaultChecked /> Aynı sahnelerden yatay 16:9 sürüm de (ek AI maliyeti yok)</label>
+          </div>
+          <p className="text-xs text-muted">Sağlayıcı: {active ? `${active.name} (${active.model}${active.usdPerSecond !== null ? `, ≈ ${(active.usdPerSecond * 30).toFixed(2)} $ / 30 sn AI video` : ""})` : "hazır sağlayıcı yok — plan hazırlanır, üretim onayı verilemez"}. Proje AI video sınırı: {limits.maxVideoGenSeconds} sn{limits.maxVideoGenSeconds < 30 ? " (30–60 sn reklam için Ayarlar'dan artırın)" : ""}.</p>
+          <SubmitButton className="btn-primary">Kampanya önerisi hazırla</SubmitButton>
+        </form>
+        <section className="card h-fit" aria-labelledby="campaigns-h">
+          <h3 id="campaigns-h" className="h2 mb-2">Kampanyalar ve üretim durumu</h3>
+          {campaigns.length === 0 ? <p className="muted text-sm">Henüz video kampanyası yok.</p> : (
+            <ul className="space-y-2 text-sm">
+              {campaigns.map((c) => (
+                <li key={c.id}>
+                  <Link href={`/projeler/${c.id}`} className="text-brand">{c.title}</Link>
+                  <div className="text-xs text-muted">{dt(c.created_at)} · {PROJECT_STATUS_LABEL[c.status] ?? c.status} · video: {c.render_status === "waiting_connection" ? "onay/bağlantı bekliyor" : c.render_status === "completed" ? "MP4 hazır" : c.render_status === "failed" ? "başarısız" : c.render_status ? "üretiliyor" : "plan hazırlanıyor"}{c.ad ? <> · <Link href={`/medya/${c.ad}`} className="text-brand">reklamı izle</Link></> : null}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </section>
   );
 }

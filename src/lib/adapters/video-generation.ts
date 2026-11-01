@@ -34,10 +34,11 @@ export type VideoGenRequest = {
   /** Eski alan: tek ürün fotoğrafı (images ile birleştirilir). */
   image?: VideoGenImage;
 };
+/** costUsd: sağlayıcının bildirdiği gerçekleşen ücret (Runway: cost.credits × kredi fiyatı); bildirmeyen sağlayıcıda yok. */
 export type VideoGenPoll =
-  | { state: "running" }
-  | { state: "succeeded"; videoUri: string }
-  | { state: "failed"; error: string; filtered?: boolean };
+  | { state: "running"; progress?: number }
+  | { state: "succeeded"; videoUri: string; costUsd?: number | null; credits?: number }
+  | { state: "failed"; error: string; filtered?: boolean; costUsd?: number | null; credits?: number };
 
 export interface VideoGenerator {
   readonly service: string;

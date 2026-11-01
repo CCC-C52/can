@@ -72,6 +72,11 @@ export const config = {
       return v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
     },
   },
+  runway: {
+    // Runway API (birincil AI video). Anahtar tercihen Entegrasyon Merkezi'nde şifreli saklanır (marka bazlı, test edilmiş);
+    // yoksa sunucu ortamındaki RUNWAYML_API_SECRET (resmî SDK'nın değişken adı) kullanılır. Fiyat Ayarlar'dan girilir.
+    get apiKey() { return str("RUNWAYML_API_SECRET"); },
+  },
   firecrawl: {
     // Web araştırması (ücretli). Anahtar yalnızca sunucu ortamında tutulur.
     get apiKey() { return str("FIRECRAWL_API_KEY"); },

@@ -36,7 +36,7 @@ You turn the operator's instruction into goals and a small dependency graph of t
 - marketing: audience, positioning, campaign strategy, content themes, ad ideas
 - shopify: product descriptions, collections, store pages, bundles (proposals with current vs proposed values)
 - design: visual briefs for posts, covers and ad visuals
-- video: scripts, shot selection from the media archive, edit plan, subtitles, AI video scenes (Google Gemini Omni, from text or real product photos) and assembled ads that combine AI scenes, product photos and archive footage. The SYSTEM analyses the real video frames and scenes automatically before a video task runs: never create a separate task to "analyse" a video or select scenes. Plan ONE video task per video deliverable and repeat the exact file name(s) the operator mentioned in its instruction.
+- video: scripts, shot selection from the media archive, edit plan, subtitles, AI video scenes (Runway primary, Google Gemini secondary; from text or a real product photo) and assembled ads that combine AI scenes, product photos and archive footage. The SYSTEM analyses the real video frames and scenes automatically before a video task runs: never create a separate task to "analyse" a video or select scenes. Plan ONE video task per video deliverable and repeat the exact file name(s) the operator mentioned in its instruction.
 - social: platform captions, content calendar, publishing packages
 - quality: analysis tasks (performance/cost/brand audits). Every output is automatically quality-checked; do not add QA tasks for that.
 - pr: press/creator story angles per collection, US calendar hooks, pitch and press-release drafts, reputation risks (drafts only; nothing is sent)
@@ -73,7 +73,7 @@ Video editing rules (mode "edit_existing"):
 - Describe visuals only as reported by the analysis (scene_summaries, colors, products_seen); if the analysis has no visual description, say so instead of guessing.
 - on_screen_text must be short, in the brand content language, and contain no unverified product claims.
 - If no analysed video fits, return no edit_existing video and explain in "unknowns".
-AI scene rules (mode "generate_new", Google Gemini Omni video, 720p, 3-10 s each):
+AI scene rules (mode "generate_new", AI video provider — Runway primary, Google Gemini secondary — 720p, 3-10 s each):
 - One generate_new item = one AI scene. Write a cinematic generation_prompt in English: subject, setting, light, camera movement, mood, pacing; never on-screen text or logos in the prompt.
 - When real product photos exist, put up to 3 of their ids in selected_asset_ids: they are sent as references so the real product's print, colours, logo and cut are preserved. Never describe a different design.
 - AI scenes are paid: the system only submits them when the owner enabled paid generation and the budget allows.

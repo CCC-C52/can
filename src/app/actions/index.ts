@@ -11,6 +11,7 @@ import { config } from "@/lib/config";
 import {
   addBrandFact, addProductFact, addVariant, createBrand, createProduct, deleteBrandFact, deleteProductFact, deleteVariant, getBrand, parseBrandColors, updateBrand, updateProduct,
 } from "@/lib/services/brands";
+import { approveProduction, PRODUCTION_DIRECTIVE } from "@/lib/video/production";
 import { submitInstruction, cancelTask, cancelProject, retryTask, retryProjectFailures, requestRegeneration, setPaused, retryWaitingConnections, getTask } from "@/lib/orchestrator/projects";
 import { decide, editOutput, revokeApproval } from "@/lib/services/outputs";
 import { executeExternalAction, reconcileAction, type ActionType } from "@/lib/services/gateway";
@@ -235,6 +236,15 @@ export async function retryProjectAction(fd: FormData) {
   });
 }
 
+/** Sahip ücretli video üretimini onaylar (PR Ajansı kampanyası; tahmini maliyet kaydedilir). */
+export async function approveProductionAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act(str(fd, "back") || "/studyo/video", async () => {
+    const a = await approveProduction(brand.id, str(fd, "taskId"), "user");
+    return `Üretim onaylandı (tahmini $${(a.estimate_usd ?? 0).toFixed(2)}); render kuyruğa alındı.`;
+  });
+}
+
 export async function cancelProjectAction(fd: FormData) {
   const brand = await requireBrand();
   await act(str(fd, "back") || "/gorevler", async () => {
@@ -348,9 +358,11 @@ export async function reconcileAction_(fd: FormData) {
 export async function releaseProviderJobAction(fd: FormData) {
   const brand = await requireBrand();
   await act(str(fd, "back") || "/projeler", async () => {
-    const job = await releaseJob(brand.id, str(fd, "jobId"));
+    const p = str(fd, "retryProvider");
+    const retryProvider = p === "runway" || p === "gemini" ? p : null;
+    const job = await releaseJob(brand.id, str(fd, "jobId"), { retryProvider });
     if (!job) throw new Error("İş bulunamadı veya yeniden gönderilebilir durumda değil.");
-    await audit({ brandId: brand.id, projectId: job.project_id, taskId: job.task_id, actor: "user", action: "provider_job.release", message: `AI üretim işi yeniden gönderime açıldı (${job.item_ref}, önceki durum: ${job.status}). Yeni ücret oluşabilir.` });
+    await audit({ brandId: brand.id, projectId: job.project_id, taskId: job.task_id, actor: "user", action: "provider_job.release", message: `AI üretim işi yeniden gönderime açıldı (${job.item_ref}, önceki durum: ${job.status}${retryProvider ? `, sağlayıcı: ${retryProvider === "runway" ? "Runway" : "Gemini"}` : ""}). Yeni ücret oluşabilir.` });
     if (job.task_id) {
       const t = await getTask(brand.id, job.task_id);
       if (t && ["failed", "cancelled", "waiting_connection"].includes(t.status)) await retryTask(brand.id, t.id);
@@ -692,6 +704,10 @@ export async function saveLimitsAction(fd: FormData) {
       blockUnknownCost: str(fd, "blockUnknownCost") === "on",
       paidMediaGeneration: str(fd, "paidMediaGeneration") === "on",
       maxVideoGenSeconds: n("maxVideoGenSeconds", 0, 120),
+      videoPrimaryProvider: str(fd, "videoPrimaryProvider") === "gemini" ? "gemini" : "runway",
+      runwayModel: "gen4.5",
+      runwayCreditsPerSecond: money("runwayCreditsPerSecond"),
+      runwayUsdPerCredit: money("runwayUsdPerCredit"),
     };
     await setSetting("limits", next);
     await audit({ actor: "user", action: "settings.limits", message: "Sınırlar güncellendi", data: next });
@@ -851,7 +867,7 @@ export async function videoStudioAction(fd: FormData) {
     const aiScenes = Math.round(Number(str(fd, "aiScenes")) || 2), sceneSeconds = Math.round(Number(str(fd, "sceneSeconds")) || 6);
     if (mode !== "archive") {
       if (aiScenes < 1 || aiScenes > STUDIO_MAX_AI_SCENES) throw new Error(`AI sahne sayısı 1–${STUDIO_MAX_AI_SCENES} olmalı.`);
-      if (sceneSeconds < 3 || sceneSeconds > 10) throw new Error("AI sahne süresi 3–10 sn olmalı (Gemini Omni sınırı).");
+      if (sceneSeconds < 3 || sceneSeconds > 10) throw new Error("AI sahne süresi 3–10 sn olmalı (sağlayıcı sınırı).");
       const limits = await getLimits();
       if (aiScenes * sceneSeconds > limits.maxVideoGenSeconds) {
         throw new Error(`Toplam AI süresi ${aiScenes * sceneSeconds} sn; proje sınırı ${limits.maxVideoGenSeconds} sn. Sahne sayısını/süresini azaltın veya Ayarlar'dan sınırı artırın.`);
@@ -864,7 +880,50 @@ export async function videoStudioAction(fd: FormData) {
       aiScenes, sceneSeconds, goal: str(fd, "goal").trim().slice(0, 1500), collection, musicId, extraFormat, aiOnly,
     });
     const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
-    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : mode === "archive" ? "Video talebi Ana Yönetici'ye gönderildi." : "AI reklam talebi Ana Yönetici'ye gönderildi (Gemini Omni sahneleri ücretli; izin ve bütçe kontrolünden geçer).", to: `/projeler/${r.project.id}` };
+    return { ok: r.duplicate ? "Bu talep zaten gönderildi." : mode === "archive" ? "Video talebi Ana Yönetici'ye gönderildi." : "AI reklam talebi Ana Yönetici'ye gönderildi (AI sahneleri Runway/Gemini ile ücretli; izin ve bütçe kontrolünden geçer).", to: `/projeler/${r.project.id}` };
+  });
+}
+
+/**
+ * PR Ajansı video kampanyası: konsept + kreatif brif + sahne önerileri ve maliyet tahmini hazırlanır; ücretli video
+ * üretimi sahibin "Üretimi onayla" kararına kadar başlamaz (talimattaki "Üretim onayı: gerekli" satırı).
+ */
+export async function prVideoCampaignAction(fd: FormData) {
+  const brand = await requireBrand();
+  await act("/pr-ajansi", async () => {
+    const rl = rateLimit(`studio:${brand.id}`, 10, 60_000);
+    if (!rl.ok) throw new Error(`Çok fazla istek; ${rl.retryAfterS} sn sonra tekrar deneyin.`);
+    const goal = str(fd, "goal").trim().slice(0, 1500);
+    if (goal.length < 10) throw new Error("Kampanya amacını birkaç cümleyle yazın.");
+    const collection = isTheme(str(fd, "collection")) ? (str(fd, "collection") as FribeeTheme) : null;
+    let photos: Awaited<ReturnType<typeof brandAssets>> = [];
+    if (collection) {
+      const picked = await verifiedCatalogPhotos(brand.id, collection, STUDIO_MAX_PHOTOS);
+      if (!picked.length) throw new Error(`${THEME_INFO[collection].label} için doğrulanmış ve orijinali arşive alınmış katalog fotoğrafı yok. Drive Arşivi'nde doğrulayın.`);
+      photos = await brandAssets(brand.id, picked.map((p) => p.media_asset_id), "photo");
+    }
+    const [min, max] = str(fd, "length") === "45-60" ? [45, 60] : [30, 45];
+    const aiScenes = Math.round(Number(str(fd, "aiScenes")) || 5), sceneSeconds = Math.round(Number(str(fd, "sceneSeconds")) || 6);
+    if (aiScenes < 2 || aiScenes > STUDIO_MAX_AI_SCENES) throw new Error(`AI sahne sayısı 2–${STUDIO_MAX_AI_SCENES} olmalı.`);
+    if (sceneSeconds < 3 || sceneSeconds > 10) throw new Error("AI sahne süresi 3–10 sn olmalı.");
+    const limits = await getLimits();
+    if (aiScenes * sceneSeconds > limits.maxVideoGenSeconds) throw new Error(`Toplam AI süresi ${aiScenes * sceneSeconds} sn; proje sınırı ${limits.maxVideoGenSeconds} sn. Ayarlar'dan "Proje başına AI video sınırı"nı artırın.`);
+    const studio = buildStudioInstruction({
+      mode: "hybrid", videos: [], photos, minSeconds: min, maxSeconds: max, platform: "Instagram Reels (9:16)", transition: "fade",
+      aiScenes, sceneSeconds, goal, collection, musicId: null, extraFormat: str(fd, "extraFormat") === "16:9" ? "16:9" : null, aiOnly: false,
+    });
+    const instruction = [
+      `PR Ajansı video kampanyası önerisi: ${goal.split(/\r?\n/)[0].slice(0, 120)}`,
+      "Bu projede yalnızca şu görevler olsun:",
+      "1. Pazarlama: kampanya konsepti ve kreatif brif — ana fikir, hedef kitle, 3 mesaj, ton ve görsel dil; video için önerilen sahneler, stiller ve ürün odaklı çekimler. Arşiv bilgilerini [S#] ile kaynağına bağla.",
+      "2. Video (tek video görevi): aşağıdaki stüdyo talebine göre sinematik streetwear reklamı; sinematik geçişler, ürün yalnızca doğrulanmış gerçek fotoğraflardan.",
+      "Kurallar: Fiyat, tarih, indirim, bağış veya doğrulanmamış iddia yazma. Hiçbir şey onayım olmadan yayınlanmaz. Ücretli video üretimi yalnızca üretim onayımdan sonra başlar.",
+      "",
+      studio,
+      PRODUCTION_DIRECTIVE,
+    ].join("\n");
+    const r = await submitInstruction({ brandId: brand.id, instruction, idempotencyKey: str(fd, "idempotencyKey") });
+    return { ok: r.duplicate ? "Bu kampanya zaten gönderildi." : "Kampanya önerisi hazırlanıyor. Plan ve maliyet tahmini hazır olunca “Üretimi onayla” ile ücretli üretimi başlatabilirsiniz.", to: `/projeler/${r.project.id}` };
   });
 }
 

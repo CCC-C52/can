@@ -13,7 +13,10 @@ import { EDIT_SIZES } from "@/lib/adapters/video-edit";
 import { log } from "@/lib/log";
 import { latestAnalysis } from "@/lib/media-analysis";
 import { fitReference, formatToSize, getImageGenerator, validateGeneratedImage, type ReferenceImage } from "@/lib/adapters/images";
-import { getVideoGenerator, MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode } from "@/lib/adapters/video-generation";
+import { MAX_REFERENCE_IMAGES, omniAspect, omniDuration, videoGenMode, type VideoGenerator } from "@/lib/adapters/video-generation";
+import { runwayDuration } from "@/lib/adapters/runway-video";
+import { VIDEO_PROVIDER_NAME, providerOfService, selectVideoProvider, videoGeneratorForService, type VideoProviderId } from "@/lib/video/providers";
+import { productionGate } from "@/lib/video/production";
 import { UncertainOutcomeError } from "@/lib/adapters/http";
 import { assertTool } from "@/lib/agents/registry";
 import { PermanentError, TransientError } from "@/lib/models/types";
@@ -274,6 +277,9 @@ async function providerError(ctx: RenderCtx, job: ProviderJob, service: string, 
 export async function renderVideo(ctx: RenderCtx): Promise<RenderOutcome> {
   assertTool("video", "media.read");
   const o: RenderOutcome = { produced: [], waiting: [], inProgress: [], failed: [], uncertain: [], notes: [], artifacts: [] };
+  // PR Ajansı kampanyası: sahip üretimi onaylamadan hiçbir ücretli istek gönderilmez ve kurgu yapılmaz
+  const gate = productionGate(ctx.task, ctx.versionId);
+  if (gate) { o.waiting.push(gate); return o; }
   // Önce AI sahneleri (gönder/sorgula/indir), sonra arşiv kurguları, en son bunları birleştiren reklam (compose)
   const rank = (v: any) => (v.mode === "generate_new" ? 0 : v.mode === "compose" ? 2 : 1);
   for (const vid of [...(ctx.content.videos ?? [])].sort((a, b) => rank(a) - rank(b))) {
@@ -296,6 +302,11 @@ async function composeVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   const { task } = ctx;
   const parts: any[] = Array.isArray(vid.parts) ? vid.parts : [];
   if (!parts.length) { o.failed.push(`${vid.id}: birleştirilecek parça yok`); return; }
+  // Yalnızca fotoğraf/logo parçalarından oluşan slayt gösterisi video sayılmaz: en az bir gerçek hareketli sahne gerekir
+  if (!parts.some((p) => p?.kind === "ai_scene" || p?.kind === "archive_clip")) {
+    o.failed.push(`${vid.id}: reklamda gerçek hareketli sahne yok (AI sahnesi veya arşiv çekimi); fotoğraf slayt gösterisi video olarak teslim edilmez`);
+    return;
+  }
   const ready = await capabilityReady("video_edit", task.brand_id);
   if (!ready.ready) { o.waiting.push(`${vid.id}: video düzenleme — ${ready.reason}`); return; }
   // AI sahnelerinin durumu (gönderim generateVideo'da yapılır; burada yalnızca sonuç okunur)
@@ -535,36 +546,50 @@ async function editVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   }
 }
 
+/** Sahibin yeniden gönderimde seçtiği sağlayıcı (serbest bırakılan önceki işin kaydında). */
+async function ownerRetryProvider(key: string): Promise<VideoProviderId | null> {
+  const r = await q1<{ p: string | null }>(
+    `SELECT response->>'owner_retry_provider' AS p FROM provider_jobs WHERE starts_with(idempotency_key, $1 || ':released:') ORDER BY updated_at DESC LIMIT 1`, [key]);
+  return r?.p === "runway" || r?.p === "gemini" ? r.p : null;
+}
+
 async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
   const { task } = ctx;
   const key = `vid:${ctx.versionId}:${vid.id}`;
-  const gen = getVideoGenerator();
   const existing = await q1<ProviderJob>(`SELECT * FROM provider_jobs WHERE idempotency_key = $1`, [key]);
   if (!existing) {
-    const blocked = await paidAllowed(ctx, "video_generation");
-    if (blocked || !gen) {
-      log("warn", "gemini.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: blocked ?? "sağlayıcı yapılandırılmamış" });
-      o.waiting.push(`${vid.id}: AI video üretimi — ${blocked ?? "sağlayıcı yapılandırılmamış"}`);
+    if (!ctx.limits.paidMediaGeneration) {
+      log("warn", "ai_video.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: "paid_generation_off" });
+      o.waiting.push(`${vid.id}: AI video üretimi — Ücretli AI medya üretimi Ayarlar'da kapalı (sahip izni gerekli)`);
       return;
     }
+    // Sağlayıcı gönderimden ÖNCE seçilir (birincil Runway; kullanılamıyorsa Gemini). Gönderilmiş sahne başka sağlayıcıya otomatik gitmez.
+    const pick = await selectVideoProvider(task.brand_id, ctx.limits, { seconds: omniDuration(vid.duration_s), ownerChoice: await ownerRetryProvider(key) });
+    if (!pick.ok) {
+      log("warn", "ai_video.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: pick.reason });
+      o.waiting.push(`${vid.id}: AI video üretimi — ${pick.reason}`);
+      return;
+    }
+    const gen = pick.status.gen!;
+    const provider = pick.status.id;
     assertTool("video", "video.generate");
-    const seconds = omniDuration(vid.duration_s);
+    const seconds = provider === "runway" ? runwayDuration(vid.duration_s) : omniDuration(vid.duration_s);
     const used = await q1<{ s: number }>(
       `SELECT COALESCE(SUM((request->'parameters'->>'durationSeconds')::numeric), 0)::float AS s FROM provider_jobs
        WHERE project_id = $1 AND kind = 'video_generation' AND status NOT IN ('failed','cancelled')`,
       [task.project_id],
     );
     if ((used?.s ?? 0) + seconds > ctx.limits.maxVideoGenSeconds) {
-      log("warn", "gemini.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: "project_ai_seconds_limit", usedSeconds: used?.s ?? 0, seconds, limit: ctx.limits.maxVideoGenSeconds });
+      log("warn", "ai_video.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: "project_ai_seconds_limit", usedSeconds: used?.s ?? 0, seconds, limit: ctx.limits.maxVideoGenSeconds });
       o.waiting.push(`${vid.id}: proje AI video sınırı (${ctx.limits.maxVideoGenSeconds} sn) aşılacak; Ayarlar'dan sahip artırabilir`);
       return;
     }
-    // Gerçek ürün fotoğrafları referans olarak gönderilir (1: ilk kare, 2-3: ürün referansı; baskı/renk/logo korunur).
+    // Gerçek ürün fotoğrafları referans olarak gönderilir (Gemini: 1: ilk kare, 2-3: ürün referansı; Runway: ilk kare).
     // Orijinal netlik: sınıra sığan dosya aynen gider; düşük çözünürlüklü fotoğraf referans olamaz (ücretli istek yapılmaz).
     const images: { base64: string; mimeType: string }[] = [];
     const fidelity: (ReferenceFidelity & { asset_id: string })[] = [];
     for (const id of vid.selected_asset_ids ?? []) {
-      if (images.length >= MAX_REFERENCE_IMAGES) break;
+      if (images.length >= (provider === "runway" ? 1 : MAX_REFERENCE_IMAGES)) break;
       const m = await usableMedia(task.brand_id, id);
       if (!m || m.kind !== "photo" || !RASTER.has(m.mime_type)) continue;
       try {
@@ -579,65 +604,79 @@ async function generateVideo(ctx: RenderCtx, vid: any, o: RenderOutcome) {
     const est = gen.estimateCostUsd(seconds);
     const prompt = clean(vid.generation_prompt);
     const { job, created } = await claimJob({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, provider: gen.service, kind: "video_generation", itemRef: vid.id, key, estimateUsd: est,
-      request: { model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, resolution: "720p" }, reference_image: images.length > 0, reference_images: images.length, reference_fidelity: fidelity } });
+      request: { provider, provider_choice: pick.choice, model: gen.model, mode: videoGenMode(images.length), prompt, parameters: { aspectRatio: omniAspect(vid.format), durationSeconds: seconds, ...(provider === "gemini" ? { resolution: "720p" } : {}) }, reference_image: images.length > 0, reference_images: images.length, reference_fidelity: fidelity } });
     if (!created) { reportExisting(job, vid.id, o); return; }
     try {
       await assertBudget({ taskId: task.id, estimateUsd: est, service: gen.service, excludeJobId: job.id });
     } catch (err) {
-      log("warn", "gemini.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, reason: "budget", estimateUsd: est, error: err });
+      log("warn", "ai_video.not_submitted", { taskId: task.id, projectId: task.project_id, ref: vid.id, provider, reason: "budget", estimateUsd: est, error: err });
       await discardJob(job.id);
       throw err;
     }
-    await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "estimated", amountUsd: est, units: { seconds }, providerJobId: job.id });
+    await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "estimated", amountUsd: est, units: { seconds, provider }, providerJobId: job.id });
     try {
-      log("info", "gemini.submit", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, model: gen.model, seconds, aspect: omniAspect(vid.format), references: images.length, estimateUsd: est });
+      log("info", "ai_video.submit", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, provider, model: gen.model, seconds, aspect: omniAspect(vid.format), references: images.length, estimateUsd: est, fallbackFrom: pick.choice.fallback_from?.id });
       const sub = await gen.submit({ prompt, durationS: seconds, aspectRatio: omniAspect(vid.format), images });
-      await updateJob(job.id, { status: "submitted", external_id: sub.externalId, next_poll_ms: VIDEO_POLL_MS });
-      log("info", "gemini.submitted", { taskId: task.id, ref: vid.id, jobId: job.id, externalId: sub.externalId });
-      o.inProgress.push(`${vid.id}: AI video sağlayıcıya gönderildi`);
+      // Sağlayıcının kendi üst sınır tahmini (Runway: estimatedCost.credits) bizimkinden yüksekse taahhüt edilen harcama büyütülür
+      const providerEst = Number(sub.request?.provider_estimate_usd);
+      await updateJob(job.id, { status: "submitted", external_id: sub.externalId, next_poll_ms: VIDEO_POLL_MS, response: { submit: sub.request } });
+      if (Number.isFinite(providerEst) && (est === null || providerEst > est)) {
+        await q1(`UPDATE provider_jobs SET cost_estimated_usd = $2 WHERE id = $1`, [job.id, providerEst]);
+        log("warn", "ai_video.provider_estimate_higher", { jobId: job.id, provider, configuredUsd: est, providerUsd: providerEst });
+      }
+      log("info", "ai_video.submitted", { taskId: task.id, ref: vid.id, jobId: job.id, provider, externalId: sub.externalId });
+      o.inProgress.push(`${vid.id}: AI video ${VIDEO_PROVIDER_NAME[provider]} sağlayıcısına gönderildi`);
     } catch (err) {
-      log("error", "gemini.submit_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: err });
+      log("error", "ai_video.submit_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, provider, error: err });
       await providerError(ctx, job, gen.service, vid.id, err, o);
     }
     return;
   }
-  // Mevcut iş: uzlaştırma (yeniden başlatma, tekrar teslim veya sorgu turu)
+  // Mevcut iş: uzlaştırma (yeniden başlatma, tekrar teslim veya sorgu turu) — işi gönderen sağlayıcıyla
   if (!["submitted", "running", "downloading"].includes(existing.status)) { reportExisting(existing, vid.id, o); return; }
-  if (!gen) { o.waiting.push(`${vid.id}: AI video işi sürüyor ancak sağlayıcı yapılandırması kaldırılmış`); return; }
+  const gen = await videoGeneratorForService(existing.provider, task.brand_id, ctx.limits);
+  if (!gen) { o.waiting.push(`${vid.id}: AI video işi ${VIDEO_PROVIDER_NAME[providerOfService(existing.provider) ?? "gemini"]} sağlayıcısında sürüyor ancak sağlayıcı yapılandırması kaldırılmış`); return; }
   await pollVideo(ctx, vid, existing, gen, o);
 }
 
-async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNullable<ReturnType<typeof getVideoGenerator>>, o: RenderOutcome) {
+async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: VideoGenerator, o: RenderOutcome) {
   const { task } = ctx;
   let uri: string | undefined = job.response?.video_uri;
+  // Sağlayıcının bildirdiği gerçekleşen ücret (Runway); indirme tekrarında kayıttan okunur
+  let providerCost: number | null | undefined = job.response?.provider_cost_usd;
+  const provider = providerOfService(job.provider) ?? "gemini";
   if (job.status !== "downloading") {
     let p;
     try {
       p = await gen.poll(job.external_id!);
     } catch (err) {
-      log(err instanceof TransientError ? "warn" : "error", "gemini.poll_failed", { taskId: task.id, ref: vid.id, jobId: job.id, externalId: job.external_id, error: err });
+      log(err instanceof TransientError ? "warn" : "error", "ai_video.poll_failed", { taskId: task.id, ref: vid.id, jobId: job.id, provider, externalId: job.external_id, error: err });
       if (err instanceof TransientError) { await updateJob(job.id, { poll_inc: true, next_poll_ms: VIDEO_POLL_MS }); o.inProgress.push(`${vid.id}: durum sorgusu geçici hata verdi, tekrar denenecek`); return; }
       throw err;
     }
-    log("info", "gemini.poll", { taskId: task.id, ref: vid.id, jobId: job.id, state: p.state, poll: job.poll_count + 1 });
+    log("info", "ai_video.poll", { taskId: task.id, ref: vid.id, jobId: job.id, provider, state: p.state, poll: job.poll_count + 1 });
     if (p.state === "running") {
       if (job.poll_count + 1 >= VIDEO_MAX_POLLS) {
         await updateJob(job.id, { status: "failed", poll_inc: true, error: "Sağlayıcı işi süre sınırında tamamlanmadı." });
         o.failed.push(`${vid.id}: AI video süre sınırında tamamlanmadı`);
         return;
       }
-      await updateJob(job.id, { status: "running", poll_inc: true, next_poll_ms: VIDEO_POLL_MS });
-      o.inProgress.push(`${vid.id}: AI video üretiliyor (sorgu ${job.poll_count + 1})`);
+      const progress = typeof p.progress === "number" ? Math.round(p.progress * 100) : null;
+      await updateJob(job.id, { status: "running", poll_inc: true, next_poll_ms: VIDEO_POLL_MS, ...(progress !== null ? { response: { ...(job.response ?? {}), progress } } : {}) });
+      o.inProgress.push(`${vid.id}: AI video ${VIDEO_PROVIDER_NAME[provider]} ile üretiliyor${progress !== null ? ` (%${progress})` : ""} (sorgu ${job.poll_count + 1})`);
       return;
     }
     if (p.state === "failed") {
-      log("error", "gemini.generation_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: p.error });
-      await updateJob(job.id, { status: "failed", poll_inc: true, error: p.error });
+      log("error", "ai_video.generation_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, provider, error: p.error, costUsd: p.costUsd });
+      await updateJob(job.id, { status: "failed", poll_inc: true, error: p.error, ...(p.costUsd != null ? { cost_actual_usd: p.costUsd } : {}) });
+      // Başarısız görevin sağlayıcının bildirdiği ücreti (iade edilmediyse) kaydedilir; ikinci sağlayıcıya otomatik gönderim yapılmaz
+      if (p.costUsd != null) await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: p.costUsd, units: { credits: p.credits ?? null, provider }, providerJobId: job.id, note: "Başarısız üretim; sağlayıcının bildirdiği ücret" });
       o.failed.push(`${vid.id}: ${p.error}`);
       return;
     }
     uri = p.videoUri;
-    await updateJob(job.id, { status: "downloading", poll_inc: true, response: { video_uri: uri } });
+    providerCost = p.costUsd;
+    await updateJob(job.id, { status: "downloading", poll_inc: true, response: { ...(job.response ?? {}), video_uri: uri, ...(p.costUsd !== undefined ? { provider_cost_usd: p.costUsd, provider_credits: p.credits ?? null } : {}) } });
   }
   // İndir → doğrula → arşive kaydet (sağlayıcı dosyayı kısa süre saklar)
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gen-"));
@@ -658,11 +697,13 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
       throw new PermanentError(`İndirilen AI videosu hatasız çözülemedi: ${(err as Error).message}`);
     }
     const est = job.cost_estimated_usd === null ? null : Number(job.cost_estimated_usd);
+    // Runway gerçek kredi ücretini bildirir; bildirmeyen sağlayıcıda (Gemini) yapılandırılmış saniye fiyatı kullanılır
+    const actual = providerCost !== undefined ? providerCost : est;
     const existed = await q1(`SELECT 1 FROM media_assets WHERE brand_id = $1 AND sha256 = $2`, [task.brand_id, sha256(buf)]);
     const asset = await saveDerived(task, {
       buffer: buf, filename: `${vid.id}-ai.mp4`, origin: "ai_generated", generationMethod: `ai_video:${gen.model}`, sourceAssetIds: [],
       productId: null, taskId: task.id, projectId: task.project_id, outputVersionId: ctx.versionId,
-      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" }],
+      tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video — gerçek çekim değil", source: "system" }, { tag: `sağlayıcı:${VIDEO_PROVIDER_NAME[provider]}`, source: "system" }],
     });
     try {
       await verifyStoredBytes(asset, path.join(dir, "stored.mp4"));
@@ -677,12 +718,13 @@ async function pollVideo(ctx: RenderCtx, vid: any, job: ProviderJob, gen: NonNul
       tags: [{ tag: `ref:${vid.id}`, source: "system" }, { tag: "AI video kapak karesi", source: "system" }],
     });
     // Ses varsa korunur (dosya olduğu gibi saklanır); kayıtta yalnızca var/yok bilgisi tutulur
-    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, cost_actual_usd: est, response: { video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio } });
-    await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: est, providerJobId: job.id, note: "Yapılandırılmış saniye fiyatı; sağlayıcı faturasıyla doğrulanmadı" });
-    log("info", "gemini.video_saved", { taskId: task.id, ref: vid.id, jobId: job.id, assetId: asset.id, bytes: buf.length, durationS: probe.duration, width: probe.width, height: probe.height });
+    await updateJob(job.id, { status: "succeeded", result_asset_id: asset.id, ...(actual !== null ? { cost_actual_usd: actual } : {}), response: { ...(job.response ?? {}), video_uri: uri, duration: probe.duration, width: probe.width, height: probe.height, has_audio: probe.has_audio, ...(providerCost !== undefined ? { provider_cost_usd: providerCost } : {}) } });
+    await recordCost({ brandId: task.brand_id, projectId: task.project_id, taskId: task.id, service: gen.service, kind: "actual", amountUsd: actual, units: { provider }, providerJobId: job.id,
+      note: providerCost !== undefined ? (providerCost === null ? "Sağlayıcı ücreti bildirdi ancak kredi fiyatı girilmemiş (USD bilinmiyor)" : "Sağlayıcının bildirdiği kredi ücreti × girilen kredi fiyatı") : "Yapılandırılmış saniye fiyatı; sağlayıcı faturasıyla doğrulanmadı" });
+    log("info", "ai_video.video_saved", { taskId: task.id, ref: vid.id, jobId: job.id, provider, assetId: asset.id, bytes: buf.length, durationS: probe.duration, width: probe.width, height: probe.height, costUsd: actual });
     o.produced.push(asset.id, thumb.id);
   } catch (err) {
-    log(err instanceof TransientError ? "warn" : "error", "gemini.download_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, error: err });
+    log(err instanceof TransientError ? "warn" : "error", "ai_video.download_failed", { taskId: task.id, projectId: task.project_id, ref: vid.id, jobId: job.id, provider, error: err });
     // Geçici indirme/depolama hatası: sağlayıcıya yeniden ücretli gönderim yapılmaz; yalnızca indirme tekrarlanır (sınırlı)
     if (err instanceof TransientError && job.poll_count + 1 < VIDEO_MAX_POLLS) {
       await updateJob(job.id, { poll_inc: true, next_poll_ms: VIDEO_POLL_MS });

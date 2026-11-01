@@ -10,6 +10,8 @@ import { AutoRefresh, SubmitButton } from "@/components/client";
 import { PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE } from "@/lib/labels";
 import { agentName } from "@/lib/agents/registry";
 import { cancelProjectAction, retryProjectAction } from "@/app/actions";
+import { getLimits } from "@/lib/settings";
+import { ProductionApprovals, ProductionProgress } from "@/components/video-production";
 
 export default async function ProjectPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SP }) {
   const { id } = await params;
@@ -45,6 +47,12 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
       />
       <Flash ok={ok} err={err} />
       <div className="card mb-4"><div className="label">Talimat</div><p className="whitespace-pre-wrap text-sm">{project.instruction}</p></div>
+      {tasks.some((t) => t.agent === "video" && t.kind === "render") && (
+        <>
+          <ProductionApprovals brandId={brand.id} limits={await getLimits()} back={`/projeler/${id}`} projectId={id} />
+          <div className="mb-4"><ProductionProgress brandId={brand.id} projectId={id} /></div>
+        </>
+      )}
 
       {report && (
         <section className="card mb-4">
