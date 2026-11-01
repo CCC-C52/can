@@ -36,6 +36,12 @@ export type VideoProviderStatus = {
   gen: VideoGenerator | null;
 };
 
+/** Saniye fiyatı: sağlayıcılar kısa süreyi en az süreye yuvarlar (Runway 2, Gemini 3 sn); ikisinin de kabul ettiği 10 sn'den hesaplanır. */
+function perSecond(gen: VideoGenerator | null) {
+  const v = gen ? gen.estimateCostUsd(10) : null;
+  return v === null ? null : Math.round((v / 10) * 1e6) / 1e6;
+}
+
 let runwayOverride: VideoGenerator | null | undefined;
 /** Testler için Runway sağlayıcısını değiştirir (sahte sunucu). undefined: gerçek yapılandırma. */
 export function setRunwayGeneratorOverride(g: VideoGenerator | null | undefined) {
@@ -61,13 +67,13 @@ async function runwayStatus(brandId: string, limits: Limits, role: VideoProvider
   const base = { id: "runway" as const, name: VIDEO_PROVIDER_NAME.runway, service: "runway", role };
   if (runwayOverride !== undefined) {
     const gen = runwayOverride;
-    const usd = gen ? gen.estimateCostUsd(1) : null;
+    const usd = perSecond(gen);
     return { ...base, model: gen?.model ?? null, keyConfigured: !!gen, connected: !!gen, priced: usd !== null, usdPerSecond: usd, keySource: gen ? "env" : null, gen,
       ready: !!gen && usd !== null, reason: !gen ? "Runway yapılandırılmamış" : usd === null ? "Runway fiyatı girilmedi (Ayarlar)" : "Hazır" };
   }
   const k = await runwayKey(brandId);
   const gen = k.key ? runwayGenerator(k.key, limits) : null;
-  const usd = gen ? gen.estimateCostUsd(1) : null;
+  const usd = perSecond(gen);
   const priced = limits.runwayCreditsPerSecond != null && limits.runwayUsdPerCredit != null;
   const reason = !k.key ? k.detail : !k.connected ? k.detail : !priced ? "Runway fiyatı girilmedi (Ayarlar → Runway kredi/saniye ve USD/kredi); fiyat bilinmeden ücretli üretim yapılmaz" : "Hazır";
   return { ...base, model: limits.runwayModel ?? "gen4.5", keyConfigured: !!k.key, connected: k.connected, priced, usdPerSecond: priced ? usd : null, keySource: k.source, gen, ready: !!k.key && k.connected && priced, reason };
@@ -76,7 +82,7 @@ async function runwayStatus(brandId: string, limits: Limits, role: VideoProvider
 async function geminiStatus(brandId: string, role: VideoProviderStatus["role"]): Promise<VideoProviderStatus> {
   const gen = getVideoGenerator();
   const cap = await capabilityReady("video_generation", brandId);
-  const usd = gen ? gen.estimateCostUsd(1) : null;
+  const usd = perSecond(gen);
   const reason = !gen ? "GEMINI_API_KEY tanımlı değil" : !cap.ready ? cap.reason : usd === null ? "GEMINI_VIDEO_COST_PER_SECOND_USD tanımlı değil (fiyat bilinmeden ücretli üretim yapılmaz)" : "Hazır";
   return { id: "gemini", name: VIDEO_PROVIDER_NAME.gemini, service: "video_generation", role, model: gen?.model ?? config.gemini.videoModel, keyConfigured: !!gen, connected: cap.ready, priced: usd !== null, usdPerSecond: usd, gen, ready: !!gen && cap.ready && usd !== null, reason };
 }

@@ -70,7 +70,8 @@ export async function runwayImageUri(img: VideoGenImage): Promise<{ uri: string;
   const buf = Buffer.from(img.base64, "base64");
   const meta = await sharp(buf).metadata();
   const long = Math.max(meta.width ?? 0, meta.height ?? 0);
-  for (const step of [{ long: null as number | null, q: 95 }, { long: 3072, q: 95 }, { long: 2560, q: 92 }, { long: 2048, q: 92 }]) {
+  // Çıktı en çok 1280 px (720p): 1280 px referans bile ürün detayını korur; önce en az kayıplı adım denenir
+  for (const step of [{ long: null as number | null, q: 95 }, { long: 3072, q: 95 }, { long: 2560, q: 92 }, { long: 2048, q: 92 }, { long: 1600, q: 90 }, { long: 1280, q: 90 }]) {
     let s = sharp(buf).rotate().flatten({ background: "#ffffff" }).toColourspace("srgb");
     if (step.long && long > step.long) s = s.resize(step.long, step.long, { fit: "inside", kernel: "lanczos3", withoutEnlargement: true });
     const out = await s.jpeg({ quality: step.q, chromaSubsampling: "4:4:4" }).toBuffer();

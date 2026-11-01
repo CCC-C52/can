@@ -48,7 +48,9 @@ class FakeProvider implements VideoGenerator {
     if (this.opts.outcome === "failed") return { state: "failed", error: "Runway üretimi başarısız (SAFETY.INPUT.IMAGE): rejected", filtered: true, ...(this.service === "runway" ? { costUsd: 0, credits: 0 } : {}) };
     return { state: "succeeded", videoUri: `${this.service}:${id}`, ...(this.service === "runway" ? { costUsd: this.opts.costUsd ?? 0.48, credits: 48 } : {}) };
   }
-  async download() { return this.clip; }
+  /** Her sahne gerçek sağlayıcıda olduğu gibi farklı bayt (aynı bayt arşivde tek dosyaya düşer). */
+  async download() { return this.unique ? colorScenesVideo([{ color: `#${crypto.randomBytes(3).toString("hex")}`, seconds: 6 }], { size: "720x1280", audio: true }) : this.clip; }
+  unique = true;
 }
 
 let brandId: string;
@@ -332,7 +334,7 @@ describe("Sahip üretim onayı (PR Ajansı kampanyası)", () => {
     expect(appr).toMatchObject({ version_id: versionId, estimate_usd: 1.1 });
     expect(await q1(`SELECT 1 FROM audit_log WHERE brand_id = $1 AND action = 'video.production_approved'`, [brandId])).toBeTruthy();
     await drive(new Engine("rw-gate-2"));
-    expect((await taskRow(taskId)).status).toBe("completed");
+    expect(await taskRow(taskId)).toMatchObject({ status: "completed", error: null });
     expect(runway.submits).toHaveLength(2);
   }, 120_000);
 

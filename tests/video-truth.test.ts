@@ -167,8 +167,10 @@ describe("Hedef: Space Alien siyah oversize tişört — 4 × 8 sn gerçek Gemin
     await drive(new Engine("truth-3"));
     expect(unknown.submits).toHaveLength(0);
     const ra = (await listTasks(brandId, { projectId: a.project.id })).find((t) => t.kind === "render" && t.agent === "video")!;
-    expect(ra.status).toBe("failed");
-    expect(ra.error).toMatch(/maliyet tahmin edilemiyor/);
+    // Fiyatı bilinmeyen sağlayıcı ücretli üretim için hazır sayılmaz (Runway/Gemini seçimi): görev başarısız olmaz,
+    // fiyat girilene kadar bekler; "Bağlantı bekleyenleri tekrar dene" ile sürer
+    expect(ra.status).toBe("waiting_connection");
+    expect(ra.error).toMatch(/GEMINI_VIDEO_COST_PER_SECOND_USD tanımlı değil.*fiyat bilinmeden ücretli üretim yapılmaz/);
 
     // 2) Sahne başı 6 $ (0,75 $/sn × 8 sn): 20 $ günlük sınırda üç sahne gönderilir, dördüncü süren işler sayıldığı için durur
     const pricey = new FakeGemini(await colorScenesVideo([{ color: "black", seconds: 8 }]), 0.75);
