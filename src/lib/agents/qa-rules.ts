@@ -290,9 +290,11 @@ export function runRuleChecks(agent: string, content: Record<string, any>, ctx: 
           required.push("Her generate_new sahnesi için sinematik bir generation_prompt yazın.");
         }
         const photos = (v.selected_asset_ids ?? []).filter((id: string) => mediaById.get(id)?.kind === "photo");
-        if (ALTERS_DESIGN.test(String(v.generation_prompt ?? ""))) {
-          checks.push({ name: "Tasarım sadakati", status: "fail", detail: `${v.id}: istem ürünün rengini/baskısını/tasarımını değiştirmeyi istiyor; marka tasarımları ve renkleri değiştirilemez.` });
-          required.push("AI istemi ürünün tasarımını, baskısını, logosunu veya rengini değiştirmemeli; referans fotoğraftaki gibi korumalı.");
+        const alters = affirmativeMatches(String(v.generation_prompt ?? ""), ALTERS_DESIGN);
+        if (alters.length) {
+          const said = [...new Set(alters.map((m) => `"${m[0]}"`))].join(", ");
+          checks.push({ name: "Tasarım sadakati", status: "fail", detail: `${v.id}: istem ürünün rengini/baskısını/tasarımını değiştirmeyi istiyor (${said}); marka tasarımları ve renkleri değiştirilemez.` });
+          required.push(`AI istemi ürünün tasarımını, baskısını, logosunu veya rengini değiştirmemeli (${said} ifadesini kaldırın); ürünü referans fotoğraftaki gibi koruyan cümle ("keep the product exactly as in the reference photo") kullanılabilir.`);
         }
         const lowRes = photos.filter((id: string) => { const m = mediaById.get(id); return referenceTooSmall(m?.width, m?.height); });
         if (lowRes.length) {
@@ -525,17 +527,42 @@ function collectionChecks(v: any, photos: string[], ctx: BrandContext, studioCol
   if (target) {
     const others = Object.keys(COLLECTION_WORDS).filter((k) => k !== target && COLLECTION_WORDS[k].test(prompt));
     if (others.length) problems.push(`istem başka koleksiyondan söz ediyor (${others.join(", ")})`);
-    const colours = [...prompt.matchAll(GARMENT_COLOUR)].map((m) => m[1]);
+    const colours = affirmativeMatches(prompt, GARMENT_COLOUR).map((m) => m[1]);
     const wrong = colours.filter((c) => !COLLECTION_COLOUR[target]?.test(c));
     if (wrong.length) problems.push(`istem ürünü yanlış renkte tarif ediyor (${[...new Set(wrong)].join(", ")}); ${target} koleksiyonunun onaylı rengi korunmalı`);
   }
-  if (LOGO_CHANGE.test(prompt)) problems.push("istem logoyu ekliyor/değiştiriyor/kaldırıyor");
+  if (affirmativeMatches(prompt, LOGO_CHANGE).length) problems.push("istem logoyu ekliyor/değiştiriyor/kaldırıyor");
   if (problems.length) {
     checks.push({ name: "Koleksiyon ve baskı eşleşmesi", status: "fail", detail: `${v.id}: ${problems.join("; ")}.` });
     required.push("AI sahnesinde yalnızca tek koleksiyonun doğrulanmış katalog fotoğraflarını kullanın; istemde başka koleksiyon, başka ürün rengi veya logo değişikliği olmasın.");
   } else if (target) {
     checks.push({ name: "Koleksiyon ve baskı eşleşmesi", status: "pass", detail: `${v.id}: referanslar ve istem ${target} koleksiyonuyla uyumlu.` });
   }
+}
+
+/**
+ * İstemde bir kuralı tetikleyen ifadelerden yalnızca OLUMLU söylenenleri döndürür. Kurallar değişiklik İSTEYEN istemi yakalar;
+ * değişikliği YASAKLAYAN koruma cümlesi ("do not recolour", "never change the print", "no redesign") ihlal değildir. Sistem istemi
+ * ajandan tam olarak bu koruma cümlesini ister; olumsuzluk dikkate alınmazsa kural kendi istediği cümleyi reddeder ve plan
+ * yeniden üretimde de geçemez. Olumsuzluk, eşleşmeyle aynı cümlede ve ondan önce gelmelidir; "but/instead/then" gibi bir
+ * karşıtlık sözcüğünden sonra gelen ifade yeniden olumlu sayılır ("do not crop it, but change the colour" reddedilir). Model incelemesi
+ * ve render öncesi referans/koruma cümlesi bu denetimin arkasındaki ikinci ve üçüncü güvencedir.
+ */
+export function affirmativeMatches(text: string, re: RegExp): RegExpMatchArray[] {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  return [...text.matchAll(g)].filter((m) => !negatedAt(text, m.index ?? 0));
+}
+
+const NEGATION = /\b(not|no|never|nor|without|avoid(s|ing)?|cannot|instead of|rather than)\b|n['’]t\b/i;
+const CONTRAST = /\b(but|however|instead(?! of)|then|yet|except)\b/gi;
+
+function negatedAt(text: string, index: number): boolean {
+  const start = Math.max(...[".", ";", "!", "?", "\n", ":"].map((c) => text.lastIndexOf(c, index - 1))) + 1;
+  let prefix = text.slice(start, index);
+  const contrast = [...prefix.matchAll(CONTRAST)].pop();
+  if (contrast) prefix = prefix.slice((contrast.index ?? 0) + contrast[0].length);
+  // Olumsuzluk eşleşmeye yakın olmalı (en çok 8 sözcük önce): "do not redraw, recolour or add text" kapsanır, uzak bir "no" kapsamaz.
+  return NEGATION.test(prefix.split(/\s+/).filter(Boolean).slice(-8).join(" "));
 }
 
 const ALTERS_DESIGN = /\b(recolou?r(ed|ing)?|change (the )?(colou?rs?|print|design|logo|artwork|graphic)|different (colou?rs?|colou?rway|print|design|logo)|new (colou?rway|print|design|logo)|redesign(ed)?|restyle(d)?|alternate colou?rway)\b/i;

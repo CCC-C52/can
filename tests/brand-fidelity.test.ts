@@ -87,4 +87,32 @@ describe("Marka paleti (Pantone) ve tasarım sadakati", () => {
     const small = runRuleChecks("video", scene("Slow orbit around the T-shirt.", [lowRes]), ctx, { isDemo: false });
     expect(small.checks.find((c) => c.name === "Referans netliği")?.status).toBe("fail");
   });
+
+  it("kalite kontrolü: tasarımı KORUYAN olumsuz cümle (sistem isteminin istediği) reddedilmez; olumlu değişiklik isteği yine reddedilir", async () => {
+    // Gerileme: "First Drop Launch Film" planı, sistem isteminin istediği "never redesign, recolour" koruma cümlesi yüzünden
+    // "Tasarım sadakati" kuralına takılıyor, yeniden üretimde de aynı cümleyle geçemiyordu.
+    const ctx = await buildBrandContext(brandId, undefined, { agent: "quality", includeAssetIds: [hiRes] });
+    const fidelity = (prompt: string) => runRuleChecks("video", { summary: "s", unknowns: [], videos: [{
+      id: "scene-1", mode: "generate_new", format: "9:16", duration_s: 5, selected_asset_ids: [hiRes], script: [], subtitles: [], generation_prompt: prompt,
+      music_note: "", transition: "cut", framing: "fill", intro_text: "", outro_text: "", segments: [], parts: [],
+    }] }, ctx, { isDemo: false }).checks.filter((c) => c.name === "Tasarım sadakati" || c.name === "Koleksiyon ve baskı eşleşmesi");
+    const protective = [
+      "High-fashion editorial: model walks through an underground tunnel in the hoodie. Keep the product exactly as in the reference photo; do not change the colours, print or logo.",
+      "Neon street at night, slow dolly-in. Never redesign, recolour, restyle or simplify the garment.",
+      "Futuristic rooftop, wind, handheld camera. Do not redraw, recolour or add text or logos. Don't add a logo.",
+      "Keep the original FRIBEE print instead of recolouring it; no different colourway, no new print.",
+      "Slow orbit around the tee without changing the design.",
+    ];
+    for (const p of protective) expect(fidelity(p).filter((c) => c.status === "fail"), p).toEqual([]);
+    const altering = [
+      "Same shirt but change the colour to purple.",
+      "Model in the hoodie. Recolour it neon green.",
+      "Do not crop the shot, but redesign the print with a bee pattern.",
+      "Show a new colourway of the hoodie.",
+      "Replace the logo with a bigger one.",
+    ];
+    for (const p of altering) expect(fidelity(p).some((c) => c.status === "fail"), p).toBe(true);
+    // Hata ayrıntısı tetikleyen ifadeyi gösterir (yeniden üretimde ajan neyi kaldıracağını bilir)
+    expect(fidelity("Model in the hoodie. Recolour it neon green.")[0].detail).toContain('"Recolour"');
+  });
 });
