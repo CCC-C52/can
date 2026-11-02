@@ -489,9 +489,11 @@ export function isAiClip(m: { kind?: string; origin?: string } | undefined | nul
 
 const COLLECTION_WORDS: Record<string, RegExp> = {
   space_alien: /\b(space alien|alien|ufo)\b/i,
-  music: /\b(music|mandala)\b/i,
+  // "music" tek başına koleksiyon değildir ("moving to the music"); koleksiyon adı veya mandala baskısı olarak geçerse sayılır
+  music: /\b(music (collection|tees?|t-?shirts?|shirts?|hoodies?|prints?|designs?|drop)|mandala)\b/i,
   anime: /\banime\b/i,
-  save_the_bee: /\b(save the bee|bee|bees|honeybee)\b/i,
+  // Marka adı "FRI BEE" / "Fri-Bee" Save the Bee koleksiyonu değildir
+  save_the_bee: /\b(save the bee|(?<!\bfri[\s-]?)bees?|honeybee)\b/i,
 };
 const COLLECTION_COLOUR: Record<string, RegExp> = {
   space_alien: /\bblack\b/i,
@@ -525,7 +527,7 @@ function collectionChecks(v: any, photos: string[], ctx: BrandContext, studioCol
   const target = studioCollection ?? (refCollections.length === 1 ? refCollections[0] : null);
   if (studioCollection && refCollections.some((c) => c !== studioCollection)) problems.push(`seçilen koleksiyon ${studioCollection}, referans ${refCollections.join(", ")}`);
   if (target) {
-    const others = Object.keys(COLLECTION_WORDS).filter((k) => k !== target && COLLECTION_WORDS[k].test(prompt));
+    const others = Object.keys(COLLECTION_WORDS).filter((k) => k !== target && affirmativeMatches(prompt, COLLECTION_WORDS[k]).length > 0);
     if (others.length) problems.push(`istem başka koleksiyondan söz ediyor (${others.join(", ")})`);
     const colours = affirmativeMatches(prompt, GARMENT_COLOUR).map((m) => m[1]);
     const wrong = colours.filter((c) => !COLLECTION_COLOUR[target]?.test(c));

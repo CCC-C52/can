@@ -225,6 +225,11 @@ describe("Gemini Video Studio — doğrulanmış katalog fotoğrafları ve kolek
     expect(fails("City walk, add a new logo on the chest.", [assets.animeFront]).join(" ")).toMatch(/logo/);
     expect(fails("City walk at dusk.", [assets.animeFront, assets.musicFront]).join(" ")).toMatch(/farklı koleksiyon/);
     expect(fails("City walk at dusk.", [assets.musicFront]).join(" ")).toMatch(/seçilen koleksiyon anime/);
+    // Marka adı, genel "music" sözcüğü ve olumsuz anma başka koleksiyon sayılmaz (First Drop Launch Film gerilemesi)
+    expect(fails("FRI BEE — a new frequency: model in the orange tee moving to the music in neon Tokyo, no alien motifs.", [assets.animeFront])).toEqual([]);
+    expect(fails("Close-up of the orange tee with a white mandala print.", [assets.animeFront]).join(" ")).toMatch(/başka koleksiyon/);
+    expect(fails("Orange tee next to the Music collection tee.", [assets.animeFront]).join(" ")).toMatch(/başka koleksiyon/);
+    expect(fails("Orange tee, a bee lands on the sleeve.", [assets.animeFront]).join(" ")).toMatch(/başka koleksiyon/);
   });
 });
 
