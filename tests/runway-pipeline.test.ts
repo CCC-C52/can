@@ -407,3 +407,19 @@ describe("Teslim doğruluğu", () => {
     expect(ad.duration_s).toBeGreaterThan(12);
   }, 300_000);
 });
+
+describe("Sürüm durum ucu: video ayarları özeti", () => {
+  it("kayıtlı ve etkin değerler, Runway 5 sn tahmini ve marka hazırlığı; anahtar değeri yok", async () => {
+    const { videoSettingsSnapshot } = await import("@/lib/video/providers");
+    await setSetting("limits", { ...DEFAULT_LIMITS, paidMediaGeneration: false, dailyBudgetUsd: 20, maxVideoGenSeconds: 60, runwayCreditsPerSecond: 12, runwayUsdPerCredit: 0.01 });
+    await upsertConnection("runway", brandId, { status: "connected", credentials: { apiKey: "rw-secret-should-not-leak" } });
+    const s: any = await videoSettingsSnapshot();
+    expect(s.limitsRowExists).toBe(true);
+    expect(s.effective).toMatchObject({ paidMediaGeneration: false, dailyBudgetUsd: 20, maxVideoGenSeconds: 60, videoPrimaryProvider: "runway", runwayModel: "gen4.5", runwayCreditsPerSecond: 12, runwayUsdPerCredit: 0.01 });
+    expect(s.runwayEstimate5sUsd).toBe(0.6);
+    const mine = s.readiness.find((r: any) => r.brand.startsWith("Runway Hattı"));
+    expect(mine.providers[0]).toMatchObject({ id: "runway", role: "primary", ready: true, connected: true, priced: true, keySource: "integration", model: "gen4.5", usdPerSecond: 0.12, estimate5sUsd: 0.6 });
+    expect(JSON.stringify(s)).not.toMatch(/rw-secret-should-not-leak/);
+    await upsertConnection("runway", brandId, { status: "not_connected", credentials: null });
+  });
+});

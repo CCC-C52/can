@@ -50,6 +50,8 @@ export type ReleaseReport = {
   backup: { required: boolean; evidence: string | null };
   rollback: { attempted: boolean; service?: string; result?: string };
   mixedVersions?: boolean;
+  /** Dağıtımdan sonra canlı veritabanından okunan video ayarları (durum ucu; gizli değer yok). */
+  videoSettings?: unknown;
 };
 
 export type Deps = { render: RenderApi; app: AppApi; sleep: Sleep; now: () => number; log: (line: string) => void };
@@ -227,6 +229,7 @@ export async function runRelease(input: ReleaseInput, deps: Deps): Promise<Relea
 
     // 12 — son operasyonel kontrol
     const final = await app.status();
+    if (final.kind === "ok" && final.data.videoSettings !== undefined) report.videoSettings = final.data.videoSettings;
     if (final.kind !== "ok" || !final.data.ok || (final.data.migrations?.pending.length ?? 0) > 0) fail("final", "Son durum kontrolü başarısız.");
     if (final.kind === "ok" && final.data.paused) check("final_paused", "warn", "İşlemler panelden duraklatılmış durumda (sürüm sağlıklı; görevler sahip devam ettirene kadar bekler).");
     check("final", "pass", "Web ve işleyici aynı commit'te, veritabanı erişilebilir, bekleyen geçiş yok.");
@@ -385,6 +388,7 @@ export function reportMarkdown(r: ReleaseReport): string {
     "| Adım | Sonuç | Ayrıntı |",
     "|---|---|---|",
     ...r.checks.map((c) => `| ${c.name} | ${icon[c.status]} | ${c.detail.replace(/\|/g, "\\|")} |`),
+    ...(r.videoSettings !== undefined ? ["", "### Video ayarları (dağıtımdan sonra canlı veritabanından okundu)", "", "```json", JSON.stringify(r.videoSettings, null, 2).slice(0, 6000), "```"] : []),
   ];
   return lines.join("\n");
 }

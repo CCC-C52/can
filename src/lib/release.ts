@@ -143,5 +143,7 @@ export async function releaseStatus() {
       last: backupLast ? { at: backupLast.at, ok: backupLast.ok } : null,
     },
     releases: (await releaseHistory(10)).map((r) => ({ releaseId: r.releaseId, sha: r.sha, outcome: r.outcome, startedAt: r.startedAt, updatedAt: r.updatedAt })),
+    // Video üretim ayarları (gizli değer yok): dağıtım hattı sürüm raporuna yazar
+    videoSettings: await import("@/lib/video/providers").then((m) => m.videoSettingsSnapshot()).catch((err) => ({ error: redact(String((err as Error).message)).slice(0, 200) })),
   };
 }

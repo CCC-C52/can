@@ -133,6 +133,8 @@ export type AppStatus = {
   paused?: boolean;
   backup?: { lastOk: { at: string; dbBytes: number | null } | null; last: { at: string; ok: boolean } | null };
   releases?: { releaseId: string; sha: string; outcome: string }[];
+  /** Video üretim ayarları özeti (gizli değer yok); yeni sürümlerde vardır. */
+  videoSettings?: unknown;
 };
 
 export type StatusResult = { kind: "ok"; data: AppStatus } | { kind: "disabled" } | { kind: "unauthorized" } | { kind: "error"; detail: string };

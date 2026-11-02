@@ -135,3 +135,34 @@ export async function videoGeneratorForService(service: string, brandId: string,
   if (service === "video_generation") return getVideoGenerator();
   return null;
 }
+
+/**
+ * Sürüm durum ucu için salt okunur video ayarları özeti (gizli değer içermez): veritabanında KAYITLI değerler,
+ * etkin değerler (kayıt + varsayılan), Runway 5 sn tahmini ve marka bazında sağlayıcı hazırlığı. Dağıtım hattı bunu
+ * sürüm raporuna yazar; ayarların canlı veritabanından doğru okunduğu böyle doğrulanır.
+ */
+export async function videoSettingsSnapshot() {
+  const { getLimits, getSetting } = await import("@/lib/settings");
+  const { q } = await import("@/lib/db/pool");
+  const KEYS = ["paidMediaGeneration", "dailyBudgetUsd", "perTaskBudgetUsd", "maxVideoGenSeconds", "blockUnknownCost", "videoPrimaryProvider", "runwayModel", "runwayCreditsPerSecond", "runwayUsdPerCredit"] as const;
+  const storedAll = await getSetting<Record<string, unknown> | null>("limits", null);
+  const limits = await getLimits();
+  const stored = storedAll ? Object.fromEntries(KEYS.filter((k) => k in storedAll).map((k) => [k, storedAll[k]])) : null;
+  const effective = Object.fromEntries(KEYS.map((k) => [k, limits[k]]));
+  const cps = limits.runwayCreditsPerSecond, upc = limits.runwayUsdPerCredit;
+  const brands = await q<{ id: string; name: string }>(`SELECT id, name FROM brands WHERE is_sample = false ORDER BY created_at LIMIT 5`);
+  const readiness = [];
+  for (const b of brands) {
+    const s = await videoProviderStatus(b.id, limits);
+    readiness.push({ brand: b.name, providers: s.map((p) => ({ id: p.id, role: p.role, ready: p.ready, connected: p.connected, priced: p.priced, keySource: p.keySource ?? null, model: p.model, usdPerSecond: p.usdPerSecond, estimate5sUsd: p.gen ? p.gen.estimateCostUsd(5) : null, reason: p.reason })) });
+  }
+  const audit = await q<{ created_at: string; message: string }>(`SELECT created_at, message FROM audit_log WHERE action = 'settings.video_activation' ORDER BY created_at DESC LIMIT 3`).catch(() => []);
+  return {
+    limitsRowExists: !!storedAll,
+    stored,
+    effective,
+    runwayEstimate5sUsd: cps != null && upc != null ? Math.round(cps * 5 * upc * 1e6) / 1e6 : null,
+    readiness,
+    activationAudit: audit,
+  };
+}
