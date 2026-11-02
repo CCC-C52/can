@@ -13,7 +13,7 @@ const OLD = "9cb052e0000000000000000000000000000000aa";
 const API_KEY = "rnd_test_key_should_never_appear";
 const TOKEN = "release-token-should-never-appear-xxxxxxxx";
 /** Bu sürümün imajındaki tüm geçişler (yeni sürüm canlıya çıkınca hepsi uygulanmış olur). */
-const ALL_MIGRATIONS = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql", "007_brand_brain.sql"];
+const ALL_MIGRATIONS = ["001_init.sql", "002_media_jobs_integrity.sql", "003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql", "007_brand_brain.sql", "008_runway_activation_settings.sql"];
 
 type Svc = { id: string; name: string; branch: string; autoDeployTrigger: string; suspended: string; repo: string };
 type Dep = { id: string; status: string; commit: { id: string }; createdAt: string; script: string[] };
@@ -138,7 +138,8 @@ function input(over: Partial<ReleaseInput> = {}): ReleaseInput {
     releaseId: "run-1", ciUrl: "https://github.com/CCC-C52/can/actions/runs/1", ciResult: "success",
     webServiceId: "srv-web", workerServiceId: "srv-worker", postgresId: "dpg-db", expectedRepo: "https://github.com/CCC-C52/can",
     migrationsDir: path.resolve(process.cwd(), "migrations"),
-    authorizeMigrations: ["003_brand_memory_research.sql"], legacyAppliedMigrations: ["001_init.sql", "002_media_jobs_integrity.sql"],
+    // 003 ve 008 (incelenmiş veri geçişi) canlıya ilk uygulamada sahibin adıyla onayını ister
+    authorizeMigrations: ["003_brand_memory_research.sql", "008_runway_activation_settings.sql"], legacyAppliedMigrations: ["001_init.sql", "002_media_jobs_integrity.sql"],
     allowRedeployFailed: false, autoRollback: false, dryRun: false, backupMaxAgeHours: 26,
     timeouts: { deployMs: 30 * 60_000, webHealthMs: 5 * 60_000, workerHealthMs: 8 * 60_000, pollMs: 15_000 },
     ...over,
@@ -161,7 +162,7 @@ describe("Sürüm hattı — ilk etkinleştirme (canlıda durum ucu yok, 003 bek
     expect(posts()).toEqual(["POST /v1/services/srv-web/deploys", "POST /v1/services/srv-worker/deploys"]);
     expect(r.web).toMatchObject({ status: "live", previousCommit: OLD });
     expect(r.worker).toMatchObject({ status: "live", previousCommit: OLD });
-    expect(r.migrations).toMatchObject({ source: "legacy_input", pending: ["003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql", "007_brand_brain.sql"], authorizedUsed: ["003_brand_memory_research.sql"] });
+    expect(r.migrations).toMatchObject({ source: "legacy_input", pending: ["003_brand_memory_research.sql", "004_drive_archive.sql", "005_brand_knowledge.sql", "006_pr_strategy_operations.sql", "007_brand_brain.sql", "008_runway_activation_settings.sql"], authorizedUsed: ["003_brand_memory_research.sql", "008_runway_activation_settings.sql"] });
     expect(r.backup.evidence).toMatch(/Render PITR kullanılabilir/);
     expect(S.deploys["srv-web"][0].commit.id).toBe(SHA);
     expect(S.deploys["srv-worker"][0].commit.id).toBe(SHA);
@@ -248,6 +249,18 @@ describe("Sürüm hattı — engeller", () => {
     const r = await run({ dryRun: true });
     expect(r.outcome).toBe("dry_run_ready");
     expect(posts()).toEqual([]);
+  });
+
+  it("canlıda 001–007 uygulanmış: 008 (Runway ayar geçişi) onaysız engellenir, adıyla onaylanınca dağıtılır", async () => {
+    const live = ALL_MIGRATIONS.filter((m) => m !== "008_runway_activation_settings.sql");
+    Object.assign(S.app, { legacy: false, webCommit: OLD, applied: live, backupAt: new Date(Date.UTC(2026, 9, 22) - 3_600_000).toISOString() });
+    const blocked = await run({ authorizeMigrations: [], legacyAppliedMigrations: null });
+    expect(blocked).toMatchObject({ outcome: "blocked", failedStep: "migrations" });
+    expect(blocked.error).toMatch(/008_runway_activation_settings\.sql/);
+    expect(posts()).toEqual([]);
+    const ok = await run({ authorizeMigrations: ["008_runway_activation_settings.sql"], legacyAppliedMigrations: null });
+    expect(ok.outcome).toBe("succeeded");
+    expect(ok.migrations).toMatchObject({ source: "status_endpoint", pending: ["008_runway_activation_settings.sql"], authorizedUsed: ["008_runway_activation_settings.sql"] });
   });
 
   it("servisler zaten bu commit'teyse dağıtım yapılmaz (noop)", async () => {
