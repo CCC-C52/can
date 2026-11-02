@@ -16,6 +16,11 @@
       "class": "additive",
       "firstProductionRollout": "requires_owner_authorization",
       "note": "Yalnızca yeni tablolar ve indeksler (brand_memory, research_runs, research_sources). Mevcut tablo/veri değişmez. İlk canlı uygulaması sahibin bir kerelik onayı ve doğrulanmış kurtarma noktasıyla."
+    },
+    "008_runway_activation_settings.sql": {
+      "sha256": "430a7c1fdd02366c4490c324c8b828e1db8f9eb721109401ae0827bee79e0e88",
+      "class": "reviewed",
+      "note": "Yalnızca settings 'limits' JSON birleştirmesi (Runway 12 kredi/sn × 0,01 $/kredi, AI video sınırı 60 sn, birincil Runway; kayıtlı günlük bütçe korunur, yoksa 20) ve audit_log kaydı. Şema değişmez, veri silinmez; ücretli üretim izni değişmez. Sahip 2 Kasım 2026 talimatıyla istedi; canlıya authorize_migrations ve doğrulanmış kurtarma noktasıyla uygulanır."
     }
   }
 }
